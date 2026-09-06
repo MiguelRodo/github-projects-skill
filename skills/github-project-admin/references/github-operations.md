@@ -1,6 +1,6 @@
 # Proven GitHub operations
 
-Read this reference before performing or returning a mutation. Substitute values only after resolving the repository contract and inspecting live state. Never hard-code credentials or reuse provider IDs from examples.
+These are direct-provider fallback recipes and supplementary reads. Before choosing one, check the execution surface in `SKILL.md`: when `projects` is installed and supports the operation, use [the CLI execution reference](projects-cli.md). The native commands below do not override that preference. Read this reference before performing or returning a direct-provider mutation. Substitute values only after resolving the repository contract and inspecting live state. Never hard-code credentials or reuse provider IDs from examples.
 
 Use the current stable GitHub REST API version declared by GitHub documentation. The examples below use `2026-03-10`.
 
@@ -84,7 +84,7 @@ Observed provider limitation: with GitHub CLI 2.98.0, `gh project field-list NUM
 
 Prefer one deliberate execution path for each property rather than cycling through equivalent CLI, REST and GraphQL mutations.
 
-For ordinary issue-to-Project membership:
+Use `projects project item-add --issue NUMBER --apply` for ordinary issue-to-Project membership when supported. Its targeted inspection and independent readback make a separate full-Project inventory unnecessary. When that command is unavailable:
 
 1. inspect the issue and current Project membership;
 2. use `gh project item-add` once when membership is authorised;
@@ -169,7 +169,7 @@ mutation UpdateSingleSelectOptions(
 
 Do not omit existing option IDs, because GitHub uses them to preserve option identity and item values. Do not remove, rename, recolour or reorder another option unless that separate change is explicitly authorised.
 
-After discovering the current Project item, Project field and option IDs, update one single-select field:
+For contract-declared field values, use `projects project item-edit` when supported; changing the field definition itself still needs the direct recipe above. When the required field-value operation is unsupported, discover the current Project item, Project field and option IDs, then update one single-select field:
 
 ```bash
 gh project item-edit \
@@ -183,7 +183,7 @@ For a date field, replace the final option with `--date YYYY-MM-DD`. For a name-
 
 Re-query the item and affected field after the mutation. Do not use the command's success status as readback.
 
-Adding an issue to a Project is a separate mutation:
+Adding an issue to a Project is a separate mutation. If `projects project item-add` is unavailable, use:
 
 ```bash
 gh project item-add "$PROJECT_NUMBER" \
@@ -195,7 +195,7 @@ Perform it only when membership itself is authorised or necessarily implied by a
 
 ## Ordinary issue mutations
 
-Prefer the narrow native command when it owns only the requested property, for example:
+Use `projects issue create` or `projects issue edit` for supported ordinary issue mutations. When the required command/flag is unavailable, prefer the narrow native command that owns only the requested property, for example:
 
 ```bash
 gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY" --add-assignee "$LOGIN"
