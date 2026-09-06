@@ -11,6 +11,7 @@ initializer="$skill_dir/scripts/init-project.sh"
 bash -n "$validator"
 bash -n "$setup"
 bash -n "$initializer"
+python3 "$test_dir/test-agent-cli-choice.py"
 
 bash "$validator" "$test_dir/fixtures/single"
 bash "$validator" "$test_dir/fixtures/single-user"
