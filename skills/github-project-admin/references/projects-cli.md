@@ -66,12 +66,17 @@ collision.
 ## Inspection and verification
 
 The CLI validates the contract and inspects the live identity, schema,
-membership and values needed by its operation. Apply mode performs stale
-checks, narrow writes and separate independent readback, including preservation
+membership and values needed by its operation. Apply mode reads current state,
+performs narrow writes and separate independent readback, including preservation
 checks. Use that verified result as evidence; do not duplicate the same
 preflight or verification with handwritten REST or GraphQL. Inspect additional
 state only when the requested outcome needs it, such as hierarchy before
 closing a parent, or issue text before rewriting it.
+
+A CLI plan is not a locked snapshot or a conditional write. Before replacing
+collaborative text or acting on an earlier interpretation, compare the current
+content with the version you interpreted and stop if it changed. A fresh read
+alone does not establish that a previously reviewed version is unchanged.
 
 Complete Project reads belong to `project item-list`. Do not recreate them
 with `gh project item-list`, default pages, pagination scripts or GraphQL when
