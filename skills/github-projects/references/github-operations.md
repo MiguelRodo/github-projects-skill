@@ -257,6 +257,6 @@ If a pasted block fails, accept either the complete terminal output or the exact
 
 Avoid Python when `gh --json`, `--jq`, shell or `jq` is simpler. When Python is genuinely useful, discover an available command from `python3`, `python` and `py` rather than assuming its name or version.
 
-If a failure reveals a reusable error mode in this skill or its provider recipes, offer to prepare a focused pull request for `MiguelRodo/projects`. Do not create the issue or pull request unless the user explicitly accepts. If accepted, remove credentials and private repository content from the reproduction.
+If a failure reveals a reusable error mode in this skill or its provider recipes, offer to prepare a focused pull request for `MiguelRodo/github-projects-skill`. Do not create the issue or pull request unless the user explicitly accepts. If accepted, remove credentials and private repository content from the reproduction.
 
 Do not return a broad command block that rewrites unrelated state when one focused `gh` operation and one readback suffice.
