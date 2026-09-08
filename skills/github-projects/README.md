@@ -48,7 +48,7 @@ projects project item-edit --issue 42 --priority P1 --status "In progress" --app
 
 It is optional. The scripts below and direct GitHub operations remain supported.
 Installation, APT setup and update checks are documented in the
-[`projects` CLI guide](https://github.com/MiguelRodo/projects/blob/main/docs/cli.md).
+[`projects` CLI guide](https://github.com/MiguelRodo/github-projects-skill/blob/main/docs/cli.md).
 
 ## 1. Create or find the GitHub Project
 
@@ -68,8 +68,8 @@ Have the first relevant Project number ready. The initializer asks whether you w
 From the repository, run these one-line commands:
 
 ```text
-gh skill install MiguelRodo/projects github-project-admin --agent universal --scope project
-bash .agents/skills/github-project-admin/scripts/init-project.sh
+gh skill install MiguelRodo/github-projects-skill github-projects --agent universal --scope project
+bash .agents/skills/github-projects/scripts/init-project.sh
 ```
 
 The initializer first explains that it will configure the repository so chats and agents can understand the Project. It discovers GitHub facts and asks only about collaboration, where issues are tracked (defaulting to the current repository), whether the repository uses one or several Projects, and the owner, number and routing identity of each Project you add.
@@ -105,7 +105,7 @@ should not change interactive shell options such as `set -e`, `set -u` or
 Codex cloud is one execution-capable option. Open [Codex environments](https://chatgpt.com/codex/settings/environments), create an environment and choose the repository. Use:
 
 ```text
-bash .agents/skills/github-project-admin/scripts/setup.sh
+bash .agents/skills/github-projects/scripts/setup.sh
 ```
 
 Create a [classic GitHub personal access token](https://github.com/settings/tokens/new) with an expiry and the `repo`, `read:org` and `project` scopes. Authorise it for organisation SSO if required.
@@ -137,7 +137,7 @@ a change uses the configured queue, or minimal commands with readback.
 ## Add another Project
 
 For an existing dispatcher, rerun
-`bash .agents/skills/github-project-admin/scripts/init-project.sh` from the
+`bash .agents/skills/github-projects/scripts/init-project.sh` from the
 repository root. It preserves existing routes and child contracts while
 adding the new Project. Validate, review, commit and push the configuration,
 then confirm the new Project's pending Priority mapping before using it.
@@ -157,7 +157,7 @@ it cannot finish. The label and separate unedited
 `PJ implementation authority:` comment establish the bounded handoff.
 
 Install `pj` from the
-[project-bootstrap operator guide](https://github.com/MiguelRodo/project-bootstrap/blob/main/operator/README.md)
+[projects operator guide](https://github.com/MiguelRodo/projects/blob/main/operator/README.md)
 and keep the managed checkouts in its workspace. Run `pj -i`, or
 `pj -i --repo example/repository` to select one managed issue repository. The local
 agent checks author identity, executes the authorised work and independently
@@ -166,7 +166,7 @@ the repository's completion condition before its implementation issue closes.
 
 See the [queue reference](references/local-implementation-queue.md) for authority,
 discovery, readback and fallback rules. The optional
-[`projects` CLI](https://github.com/MiguelRodo/projects/blob/main/docs/cli.md)
+[`projects` CLI](https://github.com/MiguelRodo/github-projects-skill/blob/main/docs/cli.md)
 performs supported GitHub operations; `pj` launches the agent that directs them.
 
 ## Issue Type / Class
@@ -216,7 +216,7 @@ If the repository needs extra tools, add `.projects/setup.sh`. It runs automatic
 To replace common setup completely, place this within the first 20 lines:
 
 ```bash
-# github-project-admin: override
+# github-projects: override
 ```
 
 ## Update the skill
@@ -224,7 +224,7 @@ To replace common setup completely, place this within the first 20 lines:
 Run this inside the repository, then commit the changed skill files:
 
 ```text
-gh skill update github-project-admin
+gh skill update github-projects
 ```
 
 The update does not replace `.projects/project.md` or `.projects/setup.sh`.
@@ -233,4 +233,4 @@ The update does not replace `.projects/project.md` or `.projects/setup.sh`.
 
 Paste the terminal output into the chat, or say which section failed. The agent should inspect what already succeeded and give you only the corrected or remaining commands.
 
-If the failure is reusable, the agent may offer to improve `MiguelRodo/projects`. It should open an issue or pull request only after you agree.
+If the failure is reusable, the agent may offer to improve `MiguelRodo/github-projects-skill`. It should open an issue or pull request only after you agree.

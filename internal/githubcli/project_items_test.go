@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MiguelRodo/projects/internal/contract"
+	"github.com/MiguelRodo/github-projects-skill/internal/contract"
 )
 
 type fakeResponse struct {

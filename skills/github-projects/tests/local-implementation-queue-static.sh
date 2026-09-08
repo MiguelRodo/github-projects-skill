@@ -5,7 +5,7 @@ test_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
 skill_dir="$(cd "$test_dir/.." && pwd)" || exit 1
 repo_root="$(cd "$skill_dir/../.." && pwd)" || exit 1
 reference="$skill_dir/references/local-implementation-queue.md"
-installed_reference="$repo_root/.agents/skills/github-project-admin/references/local-implementation-queue.md"
+installed_reference="$repo_root/.agents/skills/github-projects/references/local-implementation-queue.md"
 contract="$repo_root/.projects/project.md"
 
 [ -f "$reference" ]

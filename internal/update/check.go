@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/MiguelRodo/projects/internal/githubcli"
+	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
 )
 
-const repository = "MiguelRodo/projects"
+const repository = "MiguelRodo/github-projects-skill"
 
 // Result describes the installed and latest published versions. Check never
 // installs or upgrades anything.

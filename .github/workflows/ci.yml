@@ -35,10 +35,10 @@ jobs:
           test -f CODE_OF_CONDUCT.md
           test -f LICENSE
           test -f docs/architecture/v1-boundaries.md
-          test -f skills/github-project-admin/SKILL.md
+          test -f skills/github-projects/SKILL.md
           test -f AGENTS.md
           test -f .projects/project.md
-          test -f skills/github-project-admin/references/local-implementation-queue.md
+          test -f skills/github-projects/references/local-implementation-queue.md
           test ! -e .github/workflows/project-admin-bridge.yml
 
       - name: Test projects CLI
@@ -59,17 +59,17 @@ jobs:
       - name: Build projects CLI
         run: go build ./cmd/projects
 
-      - name: Test github-project-admin skill
+      - name: Test github-projects skill
         shell: bash
-        run: bash skills/github-project-admin/tests/run.sh
+        run: bash skills/github-projects/tests/run.sh
 
       - name: Test local implementation queue
         shell: bash
-        run: bash skills/github-project-admin/tests/local-implementation-queue-static.sh
+        run: bash skills/github-projects/tests/local-implementation-queue-static.sh
 
       - name: Validate this repository's Project contract
         shell: bash
-        run: bash skills/github-project-admin/scripts/validate-contract.sh .
+        run: bash skills/github-projects/scripts/validate-contract.sh .
 
       - name: Check whitespace
         run: git diff --check

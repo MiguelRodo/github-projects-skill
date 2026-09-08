@@ -59,7 +59,7 @@ current skill into a new synthetic repository and supplies fake `projects` and
 persisted state distinguish a real apply from a plan or a prose claim.
 
 ```bash
-python3 skills/github-project-admin/tests/agent-cli-choice.py prepare edit /tmp/cli-choice-edit
+python3 skills/github-projects/tests/agent-cli-choice.py prepare edit /tmp/cli-choice-edit
 ```
 
 Start a fresh execution-capable agent in that directory. Give it only this
@@ -80,7 +80,7 @@ a trial pass.
 After the agent finishes, independently inspect its answer and run:
 
 ```bash
-python3 skills/github-project-admin/tests/agent-cli-choice.py check edit /tmp/cli-choice-edit
+python3 skills/github-projects/tests/agent-cli-choice.py check edit /tmp/cli-choice-edit
 ```
 
 Repeat with a fresh directory and agent for each case:

@@ -7,8 +7,11 @@ Repository-specific GitHub Project configuration lives under `.projects/`. It co
 Use a local replacement skill only when this exact file exists:
 
 ```text
-.projects/skills/github-project-admin/SKILL.md
+.projects/skills/github-projects/SKILL.md
 ```
+
+For backward compatibility, `.projects/skills/github-project-admin/SKILL.md` is
+also recognized.
 
 The `.projects/` directory by itself never overrides the canonical skill.
 
@@ -227,8 +230,10 @@ By default the local script extends the shared setup and runs after the common G
 To replace common setup completely, put this exact marker within the first 20 lines:
 
 ```bash
-# github-project-admin: override
+# github-projects: override
 ```
+
+For backward compatibility, `# github-project-admin: override` is also recognized.
 
 In override mode the shared entry point disables shell tracing, finds the repository and immediately runs `.projects/setup.sh`; it does not install `gh`, check authentication or validate the contract. The local script receives `PROJECTS_REPOSITORY_ROOT` and `PROJECTS_SETUP_MODE` in its environment.
 

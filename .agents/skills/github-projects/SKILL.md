@@ -1,11 +1,11 @@
 ---
 description: Administer GitHub issues and Projects from short outcome requests. Use for Project-aware inspection, prioritisation, creation, updates, assignment, routing, hierarchy, field changes, or when a surface must hand unsupported mutations to the local pj implementation queue.
 metadata:
-    github-path: skills/github-project-admin
+    github-path: skills/github-projects
     github-ref: refs/heads/main
-    github-repo: https://github.com/MiguelRodo/projects
+    github-repo: https://github.com/MiguelRodo/github-projects-skill
     github-tree-sha: 5ae534caba0224987735235bec8a818146e6c63b
-name: github-project-admin
+name: github-projects
 ---
 # GitHub Project administration
 
@@ -14,7 +14,7 @@ Treat the user's request as the desired outcome. Do not require the user to repe
 ## Select the skill and local contract
 
 1. Find the target repository root.
-2. If `.projects/skills/github-project-admin/SKILL.md` exists there and is not this skill, load that deliberate local replacement and stop applying this copy. Do not merge two skill definitions implicitly.
+2. If `.projects/skills/github-projects/SKILL.md` exists there and is not this skill, load that deliberate local replacement and stop applying this copy. Do not merge two skill definitions implicitly.
 3. Otherwise use this canonical skill.
 4. Read `.projects/project.md`. If it is missing during ordinary administration, stop and identify the missing repository contract. For an explicit setup or adoption request, create it through the onboarding workflow and repository-contract reference instead of guessing topology from a repository name, issue title, Project title or previous run.
 5. In a shell-capable environment, check `command -v projects` before planning provider commands. When installed, inspect `projects --help` once in this session and run `projects contract validate --root REPOSITORY_ROOT` if supported. Otherwise run `bash SKILL_DIRECTORY/scripts/validate-contract.sh REPOSITORY_ROOT`, using the directory containing this loaded skill. Both validate the complete dispatcher and its child contracts before they are relied upon. A validation failure is a stop condition, not a reason to switch validators.

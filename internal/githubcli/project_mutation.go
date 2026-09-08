@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MiguelRodo/projects/internal/contract"
+	"github.com/MiguelRodo/github-projects-skill/internal/contract"
 )
 
 // ProjectSchema holds the discovered GraphQL schema for a ProjectV2.

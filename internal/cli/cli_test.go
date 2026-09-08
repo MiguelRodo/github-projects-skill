@@ -43,7 +43,7 @@ func (r *runner) RunInput(_ context.Context, input []byte, args ...string) ([]by
 
 func fixture(t *testing.T, name string) string {
 	t.Helper()
-	return filepath.Join("..", "..", "skills", "github-project-admin", "tests", "fixtures", name)
+	return filepath.Join("..", "..", "skills", "github-projects", "tests", "fixtures", name)
 }
 
 func TestContractValidateJSON(t *testing.T) {
@@ -135,7 +135,7 @@ func TestUpdateCheckIsReadOnlyAndReportsDevelopmentBuild(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	fake := &runner{t: t, responses: []response{
 		{
-			args:   []string{"api", "repos/MiguelRodo/projects/releases/latest", "--jq", ".tag_name"},
+			args:   []string{"api", "repos/MiguelRodo/github-projects-skill/releases/latest", "--jq", ".tag_name"},
 			output: "v0.1.0\n",
 		},
 	}}

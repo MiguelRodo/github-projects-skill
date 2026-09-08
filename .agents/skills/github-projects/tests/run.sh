@@ -42,7 +42,7 @@ if bash "$validator" "$test_dir/fixtures/invalid-prose" >/dev/null 2>&1; then
   exit 1
 fi
 
-grep -Fqx 'name: github-project-admin' "$skill_dir/SKILL.md"
+grep -Fqx 'name: github-projects' "$skill_dir/SKILL.md"
 test -f "$skill_dir/README.md"
 test -f "$skill_dir/references/issue-types.md"
 grep -Fq 'Set example#313 to P2.' "$test_dir/short-requests.md"
@@ -206,7 +206,7 @@ PATH="$test_tmp_dir/bin:$PATH" GH_TOKEN="$secret_value" \
   bash "$setup" --skip-install --no-contract --no-repository \
   --install-skill-from "$test_dir/fixtures/single" \
   >"$test_tmp_dir/local-skill-output.log" 2>&1
-grep -Fq -- "skill install $test_dir/fixtures/single github-project-admin --agent universal --scope user --force --from-local" \
+grep -Fq -- "skill install $test_dir/fixtures/single github-projects --agent universal --scope user --force --from-local" \
   "$test_tmp_dir/local-skill.log"
 
 PATH="$test_tmp_dir/bin:$PATH" GH_TOKEN="$secret_value" \
@@ -242,7 +242,7 @@ grep -Fq 'Running repository setup (extend)' "$test_tmp_dir/extend-output.log"
 mkdir -p "$test_tmp_dir/override/.projects"
 cat >"$test_tmp_dir/override/.projects/setup.sh" <<'EOF'
 #!/usr/bin/env bash
-# github-project-admin: override
+# github-projects: override
 printf '%s:%s\n' "$PROJECTS_SETUP_MODE" "$PROJECTS_REPOSITORY_ROOT" >"$LOCAL_SETUP_LOG"
 EOF
 (
@@ -258,6 +258,21 @@ if grep -Fq 'preflight passed' "$test_tmp_dir/override-output.log"; then
   exit 1
 fi
 
+mkdir -p "$test_tmp_dir/legacy-override/.projects"
+cat >"$test_tmp_dir/legacy-override/.projects/setup.sh" <<'EOF'
+#!/usr/bin/env bash
+# github-project-admin: override
+printf '%s:%s\n' "$PROJECTS_SETUP_MODE" "$PROJECTS_REPOSITORY_ROOT" >"$LOCAL_SETUP_LOG"
+EOF
+(
+  cd "$test_tmp_dir/legacy-override"
+  LOCAL_SETUP_LOG="$test_tmp_dir/legacy-override.log" \
+    bash "$setup" --skip-install --no-contract --no-repository \
+    >"$test_tmp_dir/legacy-override-output.log" 2>&1
+)
+grep -Fq "override:$test_tmp_dir/legacy-override" "$test_tmp_dir/legacy-override.log"
+grep -Fq 'Repository override setup completed.' "$test_tmp_dir/legacy-override-output.log"
+
 mkdir -p "$test_tmp_dir/init-single"
 git -C "$test_tmp_dir/init-single" init -q
 printf '# Existing repository guidance\n\nKeep this text.\n' >"$test_tmp_dir/init-single/AGENTS.md"
@@ -268,7 +283,7 @@ printf '# Existing repository guidance\n\nKeep this text.\n' >"$test_tmp_dir/ini
 )
 bash "$validator" "$test_tmp_dir/init-single"
 grep -Fq 'Keep this text.' "$test_tmp_dir/init-single/AGENTS.md"
-grep -Fq '<!-- github-project-admin:start -->' "$test_tmp_dir/init-single/AGENTS.md"
+grep -Fq '<!-- github-projects:start -->' "$test_tmp_dir/init-single/AGENTS.md"
 grep -Fq '| Issue repository | octo-org/example |' "$test_tmp_dir/init-single/.projects/project.md"
 grep -Fq '| Project title | Example planning |' "$test_tmp_dir/init-single/.projects/project.md"
 grep -Fq '| Class | organization issue type | Issue Type |' "$test_tmp_dir/init-single/.projects/project.md"
@@ -332,7 +347,7 @@ git -C "$test_tmp_dir/init-multiple" init -q
     >"$test_tmp_dir/init-multiple.log" 2>&1
 )
 bash "$validator" "$test_tmp_dir/init-multiple"
-grep -Fq '<!-- github-project-admin:start -->' "$test_tmp_dir/init-multiple/AGENTS.md"
+grep -Fq '<!-- github-projects:start -->' "$test_tmp_dir/init-multiple/AGENTS.md"
 grep -Fq '| Mode | dispatcher |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
 grep -Fq '| Governance | personal |' \
@@ -545,7 +560,7 @@ printf '# Existing guidance\n' >"$test_tmp_dir/init-separate-single/AGENTS.md"
 bash "$validator" "$test_tmp_dir/init-separate-single"
 grep -Fq '| Issue repository | octo-user/issues |' \
   "$test_tmp_dir/init-separate-single/.projects/project.md"
-grep -Fq '<!-- github-project-admin:start -->' \
+grep -Fq '<!-- github-projects:start -->' \
   "$test_tmp_dir/init-separate-single/AGENTS.md"
 if grep -Fq 'octo-user/issues' "$test_tmp_dir/init-separate-single/AGENTS.md"; then
   echo "ERROR: AGENTS.md leaked the separate issue repository destination" >&2
@@ -585,4 +600,4 @@ grep -Fq 'could not find or access issue repository: missing/repo' \
   "$test_tmp_dir/init-invalid-issue-repo.log"
 test ! -e "$test_tmp_dir/init-invalid-issue-repo/.projects/project.md"
 
-echo "github-project-admin tests passed"
+echo "github-projects tests passed"

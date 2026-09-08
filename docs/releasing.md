@@ -29,16 +29,16 @@ line. Run the first and third commands interactively; replace the key path in
 the second command with the local private-key file:
 
 ```bash
-gh secret set APT_REPO_TOKEN --repo MiguelRodo/projects
-gh secret set GPG_PRIVATE_KEY --repo MiguelRodo/projects < /path/to/private-key.asc
-gh secret set GPG_PRIVATE_KEY_PASSPHRASE --repo MiguelRodo/projects
+gh secret set APT_REPO_TOKEN --repo MiguelRodo/github-projects-skill
+gh secret set GPG_PRIVATE_KEY --repo MiguelRodo/github-projects-skill < /path/to/private-key.asc
+gh secret set GPG_PRIVATE_KEY_PASSPHRASE --repo MiguelRodo/github-projects-skill
 ```
 
 The passphrase secret may be omitted for an unprotected signing key. Check only
 the configured secret names with:
 
 ```bash
-gh secret list --repo MiguelRodo/projects
+gh secret list --repo MiguelRodo/github-projects-skill
 ```
 
 ## Publish a release
@@ -47,7 +47,7 @@ For routine releases, request a bump from the latest semantic version tag:
 
 ```bash
 gh workflow run go-version-release.yml \
-  --repo MiguelRodo/projects \
+  --repo MiguelRodo/github-projects-skill \
   -f bump_type=patch
 ```
 
@@ -63,14 +63,14 @@ no semantic version tags, or an intentional exact next version, supply
 chosen next version. Check the existing releases first:
 
 ```bash
-gh release list --repo MiguelRodo/projects
+gh release list --repo MiguelRodo/github-projects-skill
 ```
 
 The workflow also accepts the inputs in the GitHub Actions web interface.
 Watch a run with:
 
 ```bash
-gh run watch --repo MiguelRodo/projects
+gh run watch --repo MiguelRodo/github-projects-skill
 ```
 
 Do not set both `version` and `bump_type`. `version_force` is an escape hatch
@@ -83,7 +83,7 @@ Check the GitHub Release, then verify that the signed APT repository contains
 the same package version:
 
 ```bash
-gh release view --repo MiguelRodo/projects
+gh release view --repo MiguelRodo/github-projects-skill
 curl -fsSL https://miguelrodo.github.io/apt-miguelrodo/dists/stable/main/binary-amd64/Packages \
   | awk '/^Package: projects$/{show=1} show{print} show && /^$/{exit}'
 ```

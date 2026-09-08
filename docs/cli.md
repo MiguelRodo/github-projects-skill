@@ -2,7 +2,7 @@
 
 `projects` handles the repeated, mechanical parts of GitHub Project
 administration. The repository's `.projects/` contract still decides which
-repository and Project are in scope. The `github-project-admin` skill still
+repository and Project are in scope. The `github-projects` skill still
 interprets a user's request and applies its safety rules.
 
 The CLI is optional. Keep using the repository scripts or direct `gh` and API
@@ -44,7 +44,7 @@ Tagged releases also contain checksummed Linux, macOS and Windows archives.
 If Go is already installed, the current source can be installed with:
 
 ```bash
-go install github.com/MiguelRodo/projects/cmd/projects@latest
+go install github.com/MiguelRodo/github-projects-skill/cmd/projects@latest
 ```
 
 Maintainer setup and version-bump commands are in the
@@ -69,7 +69,7 @@ its child contracts. It does not contact GitHub or change files. The existing
 shell validator remains available:
 
 ```bash
-bash .agents/skills/github-project-admin/scripts/validate-contract.sh .
+bash .agents/skills/github-projects/scripts/validate-contract.sh .
 ```
 
 Use `--json` when another program needs the resolved contract summary. Progress

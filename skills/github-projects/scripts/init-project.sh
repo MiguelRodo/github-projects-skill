@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Guided, repository-local onboarding for github-project-admin. This script
+# Guided, repository-local onboarding for github-projects. This script
 # writes repository configuration only. It never changes live GitHub issues or
 # Project fields. Keep this file compatible with Bash 3.2.
 set +x
@@ -109,8 +109,10 @@ require_text() {
 
 append_agents_pointer() {
   local agents_file="$repository_root/AGENTS.md"
-  local marker='<!-- github-project-admin:start -->'
-  if [[ -f "$agents_file" ]] && grep -Fq "$marker" "$agents_file"; then
+  if [[ -f "$agents_file" ]] && {
+    grep -Fq '<!-- github-projects:start -->' "$agents_file" ||
+    grep -Fq '<!-- github-project-admin:start -->' "$agents_file"
+  }; then
     note "AGENTS.md already contains the GitHub Project starting point."
     return 0
   fi
@@ -119,13 +121,13 @@ append_agents_pointer() {
     printf '\n' >>"$agents_file"
   fi
   cat >>"$agents_file" <<'EOF'
-<!-- github-project-admin:start -->
+<!-- github-projects:start -->
 ## GitHub issues and Projects
 
 For GitHub issue or Project administration, use
-`.agents/skills/github-project-admin/SKILL.md` and read
+`.agents/skills/github-projects/SKILL.md` and read
 `.projects/project.md` before acting.
-<!-- github-project-admin:end -->
+<!-- github-projects:end -->
 EOF
   success "Added the GitHub Project starting point to AGENTS.md."
 }
@@ -694,7 +696,7 @@ After that, ask for the outcome you want in ordinary language. A specific change
 request supplies authority for that change; broad organisation starts with a
 proposal for approval. The chat makes supported changes and uses the configured
 handoff for the rest. Run pj -i locally to process a queued handoff after setting
-up the launcher from project-bootstrap.
+up the launcher from projects.
 EOF
 }
 
@@ -707,7 +709,7 @@ The example below uses Codex cloud.
 2. Choose the $repository repository.
 3. Use this setup command:
 
-  bash .agents/skills/github-project-admin/scripts/setup.sh
+  bash .agents/skills/github-projects/scripts/setup.sh
 
 4. Create a classic GitHub personal access token at:
 
@@ -768,7 +770,7 @@ onboarding state, but it cannot resolve ordinary Project requests yet.
 
 Run the initializer again and choose to add a Project:
 
-  bash .agents/skills/github-project-admin/scripts/init-project.sh
+  bash .agents/skills/github-projects/scripts/init-project.sh
 
 It will preserve the dispatcher, add one Project at a time and ask whether you
 want to add another.
@@ -821,7 +823,7 @@ if [[ -e "$contract_file" ]]; then
     success "The existing repository setup was not replaced."
     save_onboarding_files
     echo
-    note "For usage and update instructions, read .agents/skills/github-project-admin/README.md."
+    note "For usage and update instructions, read .agents/skills/github-projects/README.md."
     exit 0
   fi
 

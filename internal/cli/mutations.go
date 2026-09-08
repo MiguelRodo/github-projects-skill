@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/MiguelRodo/projects/internal/contract"
-	"github.com/MiguelRodo/projects/internal/githubcli"
+	"github.com/MiguelRodo/github-projects-skill/internal/contract"
+	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
 )
 
 type stringList []string

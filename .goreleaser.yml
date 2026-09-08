@@ -13,9 +13,9 @@ builds:
     ldflags:
       - >-
         -s -w
-        -X github.com/MiguelRodo/projects/internal/buildinfo.version={{.Version}}
-        -X github.com/MiguelRodo/projects/internal/buildinfo.commit={{.Commit}}
-        -X github.com/MiguelRodo/projects/internal/buildinfo.date={{.Date}}
+        -X github.com/MiguelRodo/github-projects-skill/internal/buildinfo.version={{.Version}}
+        -X github.com/MiguelRodo/github-projects-skill/internal/buildinfo.commit={{.Commit}}
+        -X github.com/MiguelRodo/github-projects-skill/internal/buildinfo.date={{.Date}}
     goos:
       - linux
     goarch:
@@ -29,9 +29,9 @@ builds:
     ldflags:
       - >-
         -s -w
-        -X github.com/MiguelRodo/projects/internal/buildinfo.version={{.Version}}
-        -X github.com/MiguelRodo/projects/internal/buildinfo.commit={{.Commit}}
-        -X github.com/MiguelRodo/projects/internal/buildinfo.date={{.Date}}
+        -X github.com/MiguelRodo/github-projects-skill/internal/buildinfo.version={{.Version}}
+        -X github.com/MiguelRodo/github-projects-skill/internal/buildinfo.commit={{.Commit}}
+        -X github.com/MiguelRodo/github-projects-skill/internal/buildinfo.date={{.Date}}
     goos:
       - darwin
     goarch:
@@ -45,9 +45,9 @@ builds:
     ldflags:
       - >-
         -s -w
-        -X github.com/MiguelRodo/projects/internal/buildinfo.version={{.Version}}
-        -X github.com/MiguelRodo/projects/internal/buildinfo.commit={{.Commit}}
-        -X github.com/MiguelRodo/projects/internal/buildinfo.date={{.Date}}
+        -X github.com/MiguelRodo/github-projects-skill/internal/buildinfo.version={{.Version}}
+        -X github.com/MiguelRodo/github-projects-skill/internal/buildinfo.commit={{.Commit}}
+        -X github.com/MiguelRodo/github-projects-skill/internal/buildinfo.date={{.Date}}
     goos:
       - windows
     goarch:
@@ -67,7 +67,7 @@ nfpms:
     formats:
       - deb
     file_name_template: "{{ .PackageName }}_{{ .Version }}_{{ .Arch }}"
-    homepage: https://github.com/MiguelRodo/projects
+    homepage: https://github.com/MiguelRodo/github-projects-skill
     description: Deterministic CLI backend for GitHub issue and Project administration
     section: utils
     license: MIT

@@ -9,7 +9,7 @@ import (
 
 func fixtureRoot(t *testing.T, name string) string {
 	t.Helper()
-	return filepath.Join("..", "..", "skills", "github-project-admin", "tests", "fixtures", name)
+	return filepath.Join("..", "..", "skills", "github-projects", "tests", "fixtures", name)
 }
 
 func TestDispatcherRejectsCredentialLikeContent(t *testing.T) {
