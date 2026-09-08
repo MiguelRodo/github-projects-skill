@@ -134,10 +134,14 @@ case "${1:-}" in
     ;;
   repo)
     [[ "${2:-}" == "view" ]]
-    if [[ "$*" == *"nameWithOwner,visibility"* ]]; then
+    if [[ "$*" == *"missing/repo"* ]]; then
+      exit 1
+    elif [[ "$*" == *"nameWithOwner,visibility"* ]]; then
       printf 'octo-org/example\tPUBLIC\n'
     elif [[ "$*" == *"octo-user/example"* ]]; then
       echo "octo-user/example"
+    elif [[ "$*" == *"octo-user/issues"* ]]; then
+      echo "octo-user/issues"
     else
       echo "octo-org/example"
     fi
@@ -259,7 +263,7 @@ git -C "$test_tmp_dir/init-single" init -q
 printf '# Existing repository guidance\n\nKeep this text.\n' >"$test_tmp_dir/init-single/AGENTS.md"
 (
   cd "$test_tmp_dir/init-single"
-  printf '\n\n\n12\n\n\n' | PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
+  printf '\n\n\n\n12\n\n\n' | PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-output.log" 2>&1
 )
 bash "$validator" "$test_tmp_dir/init-single"
@@ -323,7 +327,7 @@ mkdir -p "$test_tmp_dir/init-multiple"
 git -C "$test_tmp_dir/init-multiple" init -q
 (
   cd "$test_tmp_dir/init-multiple"
-  printf '%s\n' '' n y '' 12 '' '' n n y | \
+  printf '%s\n' '' '' n y '' 12 '' '' n n y | \
     PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-multiple.log" 2>&1
 )
@@ -443,7 +447,7 @@ mkdir -p "$test_tmp_dir/init-collaborative-multiple"
 git -C "$test_tmp_dir/init-collaborative-multiple" init -q
 (
   cd "$test_tmp_dir/init-collaborative-multiple"
-  printf '%s\n' y n n n | PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
+  printf '%s\n' y '' n n n | PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-collaborative-multiple.log" 2>&1
 )
 bash "$validator" "$test_tmp_dir/init-collaborative-multiple"
@@ -463,7 +467,7 @@ mkdir -p "$test_tmp_dir/init-collaborative-single"
 git -C "$test_tmp_dir/init-collaborative-single" init -q
 (
   cd "$test_tmp_dir/init-collaborative-single"
-  printf '%s\n' y '' '' 12 n n | PATH="$test_tmp_dir/bin:$PATH" \
+  printf '%s\n' y '' '' '' 12 n n | PATH="$test_tmp_dir/bin:$PATH" \
     bash "$initializer" >"$test_tmp_dir/init-collaborative-single.log" 2>&1
 )
 bash "$validator" "$test_tmp_dir/init-collaborative-single"
@@ -486,6 +490,7 @@ git -C "$test_tmp_dir/init-commit" add unrelated.txt
   cd "$test_tmp_dir/init-commit"
   PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-commit.log" 2>&1 <<'EOF'
+
 
 
 
@@ -516,6 +521,7 @@ git -C "$test_tmp_dir/init-push-failure" config user.email "setup@example.invali
 
 
 
+
 12
 y
 n
@@ -526,5 +532,57 @@ grep -Fq 'The commit is safe locally, but Git could not push it.' \
 grep -Fq 'git push -u origin main' "$test_tmp_dir/init-push-failure.log"
 [[ "$(git -C "$test_tmp_dir/init-push-failure" log -1 --format=%s)" == \
    "Configure GitHub Project administration" ]]
+
+mkdir -p "$test_tmp_dir/init-separate-single"
+git -C "$test_tmp_dir/init-separate-single" init -q
+printf '# Existing guidance\n' >"$test_tmp_dir/init-separate-single/AGENTS.md"
+(
+  cd "$test_tmp_dir/init-separate-single"
+  printf '%s\n' '' 'octo-user/issues' '' '' 12 n n | \
+    PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
+    >"$test_tmp_dir/init-separate-single.log" 2>&1
+)
+bash "$validator" "$test_tmp_dir/init-separate-single"
+grep -Fq '| Issue repository | octo-user/issues |' \
+  "$test_tmp_dir/init-separate-single/.projects/project.md"
+grep -Fq '<!-- github-project-admin:start -->' \
+  "$test_tmp_dir/init-separate-single/AGENTS.md"
+if grep -Fq 'octo-user/issues' "$test_tmp_dir/init-separate-single/AGENTS.md"; then
+  echo "ERROR: AGENTS.md leaked the separate issue repository destination" >&2
+  exit 1
+fi
+
+mkdir -p "$test_tmp_dir/init-separate-multiple"
+git -C "$test_tmp_dir/init-separate-multiple" init -q
+(
+  cd "$test_tmp_dir/init-separate-multiple"
+  printf '%s\n' '' 'octo-user/issues' n y '' 12 '' '' n n n | \
+    PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
+    >"$test_tmp_dir/init-separate-multiple.log" 2>&1
+)
+bash "$validator" "$test_tmp_dir/init-separate-multiple"
+grep -Fq '| Issue repository | octo-user/issues |' \
+  "$test_tmp_dir/init-separate-multiple/.projects/project.md"
+grep -Fq '| Issue repository | octo-user/issues |' \
+  "$test_tmp_dir/init-separate-multiple/.projects/projects/example-planning.md"
+if grep -Fq 'octo-user/issues' "$test_tmp_dir/init-separate-multiple/AGENTS.md"; then
+  echo "ERROR: AGENTS.md leaked the separate issue repository destination" >&2
+  exit 1
+fi
+
+mkdir -p "$test_tmp_dir/init-invalid-issue-repo"
+git -C "$test_tmp_dir/init-invalid-issue-repo" init -q
+if (
+  cd "$test_tmp_dir/init-invalid-issue-repo"
+  printf '%s\n' '' 'missing/repo' | \
+    PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
+    >"$test_tmp_dir/init-invalid-issue-repo.log" 2>&1
+); then
+  echo "ERROR: invalid issue repository unexpectedly passed onboarding" >&2
+  exit 1
+fi
+grep -Fq 'could not find or access issue repository: missing/repo' \
+  "$test_tmp_dir/init-invalid-issue-repo.log"
+test ! -e "$test_tmp_dir/init-invalid-issue-repo/.projects/project.md"
 
 echo "github-project-admin tests passed"
