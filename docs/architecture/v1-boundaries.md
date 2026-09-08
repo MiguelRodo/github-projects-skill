@@ -2,7 +2,7 @@
 
 Status: **current post-dogfood architecture**
 
-The public product is the `github-project-admin` skill plus a small
+The public product is the `github-projects` skill plus a small
 repository-local `.projects/` contract. GitHub issues and Projects are the live
 authority. The optional `projects` binary handles operations that are safer and
 more reliable when they are implemented once.
@@ -21,11 +21,11 @@ command it actually supports.
 
 | Surface | Responsibility |
 | --- | --- |
-| `skills/github-project-admin/` | Interpret short requests; enforce inspection, authority, preservation, stale checks, narrow writes and readback. |
+| `skills/github-projects/` | Interpret short requests; enforce inspection, authority, preservation, stale checks, narrow writes and readback. |
 | Repository `.projects/` contract | Declare the exact issue repository, Project routing, field locations, mappings and local governance. |
 | `projects` CLI | Validate and resolve the existing contract, then perform supported deterministic reads or writes. |
 | Direct provider or `gh` adapter | Perform the same work when `projects` is unavailable or does not yet support the operation. |
-| `MiguelRodo/project-bootstrap` | Coordinate creation of a complete project across GitHub, Drive, the registry and a manual ChatGPT Project handoff. |
+| `MiguelRodo/projects` | Coordinate creation of a complete project across GitHub, Drive, the registry and a manual ChatGPT Project handoff. |
 | `pj` | Start the chosen local agent in the managed workspace. It is a launcher, not an administration client. |
 
 The skill and contract own meaning. The CLI does not infer a second routing

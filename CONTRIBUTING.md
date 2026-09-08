@@ -1,7 +1,7 @@
 # Contributing to `projects`
 
 Thank you for contributing. The active product surface is the agent-neutral
-`github-project-admin` skill, with the optional `projects` CLI for repeated
+`github-projects` skill, with the optional `projects` CLI for repeated
 operations that benefit from one tested implementation.
 
 ## Start with the authoritative issue
@@ -46,8 +46,8 @@ Validate the canonical skill with:
 
 ```bash
 python /path/to/skill-creator/scripts/quick_validate.py \
-  skills/github-project-admin
-bash skills/github-project-admin/tests/run.sh
+  skills/github-projects
+bash skills/github-projects/tests/run.sh
 ```
 
 The first command uses the validator distributed with the Agent Skill authoring tools. CI runs the repository-owned offline checks.

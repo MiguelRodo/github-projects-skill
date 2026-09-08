@@ -48,7 +48,7 @@ projects project item-edit --issue 42 --priority P1 --status "In progress" --app
 
 It is optional. The scripts below and direct GitHub operations remain supported.
 Installation, APT setup and update checks are documented in the
-[`projects` CLI guide](https://github.com/MiguelRodo/projects/blob/main/docs/cli.md).
+[`projects` CLI guide](https://github.com/MiguelRodo/github-projects-skill/blob/main/docs/cli.md).
 
 ## 1. Create or find the GitHub Project
 
@@ -68,11 +68,11 @@ Have the first relevant Project number ready. The initializer asks whether you w
 From the repository, run these one-line commands:
 
 ```text
-gh skill install MiguelRodo/projects github-project-admin --agent universal --scope project
-bash .agents/skills/github-project-admin/scripts/init-project.sh
+gh skill install MiguelRodo/github-projects-skill github-projects --agent universal --scope project
+bash .agents/skills/github-projects/scripts/init-project.sh
 ```
 
-The initializer first explains that it will configure the repository so chats and agents can understand the Project. It discovers GitHub facts and asks only about collaboration, whether the repository uses one or several Projects, and the owner, number and routing identity of each Project you add.
+The initializer first explains that it will configure the repository so chats and agents can understand the Project. It discovers GitHub facts and asks only about collaboration, where issues are tracked (defaulting to the current repository), whether the repository uses one or several Projects, and the owner, number and routing identity of each Project you add.
 
 This covers personal or collaborative repositories with one Project or several. Repository and Project privacy are discovered separately from GitHub.
 
@@ -90,16 +90,22 @@ Create or open a [ChatGPT Project](https://chatgpt.com/projects), make the repos
 
 > For work concerning a GitHub repository, especially reading or updating GitHub issues or Projects, first retrieve and follow the target repository's `AGENTS.md`. Follow the skill and configuration files it references. If the repository or `AGENTS.md` is unavailable, say so rather than guessing.
 >
-> Treat my prompt as the desired outcome. If this chat cannot make a required GitHub change, return the smallest safe command block for me to paste into a terminal, including a check of the result.
+> Treat my prompt as the desired outcome. If this chat cannot make an authorised GitHub change, follow the repository's configured handoff. When its local Chat implementation queue is enabled, create the bounded queue issue and separate unedited authority comment described by the skill, and report the change as queued. Otherwise return the smallest executable command block with an independent result check.
 
-Ask for the outcome you want. The chat should propose broad organisation first. After you approve, it can make supported changes or return a short terminal-ready command block. Paste-ready command handoffs should use ordinary commands and should not change interactive shell options such as `set -e`, `set -u` or `pipefail`.
+Ask for the outcome you want. A specific change request supplies authority for
+that change; broad organisation starts with a proposal for your approval.
+The chat makes supported changes and uses the configured handoff for the rest.
+The [provider instruction reference](references/provider-project-instructions.md)
+has the reusable wording. Command handoffs should use ordinary commands and
+should not change interactive shell options such as `set -e`, `set -u` or
+`pipefail`.
 
 ## 4. Use it from an execution-capable agent
 
 Codex cloud is one execution-capable option. Open [Codex environments](https://chatgpt.com/codex/settings/environments), create an environment and choose the repository. Use:
 
 ```text
-bash .agents/skills/github-project-admin/scripts/setup.sh
+bash .agents/skills/github-projects/scripts/setup.sh
 ```
 
 Create a [classic GitHub personal access token](https://github.com/settings/tokens/new) with an expiry and the `repo`, `read:org` and `project` scopes. Authorise it for organisation SSO if required.
@@ -124,7 +130,44 @@ The initializer offers one shared, proposal-only first request after the chat an
 - use body checkboxes for small local steps and sub-issues when work needs independent planning state;
 - suggest optional sub-project labels only where they add value.
 
-It does not authorise changes until you approve the proposal. After approval, an execution-capable agent can apply and verify it; a chat that cannot write returns minimal commands with readback. To add another Project later, rerun the initializer.
+It does not authorise changes until you approve the proposal. After approval,
+an execution-capable agent can apply and verify it; a chat that cannot complete
+a change uses the configured queue, or minimal commands with readback.
+
+## Add another Project
+
+For an existing dispatcher, rerun
+`bash .agents/skills/github-projects/scripts/init-project.sh` from the
+repository root. It preserves existing routes and child contracts while
+adding the new Project. Validate, review, commit and push the configuration,
+then confirm the new Project's pending Priority mapping before using it.
+
+For a single-Project contract, the initializer preserves the setup and exits.
+Ask the agent to propose a conversion to a dispatcher while preserving the
+existing Project's mappings, governance and membership. Approve that concrete
+conversion before it is applied; do not delete the current contract to restart.
+A Project in a different repository gets its own repository installation.
+
+## Use the local implementation queue
+
+The standard resolved contract includes
+`Chat implementation label | pj:implement-chat`. A chat can mark an existing
+implementation issue or create a temporary handoff for an authorised change
+it cannot finish. The label and separate unedited
+`PJ implementation authority:` comment establish the bounded handoff.
+
+Install `pj` from the
+[projects operator guide](https://github.com/MiguelRodo/projects/blob/main/operator/README.md)
+and keep the managed checkouts in its workspace. Run `pj -i`, or
+`pj -i --repo example/repository` to select one managed issue repository. The local
+agent checks author identity, executes the authorised work and independently
+verifies it. Untrusted or ambiguous items need local review. A PR must reach
+the repository's completion condition before its implementation issue closes.
+
+See the [queue reference](references/local-implementation-queue.md) for authority,
+discovery, readback and fallback rules. The optional
+[`projects` CLI](https://github.com/MiguelRodo/github-projects-skill/blob/main/docs/cli.md)
+performs supported GitHub operations; `pj` launches the agent that directs them.
 
 ## Issue Type / Class
 
@@ -173,7 +216,7 @@ If the repository needs extra tools, add `.projects/setup.sh`. It runs automatic
 To replace common setup completely, place this within the first 20 lines:
 
 ```bash
-# github-project-admin: override
+# github-projects: override
 ```
 
 ## Update the skill
@@ -181,7 +224,7 @@ To replace common setup completely, place this within the first 20 lines:
 Run this inside the repository, then commit the changed skill files:
 
 ```text
-gh skill update github-project-admin
+gh skill update github-projects
 ```
 
 The update does not replace `.projects/project.md` or `.projects/setup.sh`.
@@ -190,4 +233,4 @@ The update does not replace `.projects/project.md` or `.projects/setup.sh`.
 
 Paste the terminal output into the chat, or say which section failed. The agent should inspect what already succeeded and give you only the corrected or remaining commands.
 
-If the failure is reusable, the agent may offer to improve `MiguelRodo/projects`. It should open an issue or pull request only after you agree.
+If the failure is reusable, the agent may offer to improve `MiguelRodo/github-projects-skill`. It should open an issue or pull request only after you agree.

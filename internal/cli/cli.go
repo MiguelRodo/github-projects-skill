@@ -11,10 +11,10 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/MiguelRodo/projects/internal/buildinfo"
-	"github.com/MiguelRodo/projects/internal/contract"
-	"github.com/MiguelRodo/projects/internal/githubcli"
-	updatecheck "github.com/MiguelRodo/projects/internal/update"
+	"github.com/MiguelRodo/github-projects-skill/internal/buildinfo"
+	"github.com/MiguelRodo/github-projects-skill/internal/contract"
+	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
+	updatecheck "github.com/MiguelRodo/github-projects-skill/internal/update"
 )
 
 const usageText = `projects is an optional, deterministic backend for GitHub Project administration.

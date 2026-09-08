@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MiguelRodo/projects/internal/githubcli"
+	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
 )
 
 func cliProjectItemQueryArgs() []string {

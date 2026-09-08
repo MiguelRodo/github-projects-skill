@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Generic environment preflight for github-project-admin. The host supplies
+# Generic environment preflight for github-projects. The host supplies
 # credentials and network access. This script never prints or stores a token.
 set +x
 set -Eeuo pipefail
@@ -45,7 +45,7 @@ Options:
   --contract-root DIRECTORY  Validate DIRECTORY/.projects/project.md.
   --no-contract              Skip automatic local contract validation.
   --skip-install             Do not install or upgrade gh.
-  --install-skill-from REPO  Install github-project-admin from REPO.
+  --install-skill-from REPO  Install github-projects from REPO.
   --agent AGENT              Override the universal agent adapter.
   --scope SCOPE              Skill scope: user or project (default: user).
   --help                     Show this help.
@@ -187,7 +187,7 @@ fi
 local_setup="$repository_root/.projects/setup.sh"
 if [[ -f "$local_setup" ]]; then
   if head -n 20 "$local_setup" |
-     grep -Eq '^[[:space:]]*#[[:space:]]*github-project-admin:[[:space:]]*override[[:space:]]*$'; then
+     grep -Eq '^[[:space:]]*#[[:space:]]*(github-projects|github-project-admin):[[:space:]]*override[[:space:]]*$'; then
     local_setup_mode="override"
   else
     local_setup_mode="extend"
@@ -416,7 +416,7 @@ fi
 if [[ -n "$skill_source" ]]; then
   skill_install_args=(
     "$skill_source"
-    github-project-admin
+    github-projects
     --agent "$skill_agent"
     --scope "$skill_scope"
     --force

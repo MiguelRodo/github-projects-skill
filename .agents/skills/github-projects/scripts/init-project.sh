@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Guided, repository-local onboarding for github-project-admin. This script
+# Guided, repository-local onboarding for github-projects. This script
 # writes repository configuration only. It never changes live GitHub issues or
 # Project fields. Keep this file compatible with Bash 3.2.
 set +x
@@ -11,6 +11,7 @@ skill_dir="$(cd "$script_dir/.." && pwd)"
 generated_contract=""
 transaction_dir=""
 changed_contract_paths=()
+issue_repository=""
 first_request_project_context=""
 first_request_class_name="Issue Type or Class"
 section_number=0
@@ -108,8 +109,10 @@ require_text() {
 
 append_agents_pointer() {
   local agents_file="$repository_root/AGENTS.md"
-  local marker='<!-- github-project-admin:start -->'
-  if [[ -f "$agents_file" ]] && grep -Fq "$marker" "$agents_file"; then
+  if [[ -f "$agents_file" ]] && {
+    grep -Fq '<!-- github-projects:start -->' "$agents_file" ||
+    grep -Fq '<!-- github-project-admin:start -->' "$agents_file"
+  }; then
     note "AGENTS.md already contains the GitHub Project starting point."
     return 0
   fi
@@ -118,15 +121,36 @@ append_agents_pointer() {
     printf '\n' >>"$agents_file"
   fi
   cat >>"$agents_file" <<'EOF'
-<!-- github-project-admin:start -->
+<!-- github-projects:start -->
 ## GitHub issues and Projects
 
 For GitHub issue or Project administration, use
-`.agents/skills/github-project-admin/SKILL.md` and read
+`.agents/skills/github-projects/SKILL.md` and read
 `.projects/project.md` before acting.
-<!-- github-project-admin:end -->
+<!-- github-projects:end -->
 EOF
   success "Added the GitHub Project starting point to AGENTS.md."
+}
+
+validate_issue_repository() {
+  local candidate="$1"
+  local resolved
+  if [[ "$candidate" == *"|"* || "$candidate" == *$'\n'* ]]; then
+    die "issue repository must not contain a table separator (|) or newline"
+  fi
+  if [[ ! "$candidate" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+    die "issue repository must be in owner/repo format: $candidate"
+  fi
+  if [[ "$candidate" == "$repository" ]]; then
+    printf '%s' "$repository"
+    return 0
+  fi
+  resolved="$(gh repo view "$candidate" --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)" ||
+    die "could not find or access issue repository: $candidate"
+  if [[ -z "$resolved" || ! "$resolved" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+    die "could not find or access issue repository: $candidate"
+  fi
+  printf '%s' "$resolved"
 }
 
 print_auth_help() {
@@ -255,7 +279,7 @@ EOF
     printf '| Project key | %s |\n' "$project_key" >>"$target"
   fi
   cat >>"$target" <<EOF
-| Issue repository | $repository |
+| Issue repository | $issue_repository |
 | Project owner | $project_owner |
 EOF
   if [[ "$mode" == "project" ]]; then
@@ -326,7 +350,7 @@ create_dispatcher_contract() {
 | --- | --- |
 | Contract version | 1 |
 | Mode | dispatcher |
-| Issue repository | $repository |
+| Issue repository | $issue_repository |
 | Privacy | $repository_privacy |
 | Governance | $governance |
 
@@ -638,9 +662,9 @@ save_onboarding_files() {
 print_provider_intro() {
   section "Choose how you will use the repository"
   cat <<'EOF'
-I will now show two ways to use the repository: a chat interface that may
-return commands for you to run, and an execution-capable agent that can run
-and verify commands after you approve its proposal.
+I will now show two ways to use the repository: a chat interface that can
+use the configured handoff for unsupported changes, and an execution-capable
+agent that can run and verify authorised work.
 
 Before using either remote surface, make sure the installed skill and
 repository configuration are committed and pushed. If the previous section
@@ -661,14 +685,18 @@ print_chatgpt_setup() {
   AGENTS.md. Follow the skill and configuration files it references. If the
   repository or AGENTS.md is unavailable, say so rather than guessing.
 
-  Treat my prompt as the desired outcome. If this chat cannot make a required
-  GitHub change, return the smallest safe command block for me to paste into a
-  terminal, including a check of the result.
+  Treat my prompt as the desired outcome. If this chat cannot make an authorised
+  GitHub change, follow the repository's configured handoff. When its local Chat
+  implementation queue is enabled, create the bounded queue issue and separate
+  unedited authority comment described by the skill, and report the change as
+  queued. Otherwise return the smallest executable command block with an
+  independent result check.
 
-After that, ask for the outcome you want in ordinary language. The chat can
-inspect and propose the work. After you approve the proposal, it will make the
-changes it can and return the smallest safe terminal commands for anything it
-cannot do directly.
+After that, ask for the outcome you want in ordinary language. A specific change
+request supplies authority for that change; broad organisation starts with a
+proposal for approval. The chat makes supported changes and uses the configured
+handoff for the rest. Run pj -i locally to process a queued handoff after setting
+up the launcher from projects.
 EOF
 }
 
@@ -681,7 +709,7 @@ The example below uses Codex cloud.
 2. Choose the $repository repository.
 3. Use this setup command:
 
-  bash .agents/skills/github-project-admin/scripts/setup.sh
+  bash .agents/skills/github-projects/scripts/setup.sh
 
 4. Create a classic GitHub personal access token at:
 
@@ -742,7 +770,7 @@ onboarding state, but it cannot resolve ordinary Project requests yet.
 
 Run the initializer again and choose to add a Project:
 
-  bash .agents/skills/github-project-admin/scripts/init-project.sh
+  bash .agents/skills/github-projects/scripts/init-project.sh
 
 It will preserve the dispatcher, add one Project at a time and ask whether you
 want to add another.
@@ -795,12 +823,14 @@ if [[ -e "$contract_file" ]]; then
     success "The existing repository setup was not replaced."
     save_onboarding_files
     echo
-    note "For usage and update instructions, read .agents/skills/github-project-admin/README.md."
+    note "For usage and update instructions, read .agents/skills/github-projects/README.md."
     exit 0
   fi
 
   governance="$(contract_table_value "$contract_file" "Governance")"
   [[ -n "$governance" ]] || governance="shared"
+  issue_repository="$(contract_table_value "$contract_file" "Issue repository")"
+  [[ -n "$issue_repository" ]] || issue_repository="$repository"
   success "The existing dispatcher and routes will be preserved."
   configure_dispatcher_projects
   bash "$script_dir/validate-contract.sh" "$repository_root"
@@ -839,6 +869,10 @@ if ask_yes_no \
 else
   governance="personal"
 fi
+
+issue_repository="$(ask_default \
+  "GitHub repository where issues are tracked" "$repository")"
+issue_repository="$(validate_issue_repository "$issue_repository")"
 
 if ! ask_yes_no "Does this repository use one GitHub Project?" yes; then
   create_dispatcher_contract

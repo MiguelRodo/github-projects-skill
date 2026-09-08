@@ -12,8 +12,8 @@ reads complete Project item sets, and supports issue and Project item changes
 with a plan before applying them and an independent check afterwards. It can
 also report whether a newer release exists.
 
-The [public guide](https://miguelrodo.github.io/project-bootstrap/) covers both
-this repository and `project-bootstrap`, which coordinates project setup and
+The [public guide](https://miguelrodo.github.io/projects/) covers both
+this repository and `projects`, which coordinates project setup and
 supplies the local `pj` agent launcher.
 
 Release maintainers should use the [Go release and APT guide](docs/releasing.md).
@@ -67,8 +67,8 @@ If one repository manages several Projects, have the first Project number ready.
 Open a terminal in the repository and run:
 
 ```text
-gh skill install MiguelRodo/projects github-project-admin --agent universal --scope project
-bash .agents/skills/github-project-admin/scripts/init-project.sh
+gh skill install MiguelRodo/github-projects-skill github-projects --agent universal --scope project
+bash .agents/skills/github-projects/scripts/init-project.sh
 ```
 
 Before the questions begin, the initializer explains what it will configure. It discovers the repository, its privacy, the Project title and whether its owner is a GitHub user or organisation. It asks only:
@@ -100,9 +100,9 @@ authority for that change. For broad organisation, ask for a proposal first and
 approve it before the chat applies it. The chat performs supported changes and
 uses the configured handoff for anything its GitHub connection cannot do.
 
-The [provider instruction reference](skills/github-project-admin/references/provider-project-instructions.md)
+The [provider instruction reference](skills/github-projects/references/provider-project-instructions.md)
 contains the reusable wording. For the full Drive, registry and ChatGPT setup,
-start with the [project-bootstrap guide](https://miguelrodo.github.io/project-bootstrap/).
+start with the [project guide](https://miguelrodo.github.io/projects/).
 
 ## 4. Set up an execution-capable agent
 
@@ -111,7 +111,7 @@ Codex cloud is one execution-capable option. Open [Codex environments](https://c
 Use this setup command:
 
 ```text
-bash .agents/skills/github-project-admin/scripts/setup.sh
+bash .agents/skills/github-projects/scripts/setup.sh
 ```
 
 Create a [classic GitHub personal access token](https://github.com/settings/tokens/new), give it an expiry, and select the `repo`, `read:org` and `project` scopes. If the organisation uses SSO, authorise the token for that organisation.
@@ -140,7 +140,7 @@ If the repository already has a dispatcher (`Mode | dispatcher` in
 `.projects/project.md`), rerun the initializer from its root:
 
 ```text
-bash .agents/skills/github-project-admin/scripts/init-project.sh
+bash .agents/skills/github-projects/scripts/init-project.sh
 ```
 
 It preserves existing routes and child contracts, discovers the additional
@@ -158,14 +158,14 @@ repository, install and initialise the skill there instead.
 ## Complete queued Chat work locally
 
 New resolved contracts include `Chat implementation label | pj:implement-chat`.
-The [local implementation queue](skills/github-project-admin/references/local-implementation-queue.md)
+The [local implementation queue](skills/github-projects/references/local-implementation-queue.md)
 lets a chat hand off an authorised change it cannot finish, or mark an existing
 issue for bounded repository implementation. Each item needs the configured
 label and a separate unedited `PJ implementation authority:` comment stating
 the goal; implementation authority also names the target repositories.
 
 Install the local launcher using the
-[project-bootstrap operator guide](https://github.com/MiguelRodo/project-bootstrap/blob/main/operator/README.md),
+[projects operator guide](https://github.com/MiguelRodo/projects/blob/main/operator/README.md),
 keep the managed repository checkouts and contracts in its workspace, and run:
 
 ```text
@@ -196,7 +196,7 @@ GitHub Milestones are optional for genuine shared checkpoints such as releases o
 
 Preferred colours make repeated types easier to recognise, but colour is presentational. Reuse provider-supported colours when there are more categories than distinct colours.
 
-See the full [Issue Type and Class design guide](skills/github-project-admin/references/issue-types.md) for type meanings, hierarchy rules and migration guidance.
+See the full [Issue Type and Class design guide](skills/github-projects/references/issue-types.md) for type meanings, hierarchy rules and migration guidance.
 
 ## Issue write-up styles
 
@@ -223,20 +223,20 @@ A separate contract row controls how issue prose reads, regardless of the write-
 Run this in the repository and commit the changed files:
 
 ```text
-gh skill update github-project-admin
+gh skill update github-projects
 ```
 
 Updating the shared skill does not replace `.projects/project.md` or a repository-specific `.projects/setup.sh`.
 
 ## Maintaining this repository
 
-For `MiguelRodo/projects` itself, the canonical skill is under `skills/`. Its Codex setup command is:
+For `MiguelRodo/github-projects-skill` itself, the canonical skill is under `skills/`. Its Codex setup command is:
 
 ```text
-bash skills/github-project-admin/scripts/setup.sh --install-skill-from .
+bash skills/github-projects/scripts/setup.sh --install-skill-from .
 ```
 
-The shorter operator guide is in [the skill README](skills/github-project-admin/README.md). [Issue #1](../../issues/1) contains the roadmap and [issue #67](../../issues/67) records the current architecture.
+The shorter operator guide is in [the skill README](skills/github-projects/README.md). [Issue #1](../../issues/1) contains the roadmap and [issue #67](../../issues/67) records the current architecture.
 
 The [current architecture](docs/architecture/v1-boundaries.md) describes the
 supported Markdown contracts and CLI. Files under `docs/spec/`, `schemas/` and

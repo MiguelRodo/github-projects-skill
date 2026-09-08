@@ -5,8 +5,8 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/MiguelRodo/projects/internal/cli"
-	"github.com/MiguelRodo/projects/internal/githubcli"
+	"github.com/MiguelRodo/github-projects-skill/internal/cli"
+	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
 )
 
 func main() {

@@ -11,6 +11,7 @@ initializer="$skill_dir/scripts/init-project.sh"
 bash -n "$validator"
 bash -n "$setup"
 bash -n "$initializer"
+python3 "$test_dir/test-agent-cli-choice.py"
 
 bash "$validator" "$test_dir/fixtures/single"
 bash "$validator" "$test_dir/fixtures/single-user"
@@ -41,7 +42,7 @@ if bash "$validator" "$test_dir/fixtures/invalid-prose" >/dev/null 2>&1; then
   exit 1
 fi
 
-grep -Fqx 'name: github-project-admin' "$skill_dir/SKILL.md"
+grep -Fqx 'name: github-projects' "$skill_dir/SKILL.md"
 test -f "$skill_dir/README.md"
 test -f "$skill_dir/references/issue-types.md"
 grep -Fq 'Set example#313 to P2.' "$test_dir/short-requests.md"
@@ -133,10 +134,14 @@ case "${1:-}" in
     ;;
   repo)
     [[ "${2:-}" == "view" ]]
-    if [[ "$*" == *"nameWithOwner,visibility"* ]]; then
+    if [[ "$*" == *"missing/repo"* ]]; then
+      exit 1
+    elif [[ "$*" == *"nameWithOwner,visibility"* ]]; then
       printf 'octo-org/example\tPUBLIC\n'
     elif [[ "$*" == *"octo-user/example"* ]]; then
       echo "octo-user/example"
+    elif [[ "$*" == *"octo-user/issues"* ]]; then
+      echo "octo-user/issues"
     else
       echo "octo-org/example"
     fi
@@ -201,7 +206,7 @@ PATH="$test_tmp_dir/bin:$PATH" GH_TOKEN="$secret_value" \
   bash "$setup" --skip-install --no-contract --no-repository \
   --install-skill-from "$test_dir/fixtures/single" \
   >"$test_tmp_dir/local-skill-output.log" 2>&1
-grep -Fq -- "skill install $test_dir/fixtures/single github-project-admin --agent universal --scope user --force --from-local" \
+grep -Fq -- "skill install $test_dir/fixtures/single github-projects --agent universal --scope user --force --from-local" \
   "$test_tmp_dir/local-skill.log"
 
 PATH="$test_tmp_dir/bin:$PATH" GH_TOKEN="$secret_value" \
@@ -237,7 +242,7 @@ grep -Fq 'Running repository setup (extend)' "$test_tmp_dir/extend-output.log"
 mkdir -p "$test_tmp_dir/override/.projects"
 cat >"$test_tmp_dir/override/.projects/setup.sh" <<'EOF'
 #!/usr/bin/env bash
-# github-project-admin: override
+# github-projects: override
 printf '%s:%s\n' "$PROJECTS_SETUP_MODE" "$PROJECTS_REPOSITORY_ROOT" >"$LOCAL_SETUP_LOG"
 EOF
 (
@@ -253,17 +258,32 @@ if grep -Fq 'preflight passed' "$test_tmp_dir/override-output.log"; then
   exit 1
 fi
 
+mkdir -p "$test_tmp_dir/legacy-override/.projects"
+cat >"$test_tmp_dir/legacy-override/.projects/setup.sh" <<'EOF'
+#!/usr/bin/env bash
+# github-project-admin: override
+printf '%s:%s\n' "$PROJECTS_SETUP_MODE" "$PROJECTS_REPOSITORY_ROOT" >"$LOCAL_SETUP_LOG"
+EOF
+(
+  cd "$test_tmp_dir/legacy-override"
+  LOCAL_SETUP_LOG="$test_tmp_dir/legacy-override.log" \
+    bash "$setup" --skip-install --no-contract --no-repository \
+    >"$test_tmp_dir/legacy-override-output.log" 2>&1
+)
+grep -Fq "override:$test_tmp_dir/legacy-override" "$test_tmp_dir/legacy-override.log"
+grep -Fq 'Repository override setup completed.' "$test_tmp_dir/legacy-override-output.log"
+
 mkdir -p "$test_tmp_dir/init-single"
 git -C "$test_tmp_dir/init-single" init -q
 printf '# Existing repository guidance\n\nKeep this text.\n' >"$test_tmp_dir/init-single/AGENTS.md"
 (
   cd "$test_tmp_dir/init-single"
-  printf '\n\n\n12\n\n\n' | PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
+  printf '\n\n\n\n12\n\n\n' | PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-output.log" 2>&1
 )
 bash "$validator" "$test_tmp_dir/init-single"
 grep -Fq 'Keep this text.' "$test_tmp_dir/init-single/AGENTS.md"
-grep -Fq '<!-- github-project-admin:start -->' "$test_tmp_dir/init-single/AGENTS.md"
+grep -Fq '<!-- github-projects:start -->' "$test_tmp_dir/init-single/AGENTS.md"
 grep -Fq '| Issue repository | octo-org/example |' "$test_tmp_dir/init-single/.projects/project.md"
 grep -Fq '| Project title | Example planning |' "$test_tmp_dir/init-single/.projects/project.md"
 grep -Fq '| Class | organization issue type | Issue Type |' "$test_tmp_dir/init-single/.projects/project.md"
@@ -322,12 +342,12 @@ mkdir -p "$test_tmp_dir/init-multiple"
 git -C "$test_tmp_dir/init-multiple" init -q
 (
   cd "$test_tmp_dir/init-multiple"
-  printf '%s\n' '' n y '' 12 '' '' n n y | \
+  printf '%s\n' '' '' n y '' 12 '' '' n n y | \
     PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-multiple.log" 2>&1
 )
 bash "$validator" "$test_tmp_dir/init-multiple"
-grep -Fq '<!-- github-project-admin:start -->' "$test_tmp_dir/init-multiple/AGENTS.md"
+grep -Fq '<!-- github-projects:start -->' "$test_tmp_dir/init-multiple/AGENTS.md"
 grep -Fq '| Mode | dispatcher |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
 grep -Fq '| Governance | personal |' \
@@ -442,7 +462,7 @@ mkdir -p "$test_tmp_dir/init-collaborative-multiple"
 git -C "$test_tmp_dir/init-collaborative-multiple" init -q
 (
   cd "$test_tmp_dir/init-collaborative-multiple"
-  printf '%s\n' y n n n | PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
+  printf '%s\n' y '' n n n | PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-collaborative-multiple.log" 2>&1
 )
 bash "$validator" "$test_tmp_dir/init-collaborative-multiple"
@@ -462,7 +482,7 @@ mkdir -p "$test_tmp_dir/init-collaborative-single"
 git -C "$test_tmp_dir/init-collaborative-single" init -q
 (
   cd "$test_tmp_dir/init-collaborative-single"
-  printf '%s\n' y '' '' 12 n n | PATH="$test_tmp_dir/bin:$PATH" \
+  printf '%s\n' y '' '' '' 12 n n | PATH="$test_tmp_dir/bin:$PATH" \
     bash "$initializer" >"$test_tmp_dir/init-collaborative-single.log" 2>&1
 )
 bash "$validator" "$test_tmp_dir/init-collaborative-single"
@@ -485,6 +505,7 @@ git -C "$test_tmp_dir/init-commit" add unrelated.txt
   cd "$test_tmp_dir/init-commit"
   PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-commit.log" 2>&1 <<'EOF'
+
 
 
 
@@ -515,6 +536,7 @@ git -C "$test_tmp_dir/init-push-failure" config user.email "setup@example.invali
 
 
 
+
 12
 y
 n
@@ -526,4 +548,56 @@ grep -Fq 'git push -u origin main' "$test_tmp_dir/init-push-failure.log"
 [[ "$(git -C "$test_tmp_dir/init-push-failure" log -1 --format=%s)" == \
    "Configure GitHub Project administration" ]]
 
-echo "github-project-admin tests passed"
+mkdir -p "$test_tmp_dir/init-separate-single"
+git -C "$test_tmp_dir/init-separate-single" init -q
+printf '# Existing guidance\n' >"$test_tmp_dir/init-separate-single/AGENTS.md"
+(
+  cd "$test_tmp_dir/init-separate-single"
+  printf '%s\n' '' 'octo-user/issues' '' '' 12 n n | \
+    PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
+    >"$test_tmp_dir/init-separate-single.log" 2>&1
+)
+bash "$validator" "$test_tmp_dir/init-separate-single"
+grep -Fq '| Issue repository | octo-user/issues |' \
+  "$test_tmp_dir/init-separate-single/.projects/project.md"
+grep -Fq '<!-- github-projects:start -->' \
+  "$test_tmp_dir/init-separate-single/AGENTS.md"
+if grep -Fq 'octo-user/issues' "$test_tmp_dir/init-separate-single/AGENTS.md"; then
+  echo "ERROR: AGENTS.md leaked the separate issue repository destination" >&2
+  exit 1
+fi
+
+mkdir -p "$test_tmp_dir/init-separate-multiple"
+git -C "$test_tmp_dir/init-separate-multiple" init -q
+(
+  cd "$test_tmp_dir/init-separate-multiple"
+  printf '%s\n' '' 'octo-user/issues' n y '' 12 '' '' n n n | \
+    PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
+    >"$test_tmp_dir/init-separate-multiple.log" 2>&1
+)
+bash "$validator" "$test_tmp_dir/init-separate-multiple"
+grep -Fq '| Issue repository | octo-user/issues |' \
+  "$test_tmp_dir/init-separate-multiple/.projects/project.md"
+grep -Fq '| Issue repository | octo-user/issues |' \
+  "$test_tmp_dir/init-separate-multiple/.projects/projects/example-planning.md"
+if grep -Fq 'octo-user/issues' "$test_tmp_dir/init-separate-multiple/AGENTS.md"; then
+  echo "ERROR: AGENTS.md leaked the separate issue repository destination" >&2
+  exit 1
+fi
+
+mkdir -p "$test_tmp_dir/init-invalid-issue-repo"
+git -C "$test_tmp_dir/init-invalid-issue-repo" init -q
+if (
+  cd "$test_tmp_dir/init-invalid-issue-repo"
+  printf '%s\n' '' 'missing/repo' | \
+    PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
+    >"$test_tmp_dir/init-invalid-issue-repo.log" 2>&1
+); then
+  echo "ERROR: invalid issue repository unexpectedly passed onboarding" >&2
+  exit 1
+fi
+grep -Fq 'could not find or access issue repository: missing/repo' \
+  "$test_tmp_dir/init-invalid-issue-repo.log"
+test ! -e "$test_tmp_dir/init-invalid-issue-repo/.projects/project.md"
+
+echo "github-projects tests passed"

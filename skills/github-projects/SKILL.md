@@ -1,11 +1,11 @@
 ---
 description: Administer GitHub issues and Projects from short outcome requests. Use for Project-aware inspection, prioritisation, creation, updates, assignment, routing, hierarchy, field changes, or when a surface must hand unsupported mutations to the local pj implementation queue.
 metadata:
-    github-path: skills/github-project-admin
+    github-path: skills/github-projects
     github-ref: refs/heads/main
-    github-repo: https://github.com/MiguelRodo/projects
+    github-repo: https://github.com/MiguelRodo/github-projects-skill
     github-tree-sha: 5ae534caba0224987735235bec8a818146e6c63b
-name: github-project-admin
+name: github-projects
 ---
 # GitHub Project administration
 
@@ -14,10 +14,10 @@ Treat the user's request as the desired outcome. Do not require the user to repe
 ## Select the skill and local contract
 
 1. Find the target repository root.
-2. If `.projects/skills/github-project-admin/SKILL.md` exists there and is not this skill, load that deliberate local replacement and stop applying this copy. Do not merge two skill definitions implicitly.
+2. If `.projects/skills/github-projects/SKILL.md` exists there and is not this skill, load that deliberate local replacement and stop applying this copy. Do not merge two skill definitions implicitly.
 3. Otherwise use this canonical skill.
 4. Read `.projects/project.md`. If it is missing during ordinary administration, stop and identify the missing repository contract. For an explicit setup or adoption request, create it through the onboarding workflow and repository-contract reference instead of guessing topology from a repository name, issue title, Project title or previous run.
-5. In a shell-capable environment, run `projects contract validate --root REPOSITORY_ROOT` when `projects` is installed. Otherwise run `scripts/validate-contract.sh REPOSITORY_ROOT`. Both validate the complete dispatcher and its child contracts before they are relied upon.
+5. In a shell-capable environment, check `command -v projects` before planning provider commands. When installed, inspect `projects --help` once in this session and run `projects contract validate --root REPOSITORY_ROOT` if supported. Otherwise run `bash SKILL_DIRECTORY/scripts/validate-contract.sh REPOSITORY_ROOT`, using the directory containing this loaded skill. Both validate the complete dispatcher and its child contracts before they are relied upon. A validation failure is a stop condition, not a reason to switch validators.
 
 Read [the repository contract reference](references/repository-contract.md) when creating, migrating, validating, or interpreting `.projects/` files.
 
@@ -88,13 +88,15 @@ For single-select option colours, follow any exact palette in the repository con
 
 ## Choose an execution surface
 
-Use the first capable surface:
+Choose the surface before reconstructing pagination, field lookup or a mutation with provider commands. Use the first capable surface:
 
 1. the `projects` CLI for a command it currently implements;
 2. proven native `gh` commands, versioned GitHub REST, and GraphQL;
 3. an equivalent authenticated provider connector that can perform the same inspection and independent readback.
 
-The CLI is optional. It validates contracts, returns a complete count-checked Project item set, plans and applies issue creation/edits and Project item additions/field updates with verified readback, reports its version and checks for an update. Do not invent a CLI command for an unsupported mutation; use the direct operations in [the GitHub operations reference](references/github-operations.md).
+When `projects` is installed, read [the CLI execution reference](references/projects-cli.md) and check the relevant `projects <command> --help` before acting. Use its supported command for complete Project reads, issue creation/edits, membership additions and field-value updates. A familiar `gh` recipe is not a reason to bypass an available supported command. The CLI performs its own fresh inspection and independent readback; do not rebuild those same steps around it. Supplement it with reads needed to interpret the request, compare collaborative content with the version you interpreted, or inspect state it does not expose.
+
+The CLI remains optional to install. When it is absent, the installed version lacks the required command/flag, or the operation is unsupported, briefly state that reason and use [the direct GitHub operations reference](references/github-operations.md). Native hierarchy, Project field definitions and membership removal are examples of unsupported mutations. Do not invent CLI commands or treat authentication, permission, validation, stale-state or readback failures as capability gaps. Stop on those failures; do not retry the mutation through another endpoint.
 
 If the current surface cannot perform an authorised mutation, inspect as far as safely possible. When the resolved Project contract declares a `Chat implementation label` and the current surface can create an issue and comment safely, use [the local Chat-to-pj implementation queue](references/local-implementation-queue.md) instead of asking the user to remember a shell command. The queue issue describes the goal; an exact command is optional. Add the separate unedited authority comment required by that reference and report the mutation as queued, not completed.
 

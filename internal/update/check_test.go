@@ -15,7 +15,7 @@ type fakeRunner struct {
 
 func (f fakeRunner) Run(_ context.Context, args ...string) ([]byte, error) {
 	f.t.Helper()
-	want := []string{"api", "repos/MiguelRodo/projects/releases/latest", "--jq", ".tag_name"}
+	want := []string{"api", "repos/MiguelRodo/github-projects-skill/releases/latest", "--jq", ".tag_name"}
 	if !reflect.DeepEqual(args, want) {
 		f.t.Fatalf("args = %v, want %v", args, want)
 	}

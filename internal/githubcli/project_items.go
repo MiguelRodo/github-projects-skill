@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/MiguelRodo/projects/internal/contract"
+	"github.com/MiguelRodo/github-projects-skill/internal/contract"
 )
 
 const firstItemLimit = 10000

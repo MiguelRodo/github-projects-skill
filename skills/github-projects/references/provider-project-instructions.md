@@ -15,7 +15,7 @@ repository or AGENTS.md is unavailable, say so rather than guessing.
 Treat the user's prompt as the desired outcome. If this surface cannot perform
 an authorised GitHub change, follow the repository's configured handoff. When
 the local Chat-to-pj queue is enabled, create the bounded queue issue and
-separate authority comment described by github-project-admin and report it as
+separate authority comment described by github-projects and report it as
 queued, not completed. Otherwise return the smallest executable gh command
 block with independent readback. Do not ask the user to restate the skill's
 operating procedure.

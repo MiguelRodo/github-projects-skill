@@ -7,8 +7,11 @@ Repository-specific GitHub Project configuration lives under `.projects/`. It co
 Use a local replacement skill only when this exact file exists:
 
 ```text
-.projects/skills/github-project-admin/SKILL.md
+.projects/skills/github-projects/SKILL.md
 ```
+
+For backward compatibility, `.projects/skills/github-project-admin/SKILL.md` is
+also recognized.
 
 The `.projects/` directory by itself never overrides the canonical skill.
 
@@ -33,6 +36,7 @@ Use this form when one repository resolves to one Project:
 | Privacy | repository |
 | Issue write-up style | tidy |
 | Issue prose style | natural-direct |
+| Chat implementation label | pj:implement-chat |
 
 ## Field locations
 
@@ -87,6 +91,16 @@ Use `.projects/project.md` as a dispatcher:
 Each referenced file uses the single-Project form with `Mode` set to `project` and adds a `Project key` metadata row. Its key, `label:` routing value, Project number and issue repository must match the dispatcher row exactly. Route keys, routing labels and Project numbers must each be unique. A supplied label, key and number must resolve to the same row.
 
 The guided initializer may create this dispatcher with only the route-table header. That zero-route form is a valid saved onboarding state, but it cannot resolve ordinary administration. Rerun the initializer to add one Project at a time. Each addition discovers the live Project, writes one child contract, updates the dispatcher and validates the combined result before preserving it. Onboarding records routing labels in the contracts but does not create or apply them on GitHub.
+
+## Chat implementation label
+
+A resolved Project contract may contain a `Chat implementation label` row for the local Chat-to-`pj` handoff. The standard value is `pj:implement-chat`.
+
+When the row is absent, use `pj:implement-chat` as the default for an otherwise managed Project. A repository may explicitly disable this handoff with `Chat implementation label | disabled`, or use another non-empty repository label when there is a genuine local reason. Do not treat a missing row in an older contract as an opt-out.
+
+For a multi-Project repository, put the row in the resolved `.projects/projects/*.md` child contract rather than the dispatcher root so each Project can override or disable the queue independently. The queue label is operational metadata only: it is not a Project-routing label, sub-project label, Class, Priority or Status, and a queue issue does not become a Project item merely because it carries the label.
+
+When the handoff is enabled, follow [the local implementation queue reference](local-implementation-queue.md). The chat/provider surface may create a small queue issue in the resolved `Issue repository`, apply the label and add the separate unedited authority comment. The local `pj` operator later executes the bounded goal with its own GitHub authentication. The queue path must not require a personal Project credential to be stored in collaborator-controlled Actions workflows.
 
 ## Issue write-up style
 
@@ -171,7 +185,7 @@ The guided initializer does not change live Priority options or ask a non-techni
 Priority mapping status: pending
 ```
 
-This is a safe incomplete state, not a default mapping. Its Field locations row may use `pending live inspection` until the provider location is confirmed. The repository may use other configured dimensions, but an agent must not rank, read semantically or change Priority until it records that location and replaces the marker with a complete one-to-one table. Adding, removing or renaming a provider option remains a separate live mutation that requires explicit authority.
+This is a safe incomplete state, not a default mapping. Its Field locations row may use `pending live inspection` until the provider location is confirmed. The repository may use other configured dimensions, but an agent must not rank, read semantically or change Priority until it records that location and replaces the marker with a complete one-to-one table. Adding, removing or renaming a provider option remains a separate live mutation and requires explicit authority.
 
 ## Option colours
 
@@ -216,8 +230,10 @@ By default the local script extends the shared setup and runs after the common G
 To replace common setup completely, put this exact marker within the first 20 lines:
 
 ```bash
-# github-project-admin: override
+# github-projects: override
 ```
+
+For backward compatibility, `# github-project-admin: override` is also recognized.
 
 In override mode the shared entry point disables shell tracing, finds the repository and immediately runs `.projects/setup.sh`; it does not install `gh`, check authentication or validate the contract. The local script receives `PROJECTS_REPOSITORY_ROOT` and `PROJECTS_SETUP_MODE` in its environment.
 

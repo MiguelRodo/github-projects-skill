@@ -38,12 +38,12 @@ PROJECT_MD = """# User-owned GitHub Project configuration
 """
 
 AGENTS_MD = """# Agent guidance
-<!-- github-project-admin:start -->
+<!-- github-projects:start -->
 ## GitHub issues and Projects
 For GitHub issue or Project administration, use
-`.agents/skills/github-project-admin/SKILL.md` and read
+`.agents/skills/github-projects/SKILL.md` and read
 `.projects/project.md` before acting.
-<!-- github-project-admin:end -->
+<!-- github-projects:end -->
 """
 
 PROJECT_FIELDS = [
@@ -252,7 +252,7 @@ def run_prepare(case, directory):
     os.makedirs(target / ".projects"); os.makedirs(target / "bin")
     (target / ".projects" / "project.md").write_text(PROJECT_MD, encoding="utf-8")
     (target / "AGENTS.md").write_text(AGENTS_MD, encoding="utf-8")
-    skill_src, skill_dest = Path(__file__).resolve().parent.parent, target / ".agents" / "skills" / "github-project-admin"
+    skill_src, skill_dest = Path(__file__).resolve().parent.parent, target / ".agents" / "skills" / "github-projects"
     shutil.copytree(skill_src, skill_dest, ignore=shutil.ignore_patterns("tests", "__pycache__", ".git*"))
 
     gh_bin, pj_bin = target / "bin" / "gh", target / "bin" / "projects"

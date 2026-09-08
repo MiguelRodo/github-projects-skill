@@ -4,7 +4,7 @@
 | --- | --- |
 | Contract version | 1 |
 | Mode | single |
-| Issue repository | MiguelRodo/projects |
+| Issue repository | MiguelRodo/github-projects-skill |
 | Project owner | MiguelRodo |
 | Project number | 40 |
 | Project title | projects |
