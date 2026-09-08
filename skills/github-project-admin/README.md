@@ -72,7 +72,7 @@ gh skill install MiguelRodo/projects github-project-admin --agent universal --sc
 bash .agents/skills/github-project-admin/scripts/init-project.sh
 ```
 
-The initializer first explains that it will configure the repository so chats and agents can understand the Project. It discovers GitHub facts and asks only about collaboration, whether the repository uses one or several Projects, and the owner, number and routing identity of each Project you add.
+The initializer first explains that it will configure the repository so chats and agents can understand the Project. It discovers GitHub facts and asks only about collaboration, where issues are tracked (defaulting to the current repository), whether the repository uses one or several Projects, and the owner, number and routing identity of each Project you add.
 
 This covers personal or collaborative repositories with one Project or several. Repository and Project privacy are discovered separately from GitHub.
 

@@ -11,6 +11,7 @@ skill_dir="$(cd "$script_dir/.." && pwd)"
 generated_contract=""
 transaction_dir=""
 changed_contract_paths=()
+issue_repository=""
 first_request_project_context=""
 first_request_class_name="Issue Type or Class"
 section_number=0
@@ -127,6 +128,27 @@ For GitHub issue or Project administration, use
 <!-- github-project-admin:end -->
 EOF
   success "Added the GitHub Project starting point to AGENTS.md."
+}
+
+validate_issue_repository() {
+  local candidate="$1"
+  local resolved
+  if [[ "$candidate" == *"|"* || "$candidate" == *$'\n'* ]]; then
+    die "issue repository must not contain a table separator (|) or newline"
+  fi
+  if [[ ! "$candidate" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+    die "issue repository must be in owner/repo format: $candidate"
+  fi
+  if [[ "$candidate" == "$repository" ]]; then
+    printf '%s' "$repository"
+    return 0
+  fi
+  resolved="$(gh repo view "$candidate" --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)" ||
+    die "could not find or access issue repository: $candidate"
+  if [[ -z "$resolved" || ! "$resolved" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+    die "could not find or access issue repository: $candidate"
+  fi
+  printf '%s' "$resolved"
 }
 
 print_auth_help() {
@@ -255,7 +277,7 @@ EOF
     printf '| Project key | %s |\n' "$project_key" >>"$target"
   fi
   cat >>"$target" <<EOF
-| Issue repository | $repository |
+| Issue repository | $issue_repository |
 | Project owner | $project_owner |
 EOF
   if [[ "$mode" == "project" ]]; then
@@ -326,7 +348,7 @@ create_dispatcher_contract() {
 | --- | --- |
 | Contract version | 1 |
 | Mode | dispatcher |
-| Issue repository | $repository |
+| Issue repository | $issue_repository |
 | Privacy | $repository_privacy |
 | Governance | $governance |
 
@@ -805,6 +827,8 @@ if [[ -e "$contract_file" ]]; then
 
   governance="$(contract_table_value "$contract_file" "Governance")"
   [[ -n "$governance" ]] || governance="shared"
+  issue_repository="$(contract_table_value "$contract_file" "Issue repository")"
+  [[ -n "$issue_repository" ]] || issue_repository="$repository"
   success "The existing dispatcher and routes will be preserved."
   configure_dispatcher_projects
   bash "$script_dir/validate-contract.sh" "$repository_root"
@@ -843,6 +867,10 @@ if ask_yes_no \
 else
   governance="personal"
 fi
+
+issue_repository="$(ask_default \
+  "GitHub repository where issues are tracked" "$repository")"
+issue_repository="$(validate_issue_repository "$issue_repository")"
 
 if ! ask_yes_no "Does this repository use one GitHub Project?" yes; then
   create_dispatcher_contract
