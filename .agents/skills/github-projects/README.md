@@ -157,7 +157,7 @@ it cannot finish. The label and separate unedited
 `PJ implementation authority:` comment establish the bounded handoff.
 
 Install `pj` from the
-[projects operator guide](https://github.com/MiguelRodo/projects/blob/main/operator/README.md)
+[pj operator guide](https://github.com/MiguelRodo/pj)
 and keep the managed checkouts in its workspace. Run `pj -i`, or
 `pj -i --repo example/repository` to select one managed issue repository. The local
 agent checks author identity, executes the authorised work and independently

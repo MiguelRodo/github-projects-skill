@@ -165,7 +165,7 @@ label and a separate unedited `PJ implementation authority:` comment stating
 the goal; implementation authority also names the target repositories.
 
 Install the local launcher using the
-[projects operator guide](https://github.com/MiguelRodo/projects/blob/main/operator/README.md),
+[pj operator guide](https://github.com/MiguelRodo/pj),
 keep the managed repository checkouts and contracts in its workspace, and run:
 
 ```text
