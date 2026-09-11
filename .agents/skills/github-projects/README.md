@@ -148,21 +148,25 @@ existing Project's mappings, governance and membership. Approve that concrete
 conversion before it is applied; do not delete the current contract to restart.
 A Project in a different repository gets its own repository installation.
 
-## Use the local implementation queue
+## Use the local administration queue
 
-The standard resolved contract includes
-`Chat implementation label | pj:implement-chat`. A chat can mark an existing
-implementation issue or create a temporary handoff for an authorised change
-it cannot finish. The label and separate unedited
-`PJ implementation authority:` comment establish the bounded handoff.
+The standard resolved contract includes the historical
+`Chat implementation label | pj:implement-chat`. Despite that label name, the
+local `pj` queue is administrative-only. A chat may create a temporary handoff
+for an authorised GitHub issue or Project mutation that it cannot finish.
+
+Each handoff uses the configured label and a separate unedited
+`PJ implementation authority:` comment establishing the bounded administrative
+goal. Do not mark an implementation issue itself for queue execution.
 
 Install `pj` from the
 [pj operator guide](https://github.com/MiguelRodo/pj)
 and keep the managed checkouts in its workspace. Run `pj -i`, or
 `pj -i --repo example/repository` to select one managed issue repository. The local
-agent checks author identity, executes the authorised work and independently
-verifies it. Untrusted or ambiguous items need local review. A PR must reach
-the repository's completion condition before its implementation issue closes.
+agent may perform and verify the authorised GitHub/Project administration only.
+Queue mode must never edit repository files, run implementation tests, create
+implementation branches or pull requests, or otherwise implement product/code
+work. Such work requires a separate explicit non-queue invocation.
 
 See the [queue reference](references/local-implementation-queue.md) for authority,
 discovery, readback and fallback rules. The optional
