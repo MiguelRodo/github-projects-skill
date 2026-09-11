@@ -93,7 +93,7 @@ Create or open a [ChatGPT Project](https://chatgpt.com/projects), make the GitHu
 
 > For work concerning a GitHub repository, especially reading or updating GitHub issues or Projects, first retrieve and follow the target repository's `AGENTS.md`. Follow the skill and configuration files it references. If the repository or `AGENTS.md` is unavailable, say so rather than guessing.
 >
-> Treat my prompt as the desired outcome. If this chat cannot make an authorised GitHub change, follow the repository's configured handoff. When its local Chat implementation queue is enabled, create the bounded queue issue and separate unedited authority comment described by the skill, and report the change as queued. Otherwise return the smallest executable command block with an independent result check.
+> Treat my prompt as the desired outcome. If this chat cannot make an authorised GitHub issue or Project administration change, follow the repository's configured handoff. When its local Chat queue is enabled, create the bounded temporary administration handoff and separate unedited authority comment described by the skill, and report the change as queued. Never use the queue to authorise repository implementation. Otherwise return the smallest executable command block with an independent result check.
 
 You can then ask for the result you want. A request for a specific change supplies
 authority for that change. For broad organisation, ask for a proposal first and
@@ -155,14 +155,17 @@ new route. Approve the concrete conversion before it is applied. Do not delete
 the existing contract to start over. If the new Project belongs to a different
 repository, install and initialise the skill there instead.
 
-## Complete queued Chat work locally
+## Complete queued Chat administration locally
 
-New resolved contracts include `Chat implementation label | pj:implement-chat`.
-The [local implementation queue](skills/github-projects/references/local-implementation-queue.md)
-lets a chat hand off an authorised change it cannot finish, or mark an existing
-issue for bounded repository implementation. Each item needs the configured
-label and a separate unedited `PJ implementation authority:` comment stating
-the goal; implementation authority also names the target repositories.
+New resolved contracts include the historical
+`Chat implementation label | pj:implement-chat`. Despite that label name, the
+[local queue](skills/github-projects/references/local-implementation-queue.md)
+is administrative-only. A chat may create a temporary handoff for an authorised
+GitHub issue or Project mutation it cannot finish. It must not mark an
+implementation issue itself for automatic repository work.
+
+Each handoff needs the configured label and a separate unedited
+`PJ implementation authority:` comment stating the bounded administrative goal.
 
 Install the local launcher using the
 [pj operator guide](https://github.com/MiguelRodo/pj),
@@ -174,11 +177,11 @@ pj -i --repo example/repository
 ```
 
 The optional selector limits processing to the exact managed issue repository.
-The local agent checks authority, follows each repository's instructions and
-verifies the result. Items created by the local authenticated GitHub user with
-a qualifying authority comment can proceed without a routine preview. Other
-items require local review. A queued item stays open until the work is verified;
-opening a PR alone does not complete implementation work.
+The local agent checks authority, performs only GitHub/Project administration,
+and independently verifies the result. Queue mode must never edit repository
+files, run implementation tests, create implementation branches or pull
+requests, or delegate such coding work. Repository implementation requires a
+separate explicit non-queue invocation.
 
 ## Issue Type / Class defaults
 
