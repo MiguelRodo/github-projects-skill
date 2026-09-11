@@ -1,0 +1,18 @@
+version: 2
+
+multi-ecosystem-groups:
+  monthly-automation:
+    schedule:
+      interval: "monthly"
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    patterns:
+      - "*"
+    multi-ecosystem-group: "monthly-automation"
+  - package-ecosystem: "devcontainers"
+    directory: "/"
+    patterns:
+      - "*"
+    multi-ecosystem-group: "monthly-automation"
