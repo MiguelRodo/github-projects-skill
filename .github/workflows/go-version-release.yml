@@ -30,12 +30,12 @@ jobs:
       contents: write
     steps:
       - name: Check out the release commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Build and publish the release
-        uses: MiguelRodo/actions/go-version-release@v2
+        uses: MiguelRodo/actions/go-version-release@ea8f8df62048a1ae56a1e99a58580a0ac05b8e41 # v2.43.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           apt_repo_token: ${{ secrets.APT_REPO_TOKEN }}
