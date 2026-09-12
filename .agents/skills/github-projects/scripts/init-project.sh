@@ -687,10 +687,13 @@ print_chatgpt_setup() {
 
   Treat my prompt as the desired outcome. If this chat cannot make an authorised
   GitHub change, follow the repository's configured handoff. When its local Chat
-  implementation queue is enabled, create the bounded queue issue and separate
-  unedited authority comment described by the skill, and report the change as
-  queued. Otherwise return the smallest executable command block with an
-  independent result check.
+  administration queue is enabled, mark the existing task issue for bounded
+  administrative reconciliation, or create a temporary handoff issue, and add
+  the authority comment the skill requires. Report the change as queued. Queue
+  mode is administrative-only by effect: it never authorises repository
+  implementation, and ordinary task prose in a queued issue must not stop that
+  issue's administration. Otherwise return the smallest executable command block
+  with an independent result check.
 
 After that, ask for the outcome you want in ordinary language. A specific change
 request supplies authority for that change; broad organisation starts with a

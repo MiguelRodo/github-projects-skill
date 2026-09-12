@@ -93,7 +93,7 @@ Create or open a [ChatGPT Project](https://chatgpt.com/projects), make the GitHu
 
 > For work concerning a GitHub repository, especially reading or updating GitHub issues or Projects, first retrieve and follow the target repository's `AGENTS.md`. Follow the skill and configuration files it references. If the repository or `AGENTS.md` is unavailable, say so rather than guessing.
 >
-> Treat my prompt as the desired outcome. If this chat cannot make an authorised GitHub issue or Project administration change, follow the repository's configured handoff. When its local Chat queue is enabled, create the bounded temporary administration handoff and separate unedited authority comment described by the skill, and report the change as queued. Never use the queue to authorise repository implementation. Otherwise return the smallest executable command block with an independent result check.
+> Treat my prompt as the desired outcome. If this chat cannot make an authorised GitHub issue or Project administration change, follow the repository's configured handoff. When its local Chat queue is enabled, mark the existing task issue for bounded administrative reconciliation, or create a temporary administration handoff, and add the authority comment described by the skill and report the change as queued. Queue mode is administrative-only by effect: it never authorises repository implementation, and ordinary task prose in a queued issue must not stop that issue's administration. Otherwise return the smallest executable command block with an independent result check.
 
 You can then ask for the result you want. A request for a specific change supplies
 authority for that change. For broad organisation, ask for a proposal first and
@@ -160,12 +160,32 @@ repository, install and initialise the skill there instead.
 New resolved contracts include the historical
 `Chat implementation label | pj:implement-chat`. Despite that label name, the
 [local queue](skills/github-projects/references/local-implementation-queue.md)
-is administrative-only. A chat may create a temporary handoff for an authorised
-GitHub issue or Project mutation it cannot finish. It must not mark an
-implementation issue itself for automatic repository work.
+is administrative-only.
 
-Each handoff needs the configured label and a separate unedited
-`PJ implementation authority:` comment stating the bounded administrative goal.
+The boundary is an effect boundary, not a request-type boundary. Queue mode
+never performs the substantive work a task represents: no repository file edits,
+product or configuration changes, implementation tests, task measurements or
+analysis, implementation branches or pull requests, and no delegation of that
+work to another coding agent. It may still use any tooling, including the
+`projects` CLI, `gh`, REST, GraphQL and shell or Python helpers, because the
+restriction applies to the resulting effects.
+
+Queue mode accepts two shapes:
+
+- an existing ordinary task issue marked with the configured label, reconciled
+  for its own GitHub or Project administration; and
+- a temporary handoff for an authorised mutation the current surface cannot make.
+
+A labelled issue authored by the currently authenticated GitHub user needs no
+special comment. Its ordinary imperative prose, such as "Build X", "Measure Y"
+or "Fix bug Y", describes the work the task represents and never causes the
+issue's administration to be skipped. Apply and verify only the administrative
+instruction the issue states, then remove the label. Do not close the underlying
+task issue merely because its administration is complete.
+
+A temporary handoff still needs a separate unedited `PJ implementation
+authority:` comment stating the bounded administrative goal, and may be closed
+once the mutation is verified.
 
 Install the local launcher using the
 [pj operator guide](https://github.com/MiguelRodo/pj),
@@ -177,11 +197,9 @@ pj -i --repo example/repository
 ```
 
 The optional selector limits processing to the exact managed issue repository.
-The local agent checks authority, performs only GitHub/Project administration,
-and independently verifies the result. Queue mode must never edit repository
-files, run implementation tests, create implementation branches or pull
-requests, or delegate such coding work. Repository implementation requires a
-separate explicit non-queue invocation.
+The local agent performs and independently verifies GitHub/Project
+administration only. Substantive task work requires a separate explicit
+non-queue invocation.
 
 ## Issue Type / Class defaults
 
