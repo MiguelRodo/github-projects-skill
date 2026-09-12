@@ -1,5 +1,5 @@
 ---
-description: Administer GitHub issues and Projects from short outcome requests. Use for Project-aware inspection, prioritisation, creation, updates, assignment, routing, hierarchy, field changes, or when a surface must hand unsupported mutations to the local pj implementation queue.
+description: Administer GitHub issues and Projects from short outcome requests. Use for Project-aware inspection, prioritisation, creation, updates, assignment, routing, hierarchy, field changes, or when a surface must hand unsupported mutations to the local pj administration queue.
 metadata:
     github-path: skills/github-projects
     github-ref: refs/heads/main
@@ -98,7 +98,11 @@ When `projects` is installed, read [the CLI execution reference](references/proj
 
 The CLI remains optional to install. When it is absent, the installed version lacks the required command/flag, or the operation is unsupported, briefly state that reason and use [the direct GitHub operations reference](references/github-operations.md). Native hierarchy, Project field definitions and membership removal are examples of unsupported mutations. Do not invent CLI commands or treat authentication, permission, validation, stale-state or readback failures as capability gaps. Stop on those failures; do not retry the mutation through another endpoint.
 
-If the current surface cannot perform an authorised GitHub issue or Project mutation, inspect as far as safely possible. When the resolved Project contract declares a `Chat implementation label` and the current surface can create an issue and comment safely, use [the local Chat-to-pj administration queue](references/local-implementation-queue.md) instead of asking the user to remember a shell command. The queue is administrative-only: never use it to authorise repository implementation, file edits, tests, branches or pull requests. The temporary handoff issue describes the bounded administrative goal; an exact command is optional. Add the separate unedited authority comment required by that reference and report the mutation as queued, not completed.
+If the current surface cannot perform an authorised GitHub issue or Project mutation, inspect as far as safely possible. When the resolved Project contract declares a `Chat implementation label` and the current surface can add that label safely, use [the local Chat-to-pj administration queue](references/local-implementation-queue.md) instead of asking the user to remember a shell command.
+
+The queue is administrative-only by effect. It constrains the results the local agent may produce, not the tooling it may use: the `projects` CLI, `gh`, REST, GraphQL and shell or Python helpers all remain available for GitHub administration. Never use the queue to authorise repository implementation, file edits, implementation tests, measurement or analysis work, branches or pull requests.
+
+A labelled existing task issue is a valid reconciliation target. Its ordinary imperative prose describes the work the task represents and never causes the issue's administrative work to be skipped: apply the bounded administrative instruction and leave the substantive work untouched. In a resolved contract that establishes solo administration, the label plus a matching issue author are sufficient authority. In collaborative or shared governance, and whenever governance is missing or ambiguous, the issue body is mutable collaborative text, so require an unedited `PJ implementation authority:` comment from the account currently authenticated in local `gh` that states the administrative delta itself. A temporary handoff or an unusual, explicit mutation always needs that comment. Report the mutation as queued, not completed.
 
 If the local queue is not configured or cannot be created safely, return the smallest executable command block that completes the operation. Use placeholders only for facts that cannot be discovered. Do not claim that returned commands ran.
 

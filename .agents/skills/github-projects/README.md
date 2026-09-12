@@ -90,7 +90,7 @@ Create or open a [ChatGPT Project](https://chatgpt.com/projects), make the repos
 
 > For work concerning a GitHub repository, especially reading or updating GitHub issues or Projects, first retrieve and follow the target repository's `AGENTS.md`. Follow the skill and configuration files it references. If the repository or `AGENTS.md` is unavailable, say so rather than guessing.
 >
-> Treat my prompt as the desired outcome. If this chat cannot make an authorised GitHub change, follow the repository's configured handoff. When its local Chat implementation queue is enabled, create the bounded queue issue and separate unedited authority comment described by the skill, and report the change as queued. Otherwise return the smallest executable command block with an independent result check.
+> Treat my prompt as the desired outcome. If this chat cannot make an authorised GitHub change, follow the repository's configured handoff. When its local Chat administration queue is enabled, mark the existing task issue for bounded administrative reconciliation, or create a temporary handoff issue, and add the authority comment the skill requires. Report the change as queued. Queue mode is administrative-only by effect: it never authorises repository implementation, and ordinary task prose in a queued issue must not stop that issue's administration. Otherwise return the smallest executable command block with an independent result check.
 
 Ask for the outcome you want. A specific change request supplies authority for
 that change; broad organisation starts with a proposal for your approval.
@@ -152,21 +152,37 @@ A Project in a different repository gets its own repository installation.
 
 The standard resolved contract includes the historical
 `Chat implementation label | pj:implement-chat`. Despite that label name, the
-local `pj` queue is administrative-only. A chat may create a temporary handoff
-for an authorised GitHub issue or Project mutation that it cannot finish.
+local `pj` queue is administrative-only.
 
-Each handoff uses the configured label and a separate unedited
-`PJ implementation authority:` comment establishing the bounded administrative
-goal. Do not mark an implementation issue itself for queue execution.
+The boundary is an effect boundary rather than a request-type boundary. Queue
+mode never performs the substantive work a task represents, and it may use
+`projects`, `gh`, REST, GraphQL or shell helpers freely, because the restriction
+applies to the resulting effects.
+
+Queue mode accepts two shapes:
+
+- a labelled existing task issue, reconciled for its own GitHub or Project
+  administration; and
+- a temporary handoff for an authorised mutation the current surface cannot make.
+
+A labelled issue authored by the currently authenticated GitHub user is sufficient authority only where the resolved contract establishes solo administration. In collaborative or shared governance, and whenever governance
+is missing or ambiguous, require an unedited `PJ implementation authority:`
+comment from that same account stating the administrative delta itself, because
+the issue body is mutable collaborative text.
+
+Ordinary task prose, such as "Build X", never causes an issue's administration
+to be skipped. Apply the bounded administrative instruction the authority
+establishes, verify the result and remove the label, but do not close the
+underlying task issue merely because its administration is complete. A temporary
+handoff always uses the configured label and a separate unedited `PJ
+implementation authority:` comment establishing the bounded administrative goal.
 
 Install `pj` from the
 [pj operator guide](https://github.com/MiguelRodo/pj)
 and keep the managed checkouts in its workspace. Run `pj -i`, or
 `pj -i --repo example/repository` to select one managed issue repository. The local
 agent may perform and verify the authorised GitHub/Project administration only.
-Queue mode must never edit repository files, run implementation tests, create
-implementation branches or pull requests, or otherwise implement product/code
-work. Such work requires a separate explicit non-queue invocation.
+Substantive task work requires a separate explicit non-queue invocation.
 
 See the [queue reference](references/local-implementation-queue.md) for authority,
 discovery, readback and fallback rules. The optional

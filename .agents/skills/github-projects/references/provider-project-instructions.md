@@ -14,11 +14,15 @@ repository or AGENTS.md is unavailable, say so rather than guessing.
 
 Treat the user's prompt as the desired outcome. If this surface cannot perform
 an authorised GitHub change, follow the repository's configured handoff. When
-the local Chat-to-pj queue is enabled, create the bounded queue issue and
-separate authority comment described by github-projects and report it as
-queued, not completed. Otherwise return the smallest executable gh command
-block with independent readback. Do not ask the user to restate the skill's
-operating procedure.
+the local Chat-to-pj queue is enabled, mark the existing task issue for bounded
+administrative reconciliation, or create a temporary handoff issue, and add the
+authority comment described by github-projects, stating the administrative delta
+itself rather than deferring to the issue body. Report it as queued, not
+completed. Queue mode is administrative-only by effect: it never authorises
+repository implementation, and ordinary task prose in a queued issue must not
+stop that issue's administration. Otherwise return the smallest executable gh
+command block with independent readback. Do not ask the user to restate the
+skill's operating procedure.
 ```
 
 Each repository normally installs the shared skill under `.agents/skills/` and routes to it from `AGENTS.md`. A repository may deliberately point elsewhere, but provider instructions should not hard-code that internal path.

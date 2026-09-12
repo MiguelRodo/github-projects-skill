@@ -59,9 +59,14 @@ Use this form when one repository resolves to one Project:
 
 ## Governance
 
+- Collaboration mode: collaborative administration in an organisation-owned repository.
 - Exact user-requested changes may be applied without retrieving scope-design sources.
 - Keep private material out of this repository.
 ```
+
+A resolved contract must state its collaboration mode explicitly, for example `Collaboration mode: collaborative administration in a shared repository.` or `Collaboration mode: solo administration in a private repository.` A generated contract may instead state it as `This is a personal Project.` or `This is a collaborative Project.` A dispatcher may also carry a `Governance` metadata row whose value is `personal` or `collaborative`; `shared` is a legacy spelling of `collaborative`.
+
+The collaboration mode decides how much authority the local queue needs for an item, as described in [the local administration queue reference](local-implementation-queue.md). Only an explicit, consistent solo declaration counts as solo administration. Everything else — a missing or generic statement, or a contract that only says the repository is public, shared or organisation-owned — is treated as collaborative.
 
 Setup discovers whether `Project owner` is a user or organisation from GitHub. An optional `Owner type` row may assert `user` or GitHub's provider spelling `organization`; setup fails if that assertion disagrees with the live owner. `Routing` may name a linked repository, one exact routing label, or another deterministic repository-specific rule.
 
@@ -98,9 +103,9 @@ A resolved Project contract may contain a `Chat implementation label` row for th
 
 When the row is absent, use `pj:implement-chat` as the default for an otherwise managed Project. A repository may explicitly disable this handoff with `Chat implementation label | disabled`, or use another non-empty repository label when there is a genuine local reason. Do not treat a missing row in an older contract as an opt-out.
 
-For a multi-Project repository, put the row in the resolved `.projects/projects/*.md` child contract rather than the dispatcher root so each Project can override or disable the queue independently. The queue label is operational metadata only: it is not a Project-routing label, sub-project label, Class, Priority or Status, and a queue issue does not become a Project item merely because it carries the label.
+For a multi-Project repository, put the row in the resolved `.projects/projects/*.md` child contract rather than the dispatcher root so each Project can override or disable the queue independently. The queue label is operational metadata only: it is not a Project-routing label, sub-project label, Class, Priority or Status, and an existing task issue does not change Project membership merely because it carries the label.
 
-When the handoff is enabled, follow [the local implementation queue reference](local-implementation-queue.md). The chat/provider surface may create a small queue issue in the resolved `Issue repository`, apply the label and add the separate unedited authority comment. The local `pj` operator later executes the bounded goal with its own GitHub authentication. The queue path must not require a personal Project credential to be stored in collaborator-controlled Actions workflows.
+When the handoff is enabled, follow [the local administration queue reference](local-implementation-queue.md). The chat/provider surface may mark an existing task issue with the label for administrative reconciliation, or create a small temporary queue issue in the resolved `Issue repository`, and add the authority comment that a temporary handoff or a collaborative contract requires. The local `pj` operator later performs the bounded GitHub or Project administration with its own GitHub authentication. The queue is administrative-only by effect: it never performs the substantive work a queued task describes. The queue path must not require a personal Project credential to be stored in collaborator-controlled Actions workflows.
 
 ## Issue write-up style
 
@@ -214,6 +219,7 @@ Record only local constraints, for example:
 
 - whether issues may contain private material;
 - whether the repository is personal, shared or public;
+- the collaboration mode, using the explicit solo or collaborative wording above;
 - whether assignment defaults exist;
 - whether a source must be consulted before inventing or restructuring scope;
 - whether routing labels or sub-project labels are required;
