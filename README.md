@@ -176,16 +176,12 @@ Queue mode accepts two shapes:
   for its own GitHub or Project administration; and
 - a temporary handoff for an authorised mutation the current surface cannot make.
 
-A labelled issue authored by the currently authenticated GitHub user needs no
-special comment. Its ordinary imperative prose, such as "Build X", "Measure Y"
-or "Fix bug Y", describes the work the task represents and never causes the
-issue's administration to be skipped. Apply and verify only the administrative
-instruction the issue states, then remove the label. Do not close the underlying
-task issue merely because its administration is complete.
+A labelled issue authored by the currently authenticated GitHub user is sufficient authority only where the resolved contract establishes solo administration. In collaborative or shared governance, and whenever governance is missing or ambiguous, require an unedited `PJ implementation authority:` comment from that same account stating the administrative delta itself, because the issue body is mutable collaborative text.
 
-A temporary handoff still needs a separate unedited `PJ implementation
-authority:` comment stating the bounded administrative goal, and may be closed
-once the mutation is verified.
+Ordinary imperative prose, such as "Build X", "Measure Y" or "Fix bug Y", describes the work the task represents and never causes the issue's administration to be skipped. Apply and verify only the administrative instruction the authority establishes, then remove the label. Do not close the underlying task issue merely because its administration is complete.
+
+A temporary handoff still needs the configured label and a separate unedited `PJ implementation
+authority:` comment stating the bounded administrative goal, and may be closed once the mutation is verified.
 
 Install the local launcher using the
 [pj operator guide](https://github.com/MiguelRodo/pj),

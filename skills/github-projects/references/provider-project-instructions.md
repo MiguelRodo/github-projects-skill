@@ -16,7 +16,8 @@ Treat the user's prompt as the desired outcome. If this surface cannot perform
 an authorised GitHub change, follow the repository's configured handoff. When
 the local Chat-to-pj queue is enabled, mark the existing task issue for bounded
 administrative reconciliation, or create a temporary handoff issue, and add the
-authority comment described by github-projects. Report it as queued, not
+authority comment described by github-projects, stating the administrative delta
+itself rather than deferring to the issue body. Report it as queued, not
 completed. Queue mode is administrative-only by effect: it never authorises
 repository implementation, and ordinary task prose in a queued issue must not
 stop that issue's administration. Otherwise return the smallest executable gh

@@ -67,6 +67,7 @@ This Project uses the common names directly.
 
 ## Governance
 
+- Collaboration mode: collaborative administration in a public repository. A queued existing task issue therefore needs an unedited `PJ implementation authority:` comment from the currently authenticated account stating the administrative delta; the queue label alone is not administrative authority here.
 - The repository is public and the Project is private. Keep private material out of issues, pull requests, commits, logs and public reports.
 - Project membership is the routing mechanism. Do not add a label merely to duplicate membership.
 - `pj:implement-chat` is the historical local handoff label for the administrative-only `pj` queue, not a Project-routing label. Queue mode constrains effects rather than request wording: a labelled existing task issue is reconciled for its own GitHub or Project administration without stopping on imperative task prose, and a temporary handoff is administered and closed once verified.
