@@ -259,13 +259,18 @@ sys.exit(90)
 
 
 def initial_state(scenario: str) -> dict:
-    no_change = scenario in {"noop", "parent_fail", "completion_fail", "temporary"}
     return {
         "open": True,
         "queued": True,
-        "membership": no_change or scenario == "field_fail",
-        "priority": "P1" if no_change or scenario == "parent_fail" else "P2",
-        "parent": no_change or scenario == "field_fail",
+        "membership": scenario in {
+            "noop", "field_fail", "parent_fail", "completion_fail", "temporary"
+        },
+        "priority": (
+            "P1"
+            if scenario in {"noop", "parent_fail", "completion_fail", "temporary"}
+            else "P2"
+        ),
+        "parent": scenario in {"noop", "field_fail", "completion_fail", "temporary"},
         "comments": [],
     }
 
