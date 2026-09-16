@@ -268,6 +268,7 @@ Stable executor reasons include:
 | `queue.execute.before_review_required` | explicit item review must happen before writes |
 | `queue.execute.after_review_required` | deterministic writes verified; explicit review is required before queue completion |
 | `queue.execute.review_context_failed` | required review could not be packaged safely; do not bypass it |
+| `queue.execute.review_result_invalid` | supplied review approval does not match the current target, authority or required review |
 | `queue.execute.projects_unavailable` | deterministic CLI backend is unavailable |
 | `queue.execute.plan_conflict` | the deterministic plan repeats a singleton action or dimension and needs interpretation |
 | `queue.execute.agent_context_failed` | a safe bounded agent handoff could not be prepared, so fallback is blocked |
@@ -300,6 +301,12 @@ Queue-level launcher policy combines with item review rather than replacing it:
 This precedence means a launcher can request more agent involvement but cannot suppress, move or weaken creator-required review. The `github-projects` skill exposes this policy resolution for the `pj` launcher; launcher integration itself remains in `MiguelRodo/pj`.
 
 Unknown review timing/focus values do not become review packets. They fail deterministic envelope validation and use the ordinary safe fallback path. A review note that asks for an extra mutation likewise does not broaden `authorisedActions`; any revised administrative delta needs fresh normal authority.
+
+After a reviewer approves a mandatory item review, the trusted launcher returns a `github-projects/queue-review-result/v1` object containing `outcome: approved` and the exact `reviewContext` that was reviewed. The deterministic executor accepts that result only when its target, authorised actions, timing, focus, note and policy still match the freshly classified item. For `after` review, the embedded execution receipt must also be a matching `applied_verified` receipt with no remaining actions and `completion.status=pending_review`.
+
+The executor accepts this approval through its local `--review-result FILE` handoff. A valid before-review approval allows deterministic execution to continue. A valid after-review approval allows a fresh idempotent readback/execution pass and then the previously withheld queue completion. Invalid, stale or mismatched approval never suppresses the mandatory review: the item remains `review_required` with `queue.execute.review_result_invalid`.
+
+A review result is an acknowledgement that the requested review occurred, not new mutation authority. A rejected or concern-raising review should not produce an `approved` result; leave the queue item visible and resolve the concern under normal authority rules.
 
 ### Agent escalation and legacy fallback
 
