@@ -181,6 +181,14 @@ for root in "$workspace"/*; do
   main="$root/.projects/project.md"
   [ -f "$main" ] || continue
 
+  # Repository selection can be decided from the root contract, so avoid
+  # validating unrelated managed repositories on a narrowly scoped run.
+  root_repository="$(table_value "$main" "Issue repository")"
+  if [ -n "$repo_selector" ] && [ -n "$root_repository" ] &&
+     ! repo_matches "$root_repository" "$repo_selector"; then
+    continue
+  fi
+
   if ! validation="$(bash "$validator" "$root" 2>&1)"; then
     die "invalid managed contract at $root: $validation"
   fi
