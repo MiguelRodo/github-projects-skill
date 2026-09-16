@@ -356,6 +356,20 @@ def main() -> int:
     baseline_snapshot = issue_snapshot(baseline_issue)
 
     actions = classified["actions"]
+    dimensions = [a for a in actions if a["kind"] == "dimension.value.set"]
+    field_flags: list[str] = []
+    for action in dimensions:
+        dimension = action["dimension"]
+        location = locations.get(dimension)
+        if location is None or location[0] != "project field":
+            return emit(receipt(
+                classified,
+                "needs_agent",
+                [],
+                reason="queue.execute.field_binding_not_deterministic",
+            ))
+        field_flags.extend([f"--{dimension}", action["value"]])
+
     operations: list[dict[str, Any]] = []
     if any(action["kind"] == "project.membership.add" for action in actions):
         result, error = command_json(
@@ -379,27 +393,7 @@ def main() -> int:
             evidence=result,
         ))
 
-    dimensions = [a for a in actions if a["kind"] == "dimension.value.set"]
     if dimensions:
-        flags: list[str] = []
-        for action in dimensions:
-            dimension = action["dimension"]
-            location = locations.get(dimension)
-            if location is None or location[0] != "project field":
-                operations.append(op(
-                    "dimension.value.set",
-                    "not_attempted",
-                    dimension=dimension,
-                    reason="field binding is not a Project field",
-                ))
-                return emit(receipt(
-                    classified,
-                    "needs_agent",
-                    operations,
-                    reason="queue.execute.field_binding_not_deterministic",
-                ))
-            flags.extend([f"--{dimension}", action["value"]])
-
         plan, error = command_json(
             project_command(
                 args.projects, "item-edit", args.root, args.repository, project_number
@@ -407,7 +401,7 @@ def main() -> int:
             + [
                 "--issue",
                 str(args.issue),
-                *flags,
+                *field_flags,
                 "--json",
                 "--quiet",
             ]
@@ -436,7 +430,7 @@ def main() -> int:
                 + [
                     "--issue",
                     str(args.issue),
-                    *flags,
+                    *field_flags,
                     "--apply",
                     "--json",
                     "--quiet",
