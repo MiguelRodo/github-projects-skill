@@ -110,16 +110,18 @@ if [ "${1:-}" != issue ] || [ "${2:-}" != list ]; then
   exit 90
 fi
 args=" $* "
-case "$args" in
-  *" --repo octo/issues "*" --state open "*" --label pj:implement-chat "*" --label project:personal "*" --label subproject:monitoring "*)
-    printf '42\thttps://github.com/octo/issues/issues/42\n'
-    ;;
-  *" --repo octo/issues "*" --label subproject:finances "*)
-    ;;
-  *" --repo octo/other "*)
-    printf '9\thttps://github.com/octo/other/issues/issues/9\n'
-    ;;
-esac
+if [[ "$args" == *" --repo octo/issues "* &&
+      "$args" == *" --state open "* &&
+      "$args" == *" --label pj:implement-chat "* &&
+      "$args" == *" --label project:personal "* &&
+      "$args" == *" --label subproject:monitoring "* ]]; then
+  printf '42\thttps://github.com/octo/issues/issues/42\n'
+elif [[ "$args" == *" --repo octo/issues "* &&
+        "$args" == *" --label subproject:finances "* ]]; then
+  :
+elif [[ "$args" == *" --repo octo/other "* ]]; then
+  printf '9\thttps://github.com/octo/other/issues/issues/9\n'
+fi
 EOF
 chmod +x "$provider"
 
