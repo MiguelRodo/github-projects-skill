@@ -272,7 +272,7 @@ sys.exit(90)
 
 def initial_state(scenario: str) -> dict:
     return {
-        "open": True,
+        "open": scenario != "blocked",
         "queued": True,
         "membership": scenario in {
             "noop", "field_fail", "parent_fail", "completion_fail", "temporary"
@@ -331,6 +331,31 @@ def statuses(receipt: dict) -> list[str]:
     return [item["status"] for item in receipt["operations"]]
 
 
+def assert_agent_context(receipt: dict, tmp: Path, reason: str) -> None:
+    context = receipt["agentContext"]
+    assert context["apiVersion"] == "github-projects/queue-agent-context/v1"
+    assert context["effectBoundary"] == "github_issue_project_administration_only"
+    assert context["target"] == {
+        "repository": "octo/issues",
+        "issue": 42,
+        "url": "https://github.com/octo/issues/issues/42",
+    }
+    assert context["classification"] == {
+        "classification": "needs_agent",
+        "reason": reason,
+    }
+    assert context["workspace"] == {
+        "root": str(tmp / "root"),
+        "contractPath": str(tmp / "project.md"),
+    }
+    assert context["contract"]["project"]["number"] == 38
+    assert context["contract"]["queueLabel"] == "pj:implement-chat"
+    assert context["authenticatedLogin"] == "octocat"
+    assert context["issue"]["body"] == "body"
+    assert context["authorityComments"]
+    assert context["authorityComments"][-1]["authenticatedAuthor"] is True
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
@@ -362,17 +387,27 @@ def main() -> None:
         assert receipt["status"] == "review_required", receipt
         assert receipt["reason"] == "queue.execute.before_review_required"
         assert receipt["remaining"] == receipt["planned"]
+        assert "agentContext" not in receipt
         assert state["queued"] and gh_writes == [] and project_writes == []
 
         receipt, state, gh_writes, project_writes = execute(tmp, "needs_agent")
         assert receipt["status"] == "needs_agent", receipt
         assert receipt["target"] == {"repository": "octo/issues", "issue": 42}
+        assert_agent_context(receipt, tmp, "queue.agent.legacy_authority")
         assert state["queued"] and gh_writes == [] and project_writes == []
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "blocked")
+        assert receipt["status"] == "blocked", receipt
+        assert receipt["reason"] == "queue.blocked.issue_not_open"
+        assert "agentContext" not in receipt
+        assert state["queued"] and state["open"] is False
+        assert gh_writes == [] and project_writes == []
 
         receipt, state, gh_writes, project_writes = execute(tmp, "conflict")
         assert receipt["status"] == "needs_agent", receipt
         assert receipt["reason"] == "queue.execute.plan_conflict"
         assert receipt["remaining"] == receipt["planned"]
+        assert_agent_context(receipt, tmp, "queue.execute.plan_conflict")
         assert state["queued"] and gh_writes == [] and project_writes == []
 
         contract_path = tmp / "project.md"
@@ -383,6 +418,9 @@ def main() -> None:
         receipt, state, gh_writes, project_writes = execute(tmp, "happy")
         assert receipt["status"] == "needs_agent", receipt
         assert receipt["reason"] == "queue.execute.field_binding_not_deterministic"
+        assert_agent_context(
+            receipt, tmp, "queue.execute.field_binding_not_deterministic"
+        )
         assert state["queued"] and gh_writes == [] and project_writes == []
         contract_path.write_text(CONTRACT, encoding="utf-8")
 
@@ -390,6 +428,7 @@ def main() -> None:
         assert receipt["status"] == "partial_failure", receipt
         assert receipt["reason"] == "queue.execute.membership_failed"
         assert len(receipt["remaining"]) == 3
+        assert "agentContext" not in receipt
         assert state["queued"] and gh_writes == []
         assert len(project_writes) == 1 and project_writes[0].startswith("project item-add ")
 
@@ -437,6 +476,7 @@ def main() -> None:
         receipt, state, gh_writes, project_writes = execute(tmp, "happy", projects=missing)
         assert receipt["status"] == "needs_agent", receipt
         assert receipt["reason"] == "queue.execute.projects_unavailable"
+        assert_agent_context(receipt, tmp, "queue.execute.projects_unavailable")
         assert state["queued"] and gh_writes == [] and project_writes == []
 
     print("queue executor tests passed")
