@@ -125,6 +125,18 @@ fi
 EOF
 chmod +x "$provider"
 
+# A repository selector should isolate this run from unrelated broken managed
+# contracts. Without early repository filtering, validation of this fixture
+# would fail before octo/issues is queried.
+mkdir -p "$workspace/broken/.projects"
+cat >"$workspace/broken/.projects/project.md" <<'EOF'
+# Broken unrelated contract
+| Key | Value |
+| --- | --- |
+| Mode | nonsense |
+| Issue repository | octo/broken |
+EOF
+
 run_preflight() {
   PROVIDER_LOG="$tmp/provider.log" PROJECTS_GH_BIN="$provider" bash "$preflight" --workspace "$workspace" "$@"
 }
@@ -149,6 +161,7 @@ grep -Fq -- '--label pj:implement-chat' "$tmp/provider.log"
 grep -Fq -- '--label project:personal' "$tmp/provider.log"
 grep -Fq -- '--label subproject:monitoring' "$tmp/provider.log"
 ! grep -Fq -- '--repo octo/other' "$tmp/provider.log"
+rm -rf "$workspace/broken"
 
 : >"$tmp/provider.log"
 output="$(run_preflight --project personal --subproject finances)"
