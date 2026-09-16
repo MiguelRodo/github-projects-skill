@@ -79,6 +79,10 @@ endpoint = next((arg for arg in args if arg.startswith("repos/")), "")
 state = load()
 
 if method == "GET" and endpoint == "repos/octo/issues/issues/42":
+    state["issue_reads"] = state.get("issue_reads", 0) + 1
+    if scenario == "handoff_stale" and state["issue_reads"] > 1:
+        state["queued"] = False
+    save(state)
     print(json.dumps({
         "id": 4200,
         "title": "changed" if state.get("tampered") else "original",
@@ -136,7 +140,7 @@ if method == "GET" and endpoint.startswith("repos/octo/issues/issues/42/comments
         envelope["spec"]["actions"].append(
             {"kind": "issue.label.add", "name": "triage"}
         )
-    if scenario == "needs_agent":
+    if scenario in {"needs_agent", "handoff_stale"}:
         authority = "PJ implementation authority: please sort this out."
     else:
         authority = (
@@ -293,6 +297,7 @@ def initial_state(scenario: str) -> dict:
         "parent": scenario in {"noop", "field_fail", "completion_fail", "temporary"},
         "comments": [],
         "tampered": False,
+        "issue_reads": 0,
     }
 
 
@@ -403,6 +408,13 @@ def main() -> None:
         assert receipt["target"] == {"repository": "octo/issues", "issue": 42}
         assert_agent_context(receipt, tmp, "queue.agent.legacy_authority")
         assert state["queued"] and gh_writes == [] and project_writes == []
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "handoff_stale")
+        assert receipt["status"] == "blocked", receipt
+        assert receipt["reason"] == "queue.execute.agent_context_failed"
+        assert "agentContext" not in receipt
+        assert state["queued"] is False
+        assert gh_writes == [] and project_writes == []
 
         receipt, state, gh_writes, project_writes = execute(tmp, "no_authority")
         assert receipt["status"] == "needs_agent", receipt
