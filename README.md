@@ -160,7 +160,8 @@ repository, install and initialise the skill there instead.
 New resolved contracts include the historical
 `Chat implementation label | pj:implement-chat`. Despite that label name, the
 [local queue](skills/github-projects/references/local-implementation-queue.md)
-is administrative-only.
+is administrative-only. To prepare existing issues so routine administration is
+machine-checkable, follow the [deterministic queue migration guide](skills/github-projects/references/pj-queue-migration.md).
 
 The boundary is an effect boundary, not a request-type boundary. Queue mode
 never performs the substantive work a task represents: no repository file edits,
