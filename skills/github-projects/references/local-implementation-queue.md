@@ -56,6 +56,8 @@ When the creating surface has already resolved the exact target and bounded admi
 
 This is not a requirement for humans to create queue items. Existing natural-language authority comments, hand-written issues and older queue records remain valid queue input. If they cannot be processed deterministically, pass the bounded candidate to the agent under the fallback rules instead of treating the formatting difference as a queue failure.
 
+When an operator explicitly wants to migrate existing issues so routine administration is deterministic, follow [the pj queue migration guide](pj-queue-migration.md). It gives the agent-facing batch procedure, current deterministic action subset and copyable authority template without changing the ordinary issue body into an execution record.
+
 The structured envelope never weakens the authority model in this reference. Its comment must still qualify under the applicable solo, collaborative or temporary-handoff rule, and its actions remain constrained by the administrative-only effect boundary, fresh state and independent readback.
 
 ## Existing task issues as queue items
