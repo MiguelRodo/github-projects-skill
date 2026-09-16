@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+"""Offline end-to-end tests for deterministic queue execution."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import textwrap
+from pathlib import Path
+
+TEST_DIR = Path(__file__).resolve().parent
+EXECUTOR = TEST_DIR.parent / "scripts" / "queue-execute.py"
+
+CONTRACT = """# Test Project
+| Key | Value |
+| --- | --- |
+| Contract version | 1 |
+| Mode | single |
+| Issue repository | octo/issues |
+| Project owner | octo |
+| Project number | 38 |
+| Project title | projects |
+| Chat implementation label | pj:implement-chat |
+
+## Field locations
+
+| Common dimension | Provider location | Provider field |
+| --- | --- | --- |
+| Priority | project field | Priority |
+
+## Priority mapping
+
+| Common value | Provider value |
+| --- | --- |
+| P0 | P0 |
+| P1 | P1 |
+| P2 | P2 |
+| P3 | P3 |
+
+## Governance
+
+- Collaboration mode: collaborative administration.
+"""
+
+FAKE_GH = r'''#!/usr/bin/env python3
+import json, os, sys
+
+state_path = os.environ["QUEUE_STATE"]
+scenario = os.environ["QUEUE_SCENARIO"]
+log_path = os.environ["GH_WRITE_LOG"]
+
+def load():
+    return json.loads(open(state_path, encoding="utf-8").read())
+
+def save(state):
+    open(state_path, "w", encoding="utf-8").write(json.dumps(state))
+
+def write_log(value):
+    with open(log_path, "a", encoding="utf-8") as handle:
+        handle.write(value + "\n")
+
+args = sys.argv[1:]
+if args[:2] == ["auth", "status"]:
+    sys.exit(0)
+if args == ["api", "user"]:
+    print(json.dumps({"login": "octocat"}))
+    sys.exit(0)
+if not args or args[0] != "api":
+    print("unexpected gh call: " + " ".join(args), file=sys.stderr)
+    sys.exit(90)
+
+method = "GET"
+if "--method" in args:
+    method = args[args.index("--method") + 1]
+endpoint = next((arg for arg in args if arg.startswith("repos/")), "")
+state = load()
+
+if method == "GET" and endpoint == "repos/octo/issues/issues/42":
+    print(json.dumps({
+        "id": 4200,
+        "title": "changed" if state.get("tampered") else "original",
+        "body": "body",
+        "state": "open" if state["open"] else "closed",
+        "labels": [{"name": "pj:implement-chat"}] if state["queued"] else [],
+        "assignees": [],
+        "milestone": None,
+        "user": {"login": "octocat"},
+    }))
+    sys.exit(0)
+
+if method == "GET" and endpoint == "repos/octo/issues/issues/17":
+    print(json.dumps({"id": 1700, "state": "open", "user": {"login": "octocat"}}))
+    sys.exit(0)
+
+if method == "GET" and endpoint.startswith("repos/octo/issues/issues/17/sub_issues"):
+    children = [{"id": 4200, "number": 42}] if state["parent"] else []
+    print(json.dumps([children]))
+    sys.exit(0)
+
+if method == "GET" and endpoint.startswith("repos/octo/issues/issues/42/comments"):
+    review = "before" if scenario == "before" else "after"
+    shape = "temporary_handoff" if scenario == "temporary" else "existing_task"
+    envelope = {
+        "apiVersion": "github-projects/queue-authority/v1",
+        "kind": "QueueAuthority",
+        "spec": {
+            "target": {
+                "repository": "octo/issues",
+                "issue": 42,
+                "project": {"owner": "octo", "number": 38},
+            },
+            "shape": shape,
+            "actions": [
+                {"kind": "project.membership.add"},
+                {"kind": "dimension.value.set", "dimension": "priority", "value": "P1"},
+                {
+                    "kind": "issue.parent.set",
+                    "parent": {"repository": "octo/issues", "issue": 17},
+                },
+            ],
+            "review": {"timing": review, "focus": ["hierarchy", "receipt"]},
+        },
+    }
+    if scenario == "conflict":
+        envelope["spec"]["actions"].append(
+            {"kind": "dimension.value.set", "dimension": "priority", "value": "P2"}
+        )
+    if scenario == "needs_agent":
+        authority = "PJ implementation authority: please sort this out."
+    else:
+        authority = (
+            "PJ implementation authority:\n```json\n"
+            + json.dumps(envelope)
+            + "\n```"
+        )
+    comments = [{
+        "id": 1,
+        "body": authority,
+        "user": {"login": "octocat"},
+        "created_at": "2026-09-16T12:00:00Z",
+        "updated_at": "2026-09-16T12:00:00Z",
+    }]
+    comments += state["comments"]
+    print(json.dumps([comments]))
+    sys.exit(0)
+
+if method == "GET" and endpoint.startswith("repos/octo/issues/issues/comments/"):
+    comment_id = int(endpoint.rsplit("/", 1)[1])
+    comment = next(item for item in state["comments"] if item["id"] == comment_id)
+    print(json.dumps(comment))
+    sys.exit(0)
+
+if method == "POST" and endpoint == "repos/octo/issues/issues/17/sub_issues":
+    write_log("parent_post")
+    if scenario == "parent_fail":
+        print("parent failure", file=sys.stderr)
+        sys.exit(1)
+    state["parent"] = True
+    if scenario == "preservation_fail":
+        state["tampered"] = True
+    save(state)
+    print(json.dumps({"id": 4200}))
+    sys.exit(0)
+
+if method == "POST" and endpoint == "repos/octo/issues/issues/42/comments":
+    write_log("comment_post")
+    body_arg = next(arg for arg in args if arg.startswith("body="))
+    comment = {
+        "id": 900 + len(state["comments"]),
+        "body": body_arg[5:],
+        "user": {"login": "octocat"},
+    }
+    state["comments"].append(comment)
+    if scenario == "stale_after_comment":
+        state["open"] = False
+    save(state)
+    print(json.dumps({"id": comment["id"]}))
+    sys.exit(0)
+
+print("unexpected gh api call: " + " ".join(args), file=sys.stderr)
+sys.exit(90)
+'''
+
+FAKE_PROJECTS = r'''#!/usr/bin/env python3
+import json, os, sys
+
+state_path = os.environ["QUEUE_STATE"]
+scenario = os.environ["QUEUE_SCENARIO"]
+log_path = os.environ["PROJECTS_WRITE_LOG"]
+
+def load():
+    return json.loads(open(state_path, encoding="utf-8").read())
+
+def save(state):
+    open(state_path, "w", encoding="utf-8").write(json.dumps(state))
+
+args = sys.argv[1:]
+state = load()
+apply = "--apply" in args
+if apply:
+    with open(log_path, "a", encoding="utf-8") as handle:
+        handle.write(" ".join(args) + "\n")
+
+if args[:2] == ["project", "item-add"]:
+    if scenario == "membership_fail":
+        print("membership failure", file=sys.stderr)
+        sys.exit(1)
+    added = not state["membership"]
+    state["membership"] = True
+    save(state)
+    print(json.dumps({
+        "action": "project_item_add",
+        "applied": added,
+        "alreadyMember": not added,
+        "itemId": "ITEM42",
+        "url": "https://github.com/octo/issues/issues/42",
+    }))
+    sys.exit(0)
+
+if args[:2] == ["project", "item-edit"]:
+    desired = args[args.index("--priority") + 1]
+    if not apply:
+        print(json.dumps({
+            "action": "project_item_edit",
+            "apply": False,
+            "current": {
+                "itemId": "ITEM42",
+                "fields": {"Priority": state["priority"]},
+            },
+            "delta": {"priority": desired},
+        }))
+        sys.exit(0)
+    if scenario == "field_fail":
+        print("field failure", file=sys.stderr)
+        sys.exit(1)
+    state["priority"] = desired
+    save(state)
+    print(json.dumps({
+        "project": {"owner": "octo", "number": 38},
+        "itemId": "ITEM42",
+        "url": "https://github.com/octo/issues/issues/42",
+        "added": False,
+        "fields": {"Priority": desired},
+    }))
+    sys.exit(0)
+
+if args[:2] == ["issue", "edit"]:
+    if scenario == "completion_fail":
+        print("completion failure", file=sys.stderr)
+        sys.exit(1)
+    state["queued"] = False
+    if "--state" in args:
+        assert args[args.index("--state") + 1] == "closed"
+        assert args[args.index("--close-reason") + 1] == "completed"
+        state["open"] = False
+    save(state)
+    print(json.dumps({
+        "action": "edit_issue",
+        "applied": True,
+        "state": "open" if state["open"] else "closed",
+        "labels": [],
+    }))
+    sys.exit(0)
+
+print("unexpected projects call: " + " ".join(args), file=sys.stderr)
+sys.exit(90)
+'''
+
+
+def initial_state(scenario: str) -> dict:
+    return {
+        "open": True,
+        "queued": True,
+        "membership": scenario in {
+            "noop", "field_fail", "parent_fail", "completion_fail", "temporary"
+        },
+        "priority": (
+            "P1"
+            if scenario in {"noop", "parent_fail", "completion_fail", "temporary"}
+            else "P2"
+        ),
+        "parent": scenario in {"noop", "field_fail", "completion_fail", "temporary"},
+        "comments": [],
+        "tampered": False,
+    }
+
+
+def execute(tmp: Path, scenario: str, projects: Path | None = None) -> tuple[dict, dict, list[str], list[str]]:
+    state_path = tmp / f"{scenario}.json"
+    state_path.write_text(json.dumps(initial_state(scenario)), encoding="utf-8")
+    gh_log = tmp / f"{scenario}-gh.log"
+    projects_log = tmp / f"{scenario}-projects.log"
+    gh_log.write_text("", encoding="utf-8")
+    projects_log.write_text("", encoding="utf-8")
+
+    env = os.environ | {
+        "QUEUE_STATE": str(state_path),
+        "QUEUE_SCENARIO": scenario,
+        "GH_WRITE_LOG": str(gh_log),
+        "PROJECTS_WRITE_LOG": str(projects_log),
+    }
+    command = [
+        sys.executable,
+        str(EXECUTOR),
+        "--contract",
+        str(tmp / "project.md"),
+        "--root",
+        str(tmp / "root"),
+        "--repository",
+        "octo/issues",
+        "--issue",
+        "42",
+        "--gh",
+        str(tmp / "gh"),
+        "--projects",
+        str(projects or tmp / "projects"),
+    ]
+    result = subprocess.run(command, text=True, capture_output=True, env=env, check=True)
+    return (
+        json.loads(result.stdout),
+        json.loads(state_path.read_text(encoding="utf-8")),
+        gh_log.read_text(encoding="utf-8").splitlines(),
+        projects_log.read_text(encoding="utf-8").splitlines(),
+    )
+
+
+def statuses(receipt: dict) -> list[str]:
+    return [item["status"] for item in receipt["operations"]]
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "root").mkdir()
+        (tmp / "project.md").write_text(CONTRACT, encoding="utf-8")
+        for name, content in (("gh", FAKE_GH), ("projects", FAKE_PROJECTS)):
+            path = tmp / name
+            path.write_text(content, encoding="utf-8")
+            path.chmod(0o755)
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "happy")
+        assert receipt["status"] == "applied_verified", receipt
+        assert statuses(receipt) == ["applied_verified"] * 3, receipt
+        assert receipt["review"]["timing"] == "after"
+        assert receipt["remaining"] == []
+        assert state["membership"] and state["priority"] == "P1" and state["parent"]
+        assert state["queued"] is False and state["open"] is True
+        assert "parent_post" in gh_writes and "comment_post" in gh_writes
+        assert any(line.startswith("project item-add ") for line in project_writes)
+        assert any(line.startswith("project item-edit ") for line in project_writes)
+        assert any(line.startswith("issue edit ") for line in project_writes)
+
+        receipt, state, _, _ = execute(tmp, "noop")
+        assert receipt["status"] == "applied_verified", receipt
+        assert statuses(receipt) == ["no_change", "no_change", "no_change"], receipt
+        assert state["queued"] is False and state["open"] is True
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "before")
+        assert receipt["status"] == "review_required", receipt
+        assert receipt["reason"] == "queue.execute.before_review_required"
+        assert receipt["remaining"] == receipt["planned"]
+        assert state["queued"] and gh_writes == [] and project_writes == []
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "needs_agent")
+        assert receipt["status"] == "needs_agent", receipt
+        assert receipt["target"] == {"repository": "octo/issues", "issue": 42}
+        assert state["queued"] and gh_writes == [] and project_writes == []
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "conflict")
+        assert receipt["status"] == "needs_agent", receipt
+        assert receipt["reason"] == "queue.execute.plan_conflict"
+        assert receipt["remaining"] == receipt["planned"]
+        assert state["queued"] and gh_writes == [] and project_writes == []
+
+        contract_path = tmp / "project.md"
+        contract_path.write_text(
+            CONTRACT.replace("| Priority | project field | Priority |", "| Priority | issue field | Priority |"),
+            encoding="utf-8",
+        )
+        receipt, state, gh_writes, project_writes = execute(tmp, "happy")
+        assert receipt["status"] == "needs_agent", receipt
+        assert receipt["reason"] == "queue.execute.field_binding_not_deterministic"
+        assert state["queued"] and gh_writes == [] and project_writes == []
+        contract_path.write_text(CONTRACT, encoding="utf-8")
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "membership_fail")
+        assert receipt["status"] == "partial_failure", receipt
+        assert receipt["reason"] == "queue.execute.membership_failed"
+        assert len(receipt["remaining"]) == 3
+        assert state["queued"] and gh_writes == []
+        assert len(project_writes) == 1 and project_writes[0].startswith("project item-add ")
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "field_fail")
+        assert receipt["status"] == "partial_failure", receipt
+        assert receipt["reason"] == "queue.execute.field_mutation_failed"
+        assert len(receipt["remaining"]) == 2
+        assert state["queued"] and gh_writes == []
+        assert not any(line.startswith("issue edit ") for line in project_writes)
+
+        receipt, state, gh_writes, _ = execute(tmp, "parent_fail")
+        assert receipt["status"] == "partial_failure", receipt
+        assert receipt["reason"] == "queue.execute.parent_failed"
+        assert len(receipt["remaining"]) == 1
+        assert state["queued"] and "parent_post" in gh_writes and "comment_post" not in gh_writes
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "preservation_fail")
+        assert receipt["status"] == "partial_failure", receipt
+        assert receipt["reason"] == "queue.execute.preservation_failed"
+        assert state["queued"] and "parent_post" in gh_writes and "comment_post" not in gh_writes
+        assert not any(line.startswith("issue edit ") for line in project_writes)
+
+        receipt, state, gh_writes, _ = execute(tmp, "completion_fail")
+        assert receipt["status"] == "partial_failure", receipt
+        assert receipt["reason"] == "queue.execute.completion_failed"
+        assert receipt["remaining"] == []
+        assert state["queued"] and state["open"]
+        assert "comment_post" in gh_writes
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "stale_after_comment")
+        assert receipt["status"] == "partial_failure", receipt
+        assert receipt["reason"] == "queue.execute.completion_state_changed"
+        assert receipt["remaining"] == []
+        assert state["queued"] and state["open"] is False
+        assert "comment_post" in gh_writes
+        assert not any(line.startswith("issue edit ") for line in project_writes)
+
+        receipt, state, _, project_writes = execute(tmp, "temporary")
+        assert receipt["status"] == "applied_verified", receipt
+        assert state["queued"] is False and state["open"] is False
+        completion = next(line for line in project_writes if line.startswith("issue edit "))
+        assert "--state closed" in completion and "--close-reason completed" in completion
+
+        missing = tmp / "not-installed-projects"
+        receipt, state, gh_writes, project_writes = execute(tmp, "happy", projects=missing)
+        assert receipt["status"] == "needs_agent", receipt
+        assert receipt["reason"] == "queue.execute.projects_unavailable"
+        assert state["queued"] and gh_writes == [] and project_writes == []
+
+    print("queue executor tests passed")
+
+
+if __name__ == "__main__":
+    main()
