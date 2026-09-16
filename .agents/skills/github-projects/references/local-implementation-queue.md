@@ -189,6 +189,52 @@ administrative-only, stale-state and independent-readback rules below without
 rediscovering the workspace. Preflight discovery itself never establishes
 mutation authority.
 
+
+### Deterministic classification
+
+After preflight has bounded one candidate and resolved its checked Project contract, `scripts/queue-classify.py` may classify that item without mutation:
+
+```bash
+python3 scripts/queue-classify.py \
+  --contract /path/to/resolved/project.md \
+  --repository owner/issues \
+  --issue 42
+```
+
+It emits one JSON object:
+
+- `deterministic`: trusted structured authority and the currently supported deterministic action subset;
+- `needs_agent`: legitimate queue work that needs interpretation or an unsupported deterministic operation;
+- `blocked`: fresh provider, target or authority state makes automatic continuation unsafe.
+
+Format quality alone is never a blocker. Missing structured authority, legacy prose, malformed JSON, edited authority, unsupported deterministic actions and contract values that require interpretation use `needs_agent`. Authentication/provider failures, a closed or de-queued candidate, and target/Project mismatch use `blocked`.
+
+Stable v1 reasons are:
+
+| Outcome | Reason |
+| --- | --- |
+| deterministic | `queue.ready.structured` |
+| needs_agent | `queue.agent.structured_authority_missing` |
+| needs_agent | `queue.agent.legacy_authority` |
+| needs_agent | `queue.agent.envelope_malformed` |
+| needs_agent | `queue.agent.envelope_invalid` |
+| needs_agent | `queue.agent.version_unsupported` |
+| needs_agent | `queue.agent.authority_edited` |
+| needs_agent | `queue.agent.authority_untrusted` |
+| needs_agent | `queue.agent.action_not_deterministic` |
+| needs_agent | `queue.agent.value_not_in_contract` |
+| needs_agent | `queue.agent.parent_not_deterministic` |
+| blocked | `queue.blocked.authentication` |
+| blocked | `queue.blocked.provider_read` |
+| blocked | `queue.blocked.contract_unavailable` |
+| blocked | `queue.blocked.contract_invalid` |
+| blocked | `queue.blocked.issue_not_open` |
+| blocked | `queue.blocked.queue_label_missing` |
+| blocked | `queue.blocked.target_mismatch` |
+| blocked | `queue.blocked.project_mismatch` |
+
+The initial deterministic subset is deliberately small: Project membership add, Class/Priority/Status set, and exact parent set. Other v1 actions fall back to an agent until #179 provides a verified deterministic executor. An explicit item-level review directive remains attached to a `deterministic` result; it is not parser fallback.
+
 ## Trusted administrative items
 
 For a queue issue that satisfies the applicable authority rule above, do not ask the operator for a routine preview or confirmation.
