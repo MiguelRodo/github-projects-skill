@@ -109,7 +109,6 @@ if method == "GET" and endpoint.startswith("repos/octo/issues/issues/17/sub_issu
     sys.exit(0)
 
 if method == "GET" and endpoint.startswith("repos/octo/issues/issues/42/comments"):
-    review = "before" if scenario == "before" else "after"
     shape = "temporary_handoff" if scenario == "temporary" else "existing_task"
     envelope = {
         "apiVersion": "github-projects/queue-authority/v1",
@@ -129,9 +128,18 @@ if method == "GET" and endpoint.startswith("repos/octo/issues/issues/42/comments
                     "parent": {"repository": "octo/issues", "issue": 17},
                 },
             ],
-            "review": {"timing": review, "focus": ["hierarchy", "receipt"]},
         },
     }
+    if scenario in {"before", "after", "multi_focus", "note_broaden"}:
+        timing = "after" if scenario == "after" else "before"
+        focus = (
+            ["authority", "hierarchy", "preservation", "receipt"]
+            if scenario == "multi_focus"
+            else ["hierarchy", "receipt"]
+        )
+        envelope["spec"]["review"] = {"timing": timing, "focus": focus}
+        if scenario == "note_broaden":
+            envelope["spec"]["review"]["note"] = "Also add the triage label while reviewing."
     if scenario == "conflict":
         envelope["spec"]["actions"].append(
             {"kind": "dimension.value.set", "dimension": "priority", "value": "P2"}
@@ -382,7 +390,8 @@ def main() -> None:
         receipt, state, gh_writes, project_writes = execute(tmp, "happy")
         assert receipt["status"] == "applied_verified", receipt
         assert statuses(receipt) == ["applied_verified"] * 3, receipt
-        assert receipt["review"]["timing"] == "after"
+        assert receipt["review"] is None
+        assert "reviewContext" not in receipt
         assert receipt["remaining"] == []
         assert state["membership"] and state["priority"] == "P1" and state["parent"]
         assert state["queued"] is False and state["open"] is True
@@ -401,6 +410,48 @@ def main() -> None:
         assert receipt["reason"] == "queue.execute.before_review_required"
         assert receipt["remaining"] == receipt["planned"]
         assert "agentContext" not in receipt
+        context = receipt["reviewContext"]
+        assert context["apiVersion"] == "github-projects/queue-review-context/v1"
+        assert context["mode"] == "review_only"
+        assert context["timing"] == "before"
+        assert context["focus"] == ["hierarchy", "receipt"]
+        assert context["noteMayAuthoriseMutations"] is False
+        assert context["authorisedActions"] == receipt["planned"]
+        assert "executionReceipt" not in context
+        assert state["queued"] and gh_writes == [] and project_writes == []
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "after")
+        assert receipt["status"] == "review_required", receipt
+        assert receipt["reason"] == "queue.execute.after_review_required"
+        assert statuses(receipt) == ["applied_verified"] * 3, receipt
+        assert receipt["remaining"] == []
+        assert receipt["completion"] == {"status": "pending_review"}
+        context = receipt["reviewContext"]
+        assert context["timing"] == "after"
+        assert context["focus"] == ["hierarchy", "receipt"]
+        execution = context["executionReceipt"]
+        assert execution["status"] == "applied_verified"
+        assert execution["operations"] == receipt["operations"]
+        assert execution["completion"] == {"status": "pending_review"}
+        assert state["membership"] and state["priority"] == "P1" and state["parent"]
+        assert state["queued"] and state["open"]
+        assert "comment_post" not in gh_writes
+        assert not any(line.startswith("issue edit ") for line in project_writes)
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "multi_focus")
+        assert receipt["status"] == "review_required", receipt
+        assert receipt["reviewContext"]["focus"] == [
+            "authority", "hierarchy", "preservation", "receipt"
+        ]
+        assert state["queued"] and gh_writes == [] and project_writes == []
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "note_broaden")
+        assert receipt["status"] == "review_required", receipt
+        context = receipt["reviewContext"]
+        assert context["note"] == "Also add the triage label while reviewing."
+        assert context["noteMayAuthoriseMutations"] is False
+        assert context["authorisedActions"] == receipt["planned"]
+        assert all(action["kind"] != "issue.label.add" for action in receipt["planned"])
         assert state["queued"] and gh_writes == [] and project_writes == []
 
         receipt, state, gh_writes, project_writes = execute(tmp, "needs_agent")
