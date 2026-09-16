@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from queue_agent import build_agent_context
 from queue_common import flatten_pages, gh_json, json_command, run, table_value
 
 
@@ -50,6 +51,7 @@ def receipt(
     reason: str | None = None,
     preservation: dict[str, Any] | None = None,
     remaining: list[dict[str, Any]] | None = None,
+    agent_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     planned = classification.get("actions", [])
     value: dict[str, Any] = {
@@ -71,6 +73,8 @@ def receipt(
         value["completion"] = completion
     if preservation is not None:
         value["preservation"] = preservation
+    if agent_context is not None:
+        value["agentContext"] = agent_context
     if reason is not None:
         value["reason"] = reason
     return value
@@ -79,6 +83,49 @@ def receipt(
 def emit(value: dict[str, Any]) -> int:
     print(json.dumps(value, separators=(",", ":"), sort_keys=True))
     return 0
+
+
+def agent_fallback_receipt(
+    classification: dict[str, Any],
+    gh: str,
+    contract: str,
+    root: str,
+    repository: str,
+    issue: int,
+    reason: str | None = None,
+    operations: list[dict[str, Any]] | None = None,
+    remaining: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    operations = operations or []
+    fallback_reason = reason or classification.get("reason")
+    decision = {
+        **classification,
+        "classification": "needs_agent",
+        "reason": fallback_reason,
+    }
+    try:
+        context = build_agent_context(
+            gh, contract, root, repository, issue, decision
+        )
+    except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+        value = receipt(
+            classification,
+            "blocked",
+            operations,
+            reason="queue.execute.agent_context_failed",
+            remaining=remaining,
+        )
+        value["error"] = str(exc)
+        return value
+
+    return receipt(
+        classification,
+        "needs_agent",
+        operations,
+        reason=fallback_reason,
+        remaining=remaining,
+        agent_context=context,
+    )
 
 
 def issue_snapshot(issue: dict[str, Any]) -> dict[str, Any]:
@@ -297,6 +344,15 @@ def main() -> int:
     classified.setdefault("issue", args.issue)
 
     if classified.get("classification") != "deterministic":
+        if classified.get("classification") == "needs_agent":
+            return emit(agent_fallback_receipt(
+                classified,
+                args.gh,
+                args.contract,
+                args.root,
+                args.repository,
+                args.issue,
+            ))
         return emit(receipt(
             classified,
             classified.get("classification", "blocked"),
@@ -314,10 +370,13 @@ def main() -> int:
         ))
 
     if shutil.which(args.projects) is None:
-        return emit(receipt(
+        return emit(agent_fallback_receipt(
             classified,
-            "needs_agent",
-            [],
+            args.gh,
+            args.contract,
+            args.root,
+            args.repository,
+            args.issue,
             reason="queue.execute.projects_unavailable",
         ))
 
@@ -362,6 +421,18 @@ def main() -> int:
     operations: list[dict[str, Any]] = []
 
     def finish(status: str, reason: str | None = None, **extra: Any) -> int:
+        if status == "needs_agent":
+            return emit(agent_fallback_receipt(
+                classified,
+                args.gh,
+                args.contract,
+                args.root,
+                args.repository,
+                args.issue,
+                reason=reason,
+                operations=operations,
+                remaining=pending,
+            ))
         return emit(receipt(
             classified,
             status,

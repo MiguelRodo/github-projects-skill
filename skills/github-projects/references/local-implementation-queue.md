@@ -250,6 +250,7 @@ The one-line JSON receipt contains:
 - the classifier outcome and original planned actions;
 - `operations`, each with `applied_verified`, `no_change`, `read_failed`, `mutation_failed` or `verification_failed`;
 - `remaining`, the authorised actions not yet verified when execution stops;
+- `agentContext` only when the final outcome is `needs_agent`, containing the bounded exact-target handoff described below;
 - `preservation` when independent preservation checks completed;
 - `completion` when the completion comment and queue-label/state mutation were attempted;
 - the original item-level `review` directive for later agent review.
@@ -266,6 +267,7 @@ Stable executor reasons include:
 | `queue.execute.before_review_required` | explicit review must happen before writes |
 | `queue.execute.projects_unavailable` | deterministic CLI backend is unavailable |
 | `queue.execute.plan_conflict` | the deterministic plan repeats a singleton action or dimension and needs interpretation |
+| `queue.execute.agent_context_failed` | a safe bounded agent handoff could not be prepared, so fallback is blocked |
 | `queue.execute.contract_unavailable` / `queue.execute.contract_invalid` | checked local contract cannot be used |
 | `queue.execute.baseline_read_failed` / `queue.execute.baseline_state_changed` | fresh pre-write issue state is unavailable or no longer queue-eligible |
 | `queue.execute.membership_failed` | verified Project membership addition failed |
@@ -278,6 +280,37 @@ Stable executor reasons include:
 | `queue.execute.completion_failed` | queue label/state completion failed |
 
 A partial receipt is evidence, not permission to retry. Leave the queue item visible and re-inspect live state before any recovery.
+
+### Agent escalation and legacy fallback
+
+Agent fallback is an ordinary continuation for a final `needs_agent` outcome. It is not a recovery path for `blocked` or `partial_failure`, and it is distinct from an explicit item-level review request.
+
+For `needs_agent`, the executor attaches `agentContext` using the versioned `github-projects/queue-agent-context/v1` shape. The handoff is read-only and bounded to one already-resolved candidate. It contains:
+
+- the exact repository/issue target and checked local contract path/root;
+- the classifier or executor reason that caused fallback;
+- the authenticated GitHub login used for the queue decision;
+- a fresh issue snapshot limited to title, body, state, labels, assignees, milestone and author;
+- the resolved Project/queue identity from the checked contract;
+- only comments beginning with `PJ implementation authority:`, including author and edit timestamps;
+- an explicit `github_issue_project_administration_only` effect boundary.
+
+The agent may re-read that exact issue and exact checked contract when stale state must be verified before a write. It should not rediscover the workspace, broaden to unrelated repositories/Projects, or treat other accessible data as implicit authority. The handoff exists to eliminate that discovery step.
+
+Classifier `needs_agent` reasons are fallback-eligible, including legacy or missing structured authority, malformed/unsupported envelopes that remain human-interpretable, edited/untrusted authority requiring operator judgement, unsupported deterministic actions, contract values needing interpretation and non-deterministic parent requests. Executor-level `needs_agent` reasons such as an unavailable `projects` backend, a conflicting otherwise-valid plan, or a field location outside the deterministic executor are handled the same way.
+
+A `blocked` classifier result is never converted into agent fallback. Authentication/provider failures, invalid checked contracts, closed/de-queued targets and target/Project mismatches remain hard stops. Likewise, once a deterministic mutation has partially failed or cannot be independently verified, an agent may inspect the receipt but must not silently retry the mutation through another surface. If the bounded handoff itself cannot be built, return `queue.execute.agent_context_failed` as `blocked`.
+
+Structured and legacy items may coexist indefinitely. A legacy or hand-written item does not need to be rewritten merely to enter fallback. After interpretation, an agent may describe a normalised structured plan in its report when useful, but must not add or alter authority merely to make the item machine-readable.
+
+For mixed queues, process each candidate independently:
+
+- complete deterministic candidates without launching an agent;
+- collect only `needs_agent` candidates as bounded handoff packets for agent work;
+- leave `blocked` and partial-failure candidates visible with their reason/receipt and do not include them as fallback mutation tasks;
+- preserve candidate identity and authority independently even if several handoffs are reviewed in one agent session.
+
+`needs_agent` is therefore a capability fallback. A structured `review.timing=before|after` directive is creator intent on an otherwise deterministic item and remains a separate path governed by #181. A launcher must not collapse the two concepts into one generic “use the agent” state.
 
 ## Trusted administrative items
 
