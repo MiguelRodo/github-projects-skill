@@ -86,7 +86,15 @@ A deterministic item MAY still request agent review:
 
 `timing` is `before` or `after`. V1 focus values are `authority`, `scope`, `membership`, `fields`, `hierarchy`, `preservation`, `completion` and `receipt`.
 
-The optional note is review context only. It MUST NOT add or broaden mutation authority. Review is distinct from fallback: an item may be fully deterministic and still request bounded review. #181 owns operator-level review policy.
+The optional note is review context only. It MUST NOT add or broaden mutation authority. Review is distinct from fallback: an item may be fully deterministic and still request bounded review.
+
+A required `before` review happens before deterministic writes. A required `after` review happens after deterministic actions and independent readback but before queue completion: the queue label remains, a temporary handoff remains open, and the agent receives the verified execution receipt.
+
+The queue-level agent policy is additive. `auto` preserves only item-required review; operator `before` or `after` can add review at that timing. If the operator policy differs from item-required timing, both reviews occur. Operator policy never moves, suppresses or weakens item-required review.
+
+The review handoff is `github-projects/queue-review-context/v1`. It repeats the authorised actions explicitly and marks the note as non-authoritative. Any revised administrative delta proposed during review must satisfy the ordinary authority rules before mutation.
+
+Approval is returned separately as `github-projects/queue-review-result/v1` with `outcome: approved` and the exact reviewed context. The executor revalidates that result against the freshly classified target, actions, timing, focus and note. An after-review approval must also carry the matching verified execution receipt. A stale or mismatched result does not waive review.
 
 ## Complete example
 
