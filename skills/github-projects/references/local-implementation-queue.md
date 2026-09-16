@@ -50,6 +50,14 @@ For a temporary handoff:
 
 A temporary Project-administration handoff is not a mirror of the underlying task and should not be added to the GitHub Project merely because it exists.
 
+### Structured authority when the creator knows the delta
+
+When the creating surface has already resolved the exact target and bounded administrative delta, prefer the versioned [structured queue authority envelope](queue-authority-envelope.md) inside the qualifying `PJ implementation authority:` comment. The structured form lets later local processing validate routine administration without asking an agent to reinterpret prose.
+
+This is not a requirement for humans to create queue items. Existing natural-language authority comments, hand-written issues and older queue records remain valid queue input. If they cannot be processed deterministically, pass the bounded candidate to the agent under the fallback rules instead of treating the formatting difference as a queue failure.
+
+The structured envelope never weakens the authority model in this reference. Its comment must still qualify under the applicable solo, collaborative or temporary-handoff rule, and its actions remain constrained by the administrative-only effect boundary, fresh state and independent readback.
+
 ## Existing task issues as queue items
 
 An existing task issue is an ordinary work item, not a command. Its title and body describe the work the task represents and routinely use imperative prose such as "Build a sealed validation corpus", "Measure production upload volume", "Suppress redundant uploads" or "Fix the parser". That prose is a task description. It is not queue execution authority, and it must never cause the issue's administrative work to be skipped.
