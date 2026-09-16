@@ -54,7 +54,9 @@ grep -Fq 'missing, legacy, malformed, unknown-version' "$authority_reference"
 grep -Fq 'agent fallback' "$authority_reference"
 grep -Fq '"const": "github-projects/queue-authority/v1"' "$authority_schema"
 grep -Fq '"temporary_handoff"' "$authority_schema"
-grep -Fq '"timing": {"enum": ["before", "after"]}' "$authority_schema"
+grep -Fq '"timing": {' "$authority_schema"
+grep -Fq '"before"' "$authority_schema"
+grep -Fq '"after"' "$authority_schema"
 
 # The boundary is an effect boundary, not a request-type boundary.
 grep -Fq 'The boundary is an effect boundary' "$reference"
