@@ -87,9 +87,13 @@ if method == "GET" and endpoint == "repos/octo/issues/issues/42":
         "id": 4200,
         "title": "changed" if state.get("tampered") else "original",
         "body": (
-            "Please organise this as Priority P1; leave the substantive task untouched."
-            if scenario == "no_authority"
-            else "body"
+            "b" * 70000
+            if scenario == "large_context"
+            else (
+                "Please organise this as Priority P1; leave the substantive task untouched."
+                if scenario == "no_authority"
+                else "body"
+            )
         ),
         "state": "open" if state["open"] else "closed",
         "labels": [{"name": "pj:implement-chat"}] if state["queued"] else [],
@@ -140,7 +144,9 @@ if method == "GET" and endpoint.startswith("repos/octo/issues/issues/42/comments
         envelope["spec"]["actions"].append(
             {"kind": "issue.label.add", "name": "triage"}
         )
-    if scenario in {"needs_agent", "handoff_stale"}:
+    if scenario == "large_context":
+        authority = "PJ implementation authority: " + ("x" * 20000)
+    elif scenario in {"needs_agent", "handoff_stale"}:
         authority = "PJ implementation authority: please sort this out."
     else:
         authority = (
@@ -148,13 +154,24 @@ if method == "GET" and endpoint.startswith("repos/octo/issues/issues/42/comments
             + json.dumps(envelope)
             + "\n```"
         )
-    comments = [] if scenario == "no_authority" else [{
-        "id": 1,
-        "body": authority,
-        "user": {"login": "octocat"},
-        "created_at": "2026-09-16T12:00:00Z",
-        "updated_at": "2026-09-16T12:00:00Z",
-    }]
+    if scenario == "no_authority":
+        comments = []
+    elif scenario == "large_context":
+        comments = [{
+            "id": index + 1,
+            "body": authority + str(index),
+            "user": {"login": "octocat"},
+            "created_at": f"2026-09-16T12:{index:02d}:00Z",
+            "updated_at": f"2026-09-16T12:{index:02d}:00Z",
+        } for index in range(25)]
+    else:
+        comments = [{
+            "id": 1,
+            "body": authority,
+            "user": {"login": "octocat"},
+            "created_at": "2026-09-16T12:00:00Z",
+            "updated_at": "2026-09-16T12:00:00Z",
+        }]
     comments += state["comments"]
     print(json.dumps([comments]))
     sys.exit(0)
@@ -430,6 +447,18 @@ def main() -> None:
         assert_agent_context(receipt, tmp, "queue.agent.action_not_deterministic")
         assert state["queued"] and gh_writes == [] and project_writes == []
 
+        receipt, state, gh_writes, project_writes = execute(tmp, "large_context")
+        assert receipt["status"] == "needs_agent", receipt
+        context = receipt["agentContext"]
+        assert context["issue"]["bodyTruncated"] is True
+        assert len(context["issue"]["body"]) == 65536
+        assert context["authorityCommentCount"] == 25
+        assert context["authorityCommentsTruncated"] is True
+        assert len(context["authorityComments"]) == 20
+        assert all(item["bodyTruncated"] for item in context["authorityComments"])
+        assert all(len(item["body"]) == 16384 for item in context["authorityComments"])
+        assert state["queued"] and gh_writes == [] and project_writes == []
+
         receipt, state, gh_writes, project_writes = execute(tmp, "blocked")
         assert receipt["status"] == "blocked", receipt
         assert receipt["reason"] == "queue.blocked.issue_not_open"
@@ -455,6 +484,17 @@ def main() -> None:
         assert_agent_context(
             receipt, tmp, "queue.execute.field_binding_not_deterministic"
         )
+        assert state["queued"] and gh_writes == [] and project_writes == []
+        contract_path.write_text(CONTRACT, encoding="utf-8")
+
+        contract_path.write_text(
+            CONTRACT.replace("| Issue repository | octo/issues |", "| Issue repository | octo/other |"),
+            encoding="utf-8",
+        )
+        receipt, state, gh_writes, project_writes = execute(tmp, "needs_agent")
+        assert receipt["status"] == "blocked", receipt
+        assert receipt["reason"] == "queue.execute.agent_context_failed"
+        assert "repository disagrees" in receipt["error"]
         assert state["queued"] and gh_writes == [] and project_writes == []
         contract_path.write_text(CONTRACT, encoding="utf-8")
 

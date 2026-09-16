@@ -9,6 +9,14 @@ from queue_common import flatten_pages, gh_json, table_value
 
 MARKER = "PJ implementation authority:"
 VERSION = "github-projects/queue-agent-context/v1"
+MAX_ISSUE_BODY = 65536
+MAX_AUTHORITY_BODY = 16384
+MAX_AUTHORITY_COMMENTS = 20
+
+
+def _bounded_text(value: Any, limit: int) -> tuple[str, bool]:
+    text = value if isinstance(value, str) else ""
+    return text[:limit], len(text) > limit
 
 
 def _names(items: Any, key: str) -> list[str]:
@@ -30,8 +38,16 @@ def build_agent_context(
     decision: dict[str, Any],
 ) -> dict[str, Any]:
     """Return exact-target context without broad workspace discovery."""
-    contract = Path(contract_path).read_text(encoding="utf-8")
+    checked_contract = Path(contract_path).resolve()
+    contract = checked_contract.read_text(encoding="utf-8")
     queue_label = table_value(contract, "Chat implementation label") or "pj:implement-chat"
+    contract_repository = table_value(contract, "Issue repository")
+    if not contract_repository or contract_repository.lower() != repository.lower():
+        raise RuntimeError("checked contract repository disagrees with the queue target")
+    project_number = table_value(contract, "Project number")
+    project_owner = table_value(contract, "Project owner")
+    if not project_owner or not project_number.isdigit():
+        raise RuntimeError("checked contract has incomplete Project identity")
 
     profile = gh_json(gh, "api", "user")
     live = gh_json(gh, "api", f"repos/{repository}/issues/{issue}")
@@ -53,12 +69,17 @@ def build_agent_context(
     if live.get("state") != "open" or queue_label not in labels:
         raise RuntimeError("queue target changed before agent handoff")
 
+    marker_comments = [
+        comment
+        for comment in comments
+        if isinstance(comment.get("body"), str)
+        and comment["body"].startswith(MARKER)
+    ]
+    marker_comments.sort(key=lambda comment: comment.get("created_at") or "")
     authority_comments = []
-    for comment in comments:
-        body = comment.get("body")
+    for comment in marker_comments[-MAX_AUTHORITY_COMMENTS:]:
+        body, truncated = _bounded_text(comment.get("body"), MAX_AUTHORITY_BODY)
         author = (comment.get("user") or {}).get("login")
-        if not isinstance(body, str) or not body.startswith(MARKER):
-            continue
         authority_comments.append(
             {
                 "id": comment.get("id"),
@@ -68,10 +89,11 @@ def build_agent_context(
                 "unedited": comment.get("created_at") == comment.get("updated_at"),
                 "authenticatedAuthor": author == login,
                 "body": body,
+                "bodyTruncated": truncated,
             }
         )
 
-    project_number = table_value(contract, "Project number")
+    issue_body, issue_body_truncated = _bounded_text(live.get("body"), MAX_ISSUE_BODY)
     milestone = live.get("milestone")
     return {
         "apiVersion": VERSION,
@@ -88,15 +110,15 @@ def build_agent_context(
         },
         "workspace": {
             "root": root,
-            "contractPath": str(Path(contract_path)),
+            "contractPath": str(checked_contract),
         },
         "contract": {
             "mode": table_value(contract, "Mode"),
             "issueRepository": table_value(contract, "Issue repository"),
             "queueLabel": queue_label,
             "project": {
-                "owner": table_value(contract, "Project owner"),
-                "number": int(project_number) if project_number.isdigit() else None,
+                "owner": project_owner,
+                "number": int(project_number),
                 "title": table_value(contract, "Project title"),
                 "key": table_value(contract, "Project key") or None,
             },
@@ -104,7 +126,8 @@ def build_agent_context(
         "authenticatedLogin": login,
         "issue": {
             "title": live.get("title"),
-            "body": live.get("body"),
+            "body": issue_body,
+            "bodyTruncated": issue_body_truncated,
             "state": live.get("state"),
             "labels": labels,
             "assignees": _names(live.get("assignees"), "login"),
@@ -119,5 +142,7 @@ def build_agent_context(
             "author": (live.get("user") or {}).get("login"),
         },
         "authorityComments": authority_comments,
-        "otherCommentCount": len(comments) - len(authority_comments),
+        "authorityCommentCount": len(marker_comments),
+        "authorityCommentsTruncated": len(marker_comments) > len(authority_comments),
+        "otherCommentCount": len(comments) - len(marker_comments),
     }
