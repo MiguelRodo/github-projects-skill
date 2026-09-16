@@ -134,8 +134,8 @@ if method == "GET" and endpoint.startswith("repos/octo/issues/issues/42/comments
             ],
         },
     }
-    if scenario in {"before", "after", "multi_focus", "note_broaden"}:
-        timing = "after" if scenario == "after" else "before"
+    if scenario in {"before", "before_resume", "after", "after_resume", "multi_focus", "note_broaden"}:
+        timing = "after" if scenario in {"after", "after_resume"} else "before"
         focus = (
             ["authority", "hierarchy", "preservation", "receipt"]
             if scenario == "multi_focus"
@@ -312,21 +312,31 @@ def initial_state(scenario: str) -> dict:
         "open": scenario != "blocked",
         "queued": True,
         "membership": scenario in {
-            "noop", "field_fail", "parent_fail", "completion_fail", "temporary"
+            "noop", "field_fail", "parent_fail", "completion_fail", "temporary",
+            "after_resume",
         },
         "priority": (
             "P1"
-            if scenario in {"noop", "parent_fail", "completion_fail", "temporary"}
+            if scenario in {
+                "noop", "parent_fail", "completion_fail", "temporary", "after_resume"
+            }
             else "P2"
         ),
-        "parent": scenario in {"noop", "field_fail", "completion_fail", "temporary"},
+        "parent": scenario in {
+            "noop", "field_fail", "completion_fail", "temporary", "after_resume"
+        },
         "comments": [],
         "tampered": False,
         "issue_reads": 0,
     }
 
 
-def execute(tmp: Path, scenario: str, projects: Path | None = None) -> tuple[dict, dict, list[str], list[str]]:
+def execute(
+    tmp: Path,
+    scenario: str,
+    projects: Path | None = None,
+    review_result: dict | None = None,
+) -> tuple[dict, dict, list[str], list[str]]:
     state_path = tmp / f"{scenario}.json"
     state_path.write_text(json.dumps(initial_state(scenario)), encoding="utf-8")
     gh_log = tmp / f"{scenario}-gh.log"
@@ -356,6 +366,10 @@ def execute(tmp: Path, scenario: str, projects: Path | None = None) -> tuple[dic
         "--projects",
         str(projects or tmp / "projects"),
     ]
+    if review_result is not None:
+        review_path = tmp / f"{scenario}-review-result.json"
+        review_path.write_text(json.dumps(review_result), encoding="utf-8")
+        command += ["--review-result", str(review_path)]
     result = subprocess.run(command, text=True, capture_output=True, env=env, check=True)
     return (
         json.loads(result.stdout),
@@ -437,6 +451,28 @@ def main() -> None:
         assert "executionReceipt" not in context
         assert state["queued"] and gh_writes == [] and project_writes == []
 
+        approval = {
+            "apiVersion": "github-projects/queue-review-result/v1",
+            "outcome": "approved",
+            "context": context,
+        }
+        resumed, state, gh_writes, project_writes = execute(
+            tmp, "before_resume", review_result=approval
+        )
+        assert resumed["status"] == "applied_verified", resumed
+        assert state["queued"] is False and state["open"] is True
+        assert "comment_post" in gh_writes
+        assert any(line.startswith("issue edit ") for line in project_writes)
+
+        stale_approval = json.loads(json.dumps(approval))
+        stale_approval["context"]["authorisedActions"][0]["kind"] = "project.membership.remove"
+        pending, state, gh_writes, project_writes = execute(
+            tmp, "before_resume", review_result=stale_approval
+        )
+        assert pending["status"] == "review_required", pending
+        assert pending["reason"] == "queue.execute.review_result_invalid"
+        assert state["queued"] and gh_writes == [] and project_writes == []
+
         receipt, state, gh_writes, project_writes = execute(tmp, "after")
         assert receipt["status"] == "review_required", receipt
         assert receipt["reason"] == "queue.execute.after_review_required"
@@ -454,6 +490,20 @@ def main() -> None:
         assert state["queued"] and state["open"]
         assert "comment_post" not in gh_writes
         assert not any(line.startswith("issue edit ") for line in project_writes)
+
+        approval = {
+            "apiVersion": "github-projects/queue-review-result/v1",
+            "outcome": "approved",
+            "context": context,
+        }
+        resumed, state, gh_writes, project_writes = execute(
+            tmp, "after_resume", review_result=approval
+        )
+        assert resumed["status"] == "applied_verified", resumed
+        assert statuses(resumed) == ["no_change", "no_change", "no_change"], resumed
+        assert state["queued"] is False and state["open"] is True
+        assert "comment_post" in gh_writes
+        assert any(line.startswith("issue edit ") for line in project_writes)
 
         receipt, state, gh_writes, project_writes = execute(tmp, "multi_focus")
         assert receipt["status"] == "review_required", receipt
