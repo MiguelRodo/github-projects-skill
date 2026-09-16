@@ -13,7 +13,7 @@ from typing import Any
 
 from queue_agent import build_agent_context
 from queue_common import flatten_pages, gh_json, json_command, run, table_value
-from queue_review import build_review_context
+from queue_review import build_review_context, validate_review_result
 
 
 def field_locations(text: str) -> dict[str, tuple[str, str]]:
@@ -315,6 +315,7 @@ def main() -> int:
     parser.add_argument("--issue", required=True, type=int)
     parser.add_argument("--gh", default=os.environ.get("PROJECTS_GH_BIN", "gh"))
     parser.add_argument("--projects", default=os.environ.get("PROJECTS_BIN", "projects"))
+    parser.add_argument("--review-result", help="JSON review approval for a prior reviewContext")
     args = parser.parse_args()
 
     classifier_path = Path(__file__).with_name("queue-classify.py")
