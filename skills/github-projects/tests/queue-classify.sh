@@ -119,7 +119,14 @@ if endpoint.startswith("repos/octo/issues/issues/42/comments"):
                     "parent": {"repository": "octo/issues", "issue": 17}
                 }
             ],
-            "review": {"timing": "after", "focus": ["hierarchy", "preservation"]}
+            "review": {
+                "timing": "after",
+                "focus": (
+                    ["unknown"]
+                    if scenario == "invalid_review"
+                    else ["hierarchy", "preservation"]
+                )
+            }
         }
     }
     if scenario == "legacy":
@@ -182,6 +189,7 @@ assert_result malformed needs_agent queue.agent.envelope_malformed
 assert_result no_authority needs_agent queue.agent.structured_authority_missing
 assert_result edited needs_agent queue.agent.authority_edited
 assert_result unsupported_action needs_agent queue.agent.action_not_deterministic
+assert_result invalid_review needs_agent queue.agent.envelope_invalid
 assert_result bad_value needs_agent queue.agent.value_not_in_contract
 assert_result target_mismatch blocked queue.blocked.target_mismatch
 assert_result project_mismatch blocked queue.blocked.project_mismatch
