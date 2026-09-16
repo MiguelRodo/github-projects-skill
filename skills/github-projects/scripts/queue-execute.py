@@ -7,34 +7,11 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-
-def run(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, text=True, capture_output=True, check=False)
-
-
-def parse_json(proc: subprocess.CompletedProcess[str]) -> Any:
-    if proc.returncode:
-        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "command failed")
-    return json.loads(proc.stdout)
-
-
-def gh_json(gh: str, *args: str) -> Any:
-    return parse_json(run(gh, *args))
-
-
-def table_value(text: str, wanted: str) -> str:
-    for line in text.splitlines():
-        if not line.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.split("|")[1:-1]]
-        if len(cells) >= 2 and cells[0] == wanted:
-            return cells[1]
-    return ""
+from queue_common import flatten_pages, gh_json, json_command, run, table_value
 
 
 def field_locations(text: str) -> dict[str, tuple[str, str]]:
@@ -54,22 +31,11 @@ def field_locations(text: str) -> dict[str, tuple[str, str]]:
     return result
 
 
-def flatten_pages(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    if value and all(isinstance(page, list) for page in value):
-        return [item for page in value for item in page if isinstance(item, dict)]
-    return [item for item in value if isinstance(item, dict)]
-
-
 def command_json(command: list[str]) -> tuple[Any | None, str | None]:
-    proc = run(*command)
-    if proc.returncode:
-        return None, proc.stderr.strip() or proc.stdout.strip() or "command failed"
     try:
-        return json.loads(proc.stdout), None
-    except json.JSONDecodeError:
-        return None, "command returned invalid JSON"
+        return json_command(*command), None
+    except (RuntimeError, json.JSONDecodeError) as exc:
+        return None, str(exc)
 
 
 def op(kind: str, status: str, **extra: Any) -> dict[str, Any]:
@@ -244,17 +210,16 @@ def ensure_comment(gh: str, repository: str, issue: int, body: str) -> tuple[dic
         if comment.get("body") == body:
             return {"status": "no_change", "commentId": comment.get("id")}, None
 
-    proc = run(
-        gh,
-        "api",
-        "--method",
-        "POST",
-        f"repos/{repository}/issues/{issue}/comments",
-        "-f",
-        f"body={body}",
-    )
     try:
-        created = parse_json(proc)
+        created = json_command(
+            gh,
+            "api",
+            "--method",
+            "POST",
+            f"repos/{repository}/issues/{issue}/comments",
+            "-f",
+            f"body={body}",
+        )
         comment_id = created["id"]
         readback = gh_json(gh, "api", f"repos/{repository}/issues/comments/{comment_id}")
     except (RuntimeError, json.JSONDecodeError, KeyError, TypeError) as exc:
@@ -275,20 +240,19 @@ def main() -> int:
     args = parser.parse_args()
 
     classifier_path = Path(__file__).with_name("queue-classify.py")
-    classified_proc = run(
-        sys.executable,
-        str(classifier_path),
-        "--contract",
-        args.contract,
-        "--repository",
-        args.repository,
-        "--issue",
-        str(args.issue),
-        "--gh",
-        args.gh,
-    )
     try:
-        classified = parse_json(classified_proc)
+        classified = json_command(
+            sys.executable,
+            str(classifier_path),
+            "--contract",
+            args.contract,
+            "--repository",
+            args.repository,
+            "--issue",
+            str(args.issue),
+            "--gh",
+            args.gh,
+        )
     except (RuntimeError, json.JSONDecodeError) as exc:
         return emit({
             "status": "blocked",
