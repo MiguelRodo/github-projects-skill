@@ -482,7 +482,7 @@ def main() -> int:
 
     summary = (
         f"PJ deterministic administration: verified {len(operations)} operation group(s); "
-        "queue completion verified separately."
+        "completing the queue handoff."
     )
     comment, error = ensure_comment(args.gh, args.repository, args.issue, summary)
     if error:
