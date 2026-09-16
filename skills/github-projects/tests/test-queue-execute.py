@@ -134,7 +134,7 @@ if method == "GET" and endpoint.startswith("repos/octo/issues/issues/42/comments
         )
     if scenario == "unsupported":
         envelope["spec"]["actions"].append(
-            {"kind": "issue.label.add", "label": "triage"}
+            {"kind": "issue.label.add", "name": "triage"}
         )
     if scenario == "needs_agent":
         authority = "PJ implementation authority: please sort this out."
