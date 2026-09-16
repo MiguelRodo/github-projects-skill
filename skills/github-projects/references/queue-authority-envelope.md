@@ -21,9 +21,9 @@ The keywords **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT** and **MAY** are 
 
 ## Comment form
 
-A structured authority comment MUST contain exactly the marker, one JSON fenced block and no other authoritative prose:
+A structured authority comment MUST contain exactly the marker, followed by one JSON fenced block and no other authoritative prose:
 
-```text
+````text
 PJ implementation authority:
 ```json
 {
@@ -32,7 +32,7 @@ PJ implementation authority:
   "spec": {}
 }
 ```
-```
+````
 
 The comment itself remains subject to the existing queue authority rules. In particular, when the resolved contract requires an authority comment, it must be authored by the account currently authenticated in local `gh` and must be unedited.
 
@@ -196,7 +196,7 @@ Detailed interaction with operator-level agent policy belongs to #181.
 
 ### Existing task reconciliation
 
-```text
+````text
 PJ implementation authority:
 ```json
 {
@@ -222,13 +222,13 @@ PJ implementation authority:
   }
 }
 ```
-```
+````
 
 After verified execution the queue label may be removed; issue 42 remains open.
 
 ### Temporary handoff with after-review
 
-```text
+````text
 PJ implementation authority:
 ```json
 {
@@ -253,7 +253,7 @@ PJ implementation authority:
   }
 }
 ```
-```
+````
 
 The after-review consumes the deterministic execution receipt. Only after the required review and ordinary readback/completion rules succeed may the temporary handoff be closed.
 
