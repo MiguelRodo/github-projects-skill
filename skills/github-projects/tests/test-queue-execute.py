@@ -124,6 +124,10 @@ if method == "GET" and endpoint.startswith("repos/octo/issues/issues/42/comments
             "review": {"timing": review, "focus": ["hierarchy", "receipt"]},
         },
     }
+    if scenario == "conflict":
+        envelope["spec"]["actions"].append(
+            {"kind": "dimension.value.set", "dimension": "priority", "value": "P2"}
+        )
     if scenario == "needs_agent":
         authority = "PJ implementation authority: please sort this out."
     else:
@@ -170,6 +174,8 @@ if method == "POST" and endpoint == "repos/octo/issues/issues/42/comments":
         "user": {"login": "octocat"},
     }
     state["comments"].append(comment)
+    if scenario == "stale_after_comment":
+        state["open"] = False
     save(state)
     print(json.dumps({"id": comment["id"]}))
     sys.exit(0)
@@ -339,6 +345,7 @@ def main() -> None:
         assert receipt["status"] == "applied_verified", receipt
         assert statuses(receipt) == ["applied_verified"] * 3, receipt
         assert receipt["review"]["timing"] == "after"
+        assert receipt["remaining"] == []
         assert state["membership"] and state["priority"] == "P1" and state["parent"]
         assert state["queued"] is False and state["open"] is True
         assert "parent_post" in gh_writes and "comment_post" in gh_writes
@@ -354,10 +361,18 @@ def main() -> None:
         receipt, state, gh_writes, project_writes = execute(tmp, "before")
         assert receipt["status"] == "review_required", receipt
         assert receipt["reason"] == "queue.execute.before_review_required"
+        assert receipt["remaining"] == receipt["planned"]
         assert state["queued"] and gh_writes == [] and project_writes == []
 
         receipt, state, gh_writes, project_writes = execute(tmp, "needs_agent")
         assert receipt["status"] == "needs_agent", receipt
+        assert receipt["target"] == {"repository": "octo/issues", "issue": 42}
+        assert state["queued"] and gh_writes == [] and project_writes == []
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "conflict")
+        assert receipt["status"] == "needs_agent", receipt
+        assert receipt["reason"] == "queue.execute.plan_conflict"
+        assert receipt["remaining"] == receipt["planned"]
         assert state["queued"] and gh_writes == [] and project_writes == []
 
         contract_path = tmp / "project.md"
@@ -374,18 +389,21 @@ def main() -> None:
         receipt, state, gh_writes, project_writes = execute(tmp, "membership_fail")
         assert receipt["status"] == "partial_failure", receipt
         assert receipt["reason"] == "queue.execute.membership_failed"
+        assert len(receipt["remaining"]) == 3
         assert state["queued"] and gh_writes == []
         assert len(project_writes) == 1 and project_writes[0].startswith("project item-add ")
 
         receipt, state, gh_writes, project_writes = execute(tmp, "field_fail")
         assert receipt["status"] == "partial_failure", receipt
         assert receipt["reason"] == "queue.execute.field_mutation_failed"
+        assert len(receipt["remaining"]) == 2
         assert state["queued"] and gh_writes == []
         assert not any(line.startswith("issue edit ") for line in project_writes)
 
         receipt, state, gh_writes, _ = execute(tmp, "parent_fail")
         assert receipt["status"] == "partial_failure", receipt
         assert receipt["reason"] == "queue.execute.parent_failed"
+        assert len(receipt["remaining"]) == 1
         assert state["queued"] and "parent_post" in gh_writes and "comment_post" not in gh_writes
 
         receipt, state, gh_writes, project_writes = execute(tmp, "preservation_fail")
@@ -397,8 +415,17 @@ def main() -> None:
         receipt, state, gh_writes, _ = execute(tmp, "completion_fail")
         assert receipt["status"] == "partial_failure", receipt
         assert receipt["reason"] == "queue.execute.completion_failed"
+        assert receipt["remaining"] == []
         assert state["queued"] and state["open"]
         assert "comment_post" in gh_writes
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "stale_after_comment")
+        assert receipt["status"] == "partial_failure", receipt
+        assert receipt["reason"] == "queue.execute.completion_state_changed"
+        assert receipt["remaining"] == []
+        assert state["queued"] and state["open"] is False
+        assert "comment_post" in gh_writes
+        assert not any(line.startswith("issue edit ") for line in project_writes)
 
         receipt, state, _, project_writes = execute(tmp, "temporary")
         assert receipt["status"] == "applied_verified", receipt

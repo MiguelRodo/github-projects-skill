@@ -241,14 +241,15 @@ A `deterministic` classification may be passed to `scripts/queue-execute.py`. Th
 
 The executor prefers the tested `projects` CLI for Project membership, Project field values and queue-completion issue edits. Native parent relationships use the documented GitHub sub-issue endpoint because the CLI does not support them. An operational failure is never retried through another mutation surface.
 
-Before each write, the owning operation performs a fresh target-centred read. Every successful mutation requires independent readback. Before queue completion, the executor also verifies that unrelated issue title/body/state/labels/assignees/milestone state still matches its baseline; Project field mutations rely on the CLI's own unrelated-field preservation check.
+Before each write, the owning operation performs a fresh target-centred read. Every successful mutation requires independent readback. The executor checks the issue baseline immediately before the completion comment and checks it again immediately before queue-label/state completion; Project field mutations rely on the CLI's own unrelated-field preservation check.
 
 The one-line JSON receipt contains:
 
 - `status`: overall `applied_verified`, `partial_failure`, `needs_agent`, `blocked` or `review_required`;
 - `target`, the exact repository and issue;
 - the classifier outcome and original planned actions;
-- `operations`, each with `applied_verified`, `no_change`, `not_attempted`, `read_failed`, `mutation_failed` or `verification_failed`;
+- `operations`, each with `applied_verified`, `no_change`, `read_failed`, `mutation_failed` or `verification_failed`;
+- `remaining`, the authorised actions not yet verified when execution stops;
 - `preservation` when independent preservation checks completed;
 - `completion` when the completion comment and queue-label/state mutation were attempted;
 - the original item-level `review` directive for later agent review.
@@ -264,6 +265,7 @@ Stable executor reasons include:
 | `queue.execute.classifier_failed` | classifier did not produce usable JSON |
 | `queue.execute.before_review_required` | explicit review must happen before writes |
 | `queue.execute.projects_unavailable` | deterministic CLI backend is unavailable |
+| `queue.execute.plan_conflict` | the deterministic plan repeats a singleton action or dimension and needs interpretation |
 | `queue.execute.contract_unavailable` / `queue.execute.contract_invalid` | checked local contract cannot be used |
 | `queue.execute.baseline_read_failed` / `queue.execute.baseline_state_changed` | fresh pre-write issue state is unavailable or no longer queue-eligible |
 | `queue.execute.membership_failed` | verified Project membership addition failed |

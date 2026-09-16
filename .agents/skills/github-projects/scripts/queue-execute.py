@@ -7,34 +7,11 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-
-def run(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, text=True, capture_output=True, check=False)
-
-
-def parse_json(proc: subprocess.CompletedProcess[str]) -> Any:
-    if proc.returncode:
-        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "command failed")
-    return json.loads(proc.stdout)
-
-
-def gh_json(gh: str, *args: str) -> Any:
-    return parse_json(run(gh, *args))
-
-
-def table_value(text: str, wanted: str) -> str:
-    for line in text.splitlines():
-        if not line.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.split("|")[1:-1]]
-        if len(cells) >= 2 and cells[0] == wanted:
-            return cells[1]
-    return ""
+from queue_common import flatten_pages, gh_json, json_command, run, table_value
 
 
 def field_locations(text: str) -> dict[str, tuple[str, str]]:
@@ -54,22 +31,11 @@ def field_locations(text: str) -> dict[str, tuple[str, str]]:
     return result
 
 
-def flatten_pages(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    if value and all(isinstance(page, list) for page in value):
-        return [item for page in value for item in page if isinstance(item, dict)]
-    return [item for item in value if isinstance(item, dict)]
-
-
 def command_json(command: list[str]) -> tuple[Any | None, str | None]:
-    proc = run(*command)
-    if proc.returncode:
-        return None, proc.stderr.strip() or proc.stdout.strip() or "command failed"
     try:
-        return json.loads(proc.stdout), None
-    except json.JSONDecodeError:
-        return None, "command returned invalid JSON"
+        return json_command(*command), None
+    except (RuntimeError, json.JSONDecodeError) as exc:
+        return None, str(exc)
 
 
 def op(kind: str, status: str, **extra: Any) -> dict[str, Any]:
@@ -83,7 +49,9 @@ def receipt(
     completion: dict[str, Any] | None = None,
     reason: str | None = None,
     preservation: dict[str, Any] | None = None,
+    remaining: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    planned = classification.get("actions", [])
     value: dict[str, Any] = {
         "status": status,
         "target": {
@@ -94,8 +62,9 @@ def receipt(
             "classification": classification.get("classification"),
             "reason": classification.get("reason"),
         },
-        "planned": classification.get("actions", []),
+        "planned": planned,
         "operations": operations,
+        "remaining": remaining if remaining is not None else ([] if status == "applied_verified" else planned),
         "review": classification.get("review"),
     }
     if completion is not None:
@@ -150,6 +119,30 @@ def project_command(
         "--project-number",
         project_number,
     ]
+
+
+def completion_guard(
+    gh: str,
+    repository: str,
+    issue: int,
+    queue_label: str,
+    baseline: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    try:
+        fresh = gh_json(gh, "api", f"repos/{repository}/issues/{issue}")
+    except (RuntimeError, json.JSONDecodeError) as exc:
+        return "queue.execute.completion_read_failed", str(exc)
+
+    labels = {
+        item.get("name")
+        for item in fresh.get("labels", [])
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    if fresh.get("state") != "open" or queue_label not in labels:
+        return "queue.execute.completion_state_changed", None
+    if issue_snapshot(fresh) != baseline:
+        return "queue.execute.preservation_failed", None
+    return None, None
 
 
 def set_parent(gh: str, repository: str, issue: int, parent: int) -> tuple[dict[str, Any], str | None]:
@@ -244,17 +237,16 @@ def ensure_comment(gh: str, repository: str, issue: int, body: str) -> tuple[dic
         if comment.get("body") == body:
             return {"status": "no_change", "commentId": comment.get("id")}, None
 
-    proc = run(
-        gh,
-        "api",
-        "--method",
-        "POST",
-        f"repos/{repository}/issues/{issue}/comments",
-        "-f",
-        f"body={body}",
-    )
     try:
-        created = parse_json(proc)
+        created = json_command(
+            gh,
+            "api",
+            "--method",
+            "POST",
+            f"repos/{repository}/issues/{issue}/comments",
+            "-f",
+            f"body={body}",
+        )
         comment_id = created["id"]
         readback = gh_json(gh, "api", f"repos/{repository}/issues/comments/{comment_id}")
     except (RuntimeError, json.JSONDecodeError, KeyError, TypeError) as exc:
@@ -275,27 +267,34 @@ def main() -> int:
     args = parser.parse_args()
 
     classifier_path = Path(__file__).with_name("queue-classify.py")
-    classified_proc = run(
-        sys.executable,
-        str(classifier_path),
-        "--contract",
-        args.contract,
-        "--repository",
-        args.repository,
-        "--issue",
-        str(args.issue),
-        "--gh",
-        args.gh,
-    )
     try:
-        classified = parse_json(classified_proc)
+        classified = json_command(
+            sys.executable,
+            str(classifier_path),
+            "--contract",
+            args.contract,
+            "--repository",
+            args.repository,
+            "--issue",
+            str(args.issue),
+            "--gh",
+            args.gh,
+        )
     except (RuntimeError, json.JSONDecodeError) as exc:
-        return emit({
-            "status": "blocked",
+        classified = {
+            "classification": "blocked",
             "reason": "queue.execute.classifier_failed",
-            "error": str(exc),
-            "operations": [],
-        })
+            "repository": args.repository,
+            "issue": args.issue,
+            "actions": [],
+            "review": None,
+        }
+        value = receipt(classified, "blocked", [], reason="queue.execute.classifier_failed")
+        value["error"] = str(exc)
+        return emit(value)
+
+    classified.setdefault("repository", args.repository)
+    classified.setdefault("issue", args.issue)
 
     if classified.get("classification") != "deterministic":
         return emit(receipt(
@@ -356,22 +355,39 @@ def main() -> int:
     baseline_snapshot = issue_snapshot(baseline_issue)
 
     actions = classified["actions"]
+    memberships = [a for a in actions if a["kind"] == "project.membership.add"]
     dimensions = [a for a in actions if a["kind"] == "dimension.value.set"]
+    parents = [a for a in actions if a["kind"] == "issue.parent.set"]
+    pending = list(actions)
+    operations: list[dict[str, Any]] = []
+
+    def finish(status: str, reason: str | None = None, **extra: Any) -> int:
+        return emit(receipt(
+            classified,
+            status,
+            operations,
+            reason=reason,
+            remaining=pending,
+            **extra,
+        ))
+
+    dimension_names = [action["dimension"] for action in dimensions]
+    if (
+        len(memberships) > 1
+        or len(parents) > 1
+        or len(dimension_names) != len(set(dimension_names))
+    ):
+        return finish("needs_agent", "queue.execute.plan_conflict")
+
     field_flags: list[str] = []
     for action in dimensions:
         dimension = action["dimension"]
         location = locations.get(dimension)
         if location is None or location[0] != "project field":
-            return emit(receipt(
-                classified,
-                "needs_agent",
-                [],
-                reason="queue.execute.field_binding_not_deterministic",
-            ))
+            return finish("needs_agent", "queue.execute.field_binding_not_deterministic")
         field_flags.extend([f"--{dimension}", action["value"]])
 
-    operations: list[dict[str, Any]] = []
-    if any(action["kind"] == "project.membership.add" for action in actions):
+    if memberships:
         result, error = command_json(
             project_command(
                 args.projects, "item-add", args.root, args.repository, project_number
@@ -386,12 +402,13 @@ def main() -> int:
         )
         if error:
             operations.append(op("project.membership.add", "mutation_failed", error=error))
-            return emit(receipt(classified, "partial_failure", operations, reason="queue.execute.membership_failed"))
+            return finish("partial_failure", "queue.execute.membership_failed")
         operations.append(op(
             "project.membership.add",
             "applied_verified" if result.get("applied") else "no_change",
             evidence=result,
         ))
+        pending.remove(memberships[0])
 
     if dimensions:
         plan, error = command_json(
@@ -407,8 +424,8 @@ def main() -> int:
             ]
         )
         if error:
-            operations.append(op("dimension.value.set", "read_failed", error=error))
-            return emit(receipt(classified, "partial_failure", operations, reason="queue.execute.field_plan_failed"))
+            operations.append(op("dimension.value.set", "read_failed", actions=dimensions, error=error))
+            return finish("partial_failure", "queue.execute.field_plan_failed")
 
         current = (plan.get("current") or {}).get("fields") or {}
         delta = plan.get("delta") or {}
@@ -438,61 +455,49 @@ def main() -> int:
             )
             if error:
                 operations.append(op("dimension.value.set", "mutation_failed", actions=dimensions, error=error))
-                return emit(receipt(classified, "partial_failure", operations, reason="queue.execute.field_mutation_failed"))
+                return finish("partial_failure", "queue.execute.field_mutation_failed")
             operations.append(op("dimension.value.set", "applied_verified", actions=dimensions, evidence=result))
+        for action in dimensions:
+            pending.remove(action)
 
-    for action in (a for a in actions if a["kind"] == "issue.parent.set"):
+    for action in parents:
         parent_number = action["parent"]["issue"]
         result, error = set_parent(args.gh, args.repository, args.issue, parent_number)
         operations.append(result)
         if error:
-            return emit(receipt(classified, "partial_failure", operations, reason="queue.execute.parent_failed"))
+            return finish("partial_failure", "queue.execute.parent_failed")
+        pending.remove(action)
 
-    try:
-        fresh_issue = gh_json(args.gh, "api", f"repos/{args.repository}/issues/{args.issue}")
-    except (RuntimeError, json.JSONDecodeError) as exc:
-        value = receipt(
-            classified,
-            "partial_failure",
-            operations,
-            reason="queue.execute.completion_read_failed",
-        )
-        value["error"] = str(exc)
-        return emit(value)
-    if issue_snapshot(fresh_issue) != baseline_snapshot:
-        return emit(receipt(
-            classified,
-            "partial_failure",
-            operations,
-            reason="queue.execute.preservation_failed",
-            preservation={"issueState": "mismatch"},
-        ))
-    labels = {
-        item.get("name")
-        for item in fresh_issue.get("labels", [])
-        if isinstance(item, dict) and isinstance(item.get("name"), str)
-    }
-    if fresh_issue.get("state") != "open" or queue_label not in labels:
-        return emit(receipt(
-            classified,
-            "partial_failure",
-            operations,
-            reason="queue.execute.completion_state_changed",
-        ))
-
-    summary = (
-        f"PJ deterministic administration: verified {len(operations)} operation group(s); "
-        "completing the queue handoff."
+    guard_reason, guard_error = completion_guard(
+        args.gh, args.repository, args.issue, queue_label, baseline_snapshot
     )
+    if guard_reason:
+        extra: dict[str, Any] = {}
+        if guard_error is not None:
+            extra["error"] = guard_error
+        if guard_reason == "queue.execute.preservation_failed":
+            extra["preservation"] = {"issueState": "mismatch"}
+        return finish("partial_failure", guard_reason, **extra)
+
+    summary = f"PJ deterministic administration: verified {len(operations)} operation group(s)."
     comment, error = ensure_comment(args.gh, args.repository, args.issue, summary)
     if error:
-        return emit(receipt(
-            classified,
+        return finish(
             "partial_failure",
-            operations,
+            "queue.execute.comment_failed",
             completion={"comment": comment},
-            reason="queue.execute.comment_failed",
-        ))
+        )
+
+    guard_reason, guard_error = completion_guard(
+        args.gh, args.repository, args.issue, queue_label, baseline_snapshot
+    )
+    if guard_reason:
+        extra = {"completion": {"comment": comment}}
+        if guard_error is not None:
+            extra["error"] = guard_error
+        if guard_reason == "queue.execute.preservation_failed":
+            extra["preservation"] = {"issueState": "mismatch"}
+        return finish("partial_failure", guard_reason, **extra)
 
     completion_command = [
         args.projects,
@@ -513,22 +518,18 @@ def main() -> int:
         completion_command + ["--apply", "--json", "--quiet"]
     )
     if error:
-        return emit(receipt(
-            classified,
+        return finish(
             "partial_failure",
-            operations,
+            "queue.execute.completion_failed",
             completion={"comment": comment, "queue": {"status": "mutation_failed", "error": error}},
-            reason="queue.execute.completion_failed",
             preservation={
                 "issueState": "verified",
                 "projectScalarFields": "verified_by_projects_cli" if dimensions else "not_applicable",
             },
-        ))
+        )
 
-    return emit(receipt(
-        classified,
+    return finish(
         "applied_verified",
-        operations,
         completion={
             "comment": comment,
             "queue": {
@@ -541,7 +542,7 @@ def main() -> int:
             "issueState": "verified",
             "projectScalarFields": "verified_by_projects_cli" if dimensions else "not_applicable",
         },
-    ))
+    )
 
 
 if __name__ == "__main__":
