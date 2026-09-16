@@ -6,13 +6,24 @@ skill_dir="$(cd "$test_dir/.." && pwd)" || exit 1
 repo_root="$(cd "$skill_dir/../.." && pwd)" || exit 1
 reference="$skill_dir/references/local-implementation-queue.md"
 installed_reference="$repo_root/.agents/skills/github-projects/references/local-implementation-queue.md"
+authority_reference="$skill_dir/references/queue-authority-envelope.md"
+installed_authority_reference="$repo_root/.agents/skills/github-projects/references/queue-authority-envelope.md"
+authority_schema="$skill_dir/references/queue-authority.schema.json"
+installed_authority_schema="$repo_root/.agents/skills/github-projects/references/queue-authority.schema.json"
 contract="$repo_root/.projects/project.md"
 
 [ -f "$reference" ]
 [ -f "$installed_reference" ]
+[ -f "$authority_reference" ]
+[ -f "$installed_authority_reference" ]
+[ -f "$authority_schema" ]
+[ -f "$installed_authority_schema" ]
 [ ! -e "$repo_root/.github/workflows/project-admin-bridge.yml" ]
 
 cmp -s "$reference" "$installed_reference"
+cmp -s "$authority_reference" "$installed_authority_reference"
+cmp -s "$authority_schema" "$installed_authority_schema"
+python3 -m json.tool "$authority_schema" >/dev/null
 grep -Fq 'pj:implement-chat' "$reference"
 grep -Fq 'PJ implementation authority:' "$reference"
 grep -Fq 'created_at == updated_at' "$reference"
@@ -30,11 +41,22 @@ grep -Fq 'separate explicit non-queue invocation' "$reference"
 grep -Fq 'Chat implementation label | pj:implement-chat' "$contract"
 grep -Fq '### Optional queue selectors' "$reference"
 grep -Fq 'When more than one selector is supplied, apply their intersection.' "$reference"
-grep -Fq "resolved contract's declared `Project key`" "$reference"
+grep -Fq 'declared `Project key`' "$reference"
 grep -Fq 'single-Project contract without a `Project key` row' "$reference"
 grep -Fq 'sub-project vocabulary' "$reference"
 grep -Fq 'Search only **open** issues carrying the configured queue label.' "$reference"
 grep -Fq 'Closed issues are never queue candidates.' "$reference"
+grep -Fq 'structured queue authority envelope' "$reference"
+grep -Fq 'unstructured items remain valid queue input' "$skill_dir/SKILL.md"
+grep -Fq 'apiVersion' "$authority_reference"
+grep -Fq 'github-projects/queue-authority/v1' "$authority_reference"
+grep -Fq 'missing, legacy, malformed, unknown-version' "$authority_reference"
+grep -Fq 'agent fallback' "$authority_reference"
+grep -Fq '"const": "github-projects/queue-authority/v1"' "$authority_schema"
+grep -Fq '"temporary_handoff"' "$authority_schema"
+grep -Fq '"timing": {' "$authority_schema"
+grep -Fq '"before"' "$authority_schema"
+grep -Fq '"after"' "$authority_schema"
 
 # The boundary is an effect boundary, not a request-type boundary.
 grep -Fq 'The boundary is an effect boundary' "$reference"

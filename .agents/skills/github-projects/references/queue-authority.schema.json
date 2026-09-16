@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:github-projects:queue-authority:v1",
+  "title": "github-projects v1 structured pj queue authority",
+  "type": "object",
+  "required": ["apiVersion", "kind", "spec"],
+  "properties": {
+    "apiVersion": {"const": "github-projects/queue-authority/v1"},
+    "kind": {"const": "QueueAuthority"},
+    "spec": {"$ref": "#/$defs/spec"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "repo": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "login": {"type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?$"},
+    "issueRef": {
+      "type": "object",
+      "required": ["repository", "issue"],
+      "properties": {"repository": {"$ref": "#/$defs/repo"}, "issue": {"type": "integer", "minimum": 1}},
+      "additionalProperties": false
+    },
+    "projectRef": {
+      "type": "object",
+      "required": ["owner", "number"],
+      "properties": {"owner": {"$ref": "#/$defs/login"}, "number": {"type": "integer", "minimum": 1}},
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "required": ["repository", "issue", "project"],
+      "properties": {
+        "repository": {"$ref": "#/$defs/repo"},
+        "issue": {"type": "integer", "minimum": 1},
+        "project": {"$ref": "#/$defs/projectRef"}
+      },
+      "additionalProperties": false
+    },
+    "emptyAction": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {"kind": {"type": "string"}},
+      "additionalProperties": false
+    },
+    "membershipAdd": {"allOf": [{"$ref": "#/$defs/emptyAction"}, {"properties": {"kind": {"const": "project.membership.add"}}}]},
+    "membershipRemove": {"allOf": [{"$ref": "#/$defs/emptyAction"}, {"properties": {"kind": {"const": "project.membership.remove"}}}]},
+    "dimensionSet": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "dimension", "value"],
+          "properties": {
+            "kind": {"const": "dimension.value.set"},
+            "dimension": {"enum": ["class", "priority", "status"]},
+            "value": {"type": "string", "minLength": 1, "maxLength": 128}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "dimension", "value"],
+          "properties": {
+            "kind": {"const": "dimension.value.set"},
+            "dimension": {"const": "due_date"},
+            "value": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "dimensionClear": {
+      "type": "object",
+      "required": ["kind", "dimension"],
+      "properties": {"kind": {"const": "dimension.value.clear"}, "dimension": {"enum": ["class", "priority", "status", "due_date"]}},
+      "additionalProperties": false
+    },
+    "labelAdd": {
+      "type": "object",
+      "required": ["kind", "name"],
+      "properties": {"kind": {"const": "issue.label.add"}, "name": {"type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[^\\r\\n]+$"}},
+      "additionalProperties": false
+    },
+    "labelRemove": {
+      "type": "object",
+      "required": ["kind", "name"],
+      "properties": {"kind": {"const": "issue.label.remove"}, "name": {"type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[^\\r\\n]+$"}},
+      "additionalProperties": false
+    },
+    "assigneeAdd": {
+      "type": "object",
+      "required": ["kind", "login"],
+      "properties": {"kind": {"const": "issue.assignee.add"}, "login": {"$ref": "#/$defs/login"}},
+      "additionalProperties": false
+    },
+    "assigneeRemove": {
+      "type": "object",
+      "required": ["kind", "login"],
+      "properties": {"kind": {"const": "issue.assignee.remove"}, "login": {"$ref": "#/$defs/login"}},
+      "additionalProperties": false
+    },
+    "parentSet": {
+      "type": "object",
+      "required": ["kind", "parent"],
+      "properties": {"kind": {"const": "issue.parent.set"}, "parent": {"$ref": "#/$defs/issueRef"}},
+      "additionalProperties": false
+    },
+    "parentRemove": {
+      "type": "object",
+      "required": ["kind", "parent"],
+      "properties": {"kind": {"const": "issue.parent.remove"}, "parent": {"$ref": "#/$defs/issueRef"}},
+      "additionalProperties": false
+    },
+    "stateClose": {
+      "type": "object",
+      "required": ["kind", "reason"],
+      "properties": {"kind": {"const": "issue.state.close"}, "reason": {"enum": ["completed", "not_planned"]}},
+      "additionalProperties": false
+    },
+    "stateReopen": {"allOf": [{"$ref": "#/$defs/emptyAction"}, {"properties": {"kind": {"const": "issue.state.reopen"}}}]},
+    "action": {
+      "oneOf": [
+        {"$ref": "#/$defs/membershipAdd"}, {"$ref": "#/$defs/membershipRemove"},
+        {"$ref": "#/$defs/dimensionSet"}, {"$ref": "#/$defs/dimensionClear"},
+        {"$ref": "#/$defs/labelAdd"}, {"$ref": "#/$defs/labelRemove"},
+        {"$ref": "#/$defs/assigneeAdd"}, {"$ref": "#/$defs/assigneeRemove"},
+        {"$ref": "#/$defs/parentSet"}, {"$ref": "#/$defs/parentRemove"},
+        {"$ref": "#/$defs/stateClose"}, {"$ref": "#/$defs/stateReopen"}
+      ]
+    },
+    "review": {
+      "type": "object",
+      "required": ["timing", "focus"],
+      "properties": {
+        "timing": {"enum": ["before", "after"]},
+        "focus": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"enum": ["authority", "scope", "membership", "fields", "hierarchy", "preservation", "completion", "receipt"]}
+        },
+        "note": {"type": "string", "minLength": 1, "maxLength": 1024}
+      },
+      "additionalProperties": false
+    },
+    "spec": {
+      "type": "object",
+      "required": ["target", "shape", "actions"],
+      "properties": {
+        "target": {"$ref": "#/$defs/target"},
+        "shape": {"enum": ["existing_task", "temporary_handoff"]},
+        "actions": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/action"}},
+        "review": {"$ref": "#/$defs/review"}
+      },
+      "additionalProperties": false
+    }
+  }
+}
