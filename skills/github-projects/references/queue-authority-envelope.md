@@ -34,7 +34,7 @@ PJ implementation authority:
 ```
 ````
 
-The comment itself remains subject to the existing queue authority rules. In particular, when the resolved contract requires an authority comment, it must be authored by the account currently authenticated in local `gh` and must be unedited.
+The comment itself remains subject to the existing queue authority rules. In collaborative/shared governance or for a temporary handoff it is the required authority comment and must be authored by the account currently authenticated in local `gh` and be unedited. In solo governance the same structured comment MAY be added as an execution envelope even when a separate authority comment would not otherwise be required; doing so does not broaden authority.
 
 Text outside the fenced object, additional fenced blocks, shell commands and Markdown instructions are never part of the structured authority payload.
 
@@ -46,7 +46,7 @@ Every v1 object has:
 
 - `apiVersion: github-projects/queue-authority/v1`;
 - `kind: QueueAuthority`;
-- `spec.target`, identifying the exact issue and, when Project operations are requested, the exact Project;
+- `spec.target`, identifying the exact issue and resolved managed Project context;
 - `spec.shape`, distinguishing an ordinary existing task from a temporary administrative handoff;
 - one or more explicit `spec.actions`;
 - optional `spec.review`, requesting bounded agent review without adding mutation authority.
@@ -55,16 +55,7 @@ Unknown keys are not accepted by v1 structural validation.
 
 ### Target
 
-An issue target is:
-
-```json
-{
-  "repository": "example-org/issues",
-  "issue": 42
-}
-```
-
-A Project target is added only when one or more actions operate on Project membership or contract-backed dimensions:
+Every structured target names both the issue and the resolved managed Project context:
 
 ```json
 {
@@ -77,7 +68,7 @@ A Project target is added only when one or more actions operate on Project membe
 }
 ```
 
-Repository and owner are exact GitHub locators. Project title is deliberately not identity. The executor MUST resolve the checked local contract and confirm that the structured Project locator matches the selected managed Project before any write.
+The Project locator identifies administration context; it does not imply that the issue is already a member or that membership should be added. Repository and owner are exact GitHub locators. Project title is deliberately not identity. The executor MUST resolve the checked local contract and confirm that the structured Project locator matches the selected managed Project before any write.
 
 The envelope does not select an arbitrary local repository path. Queue preflight supplies the checked local contract root independently.
 
@@ -101,7 +92,7 @@ Actions are an unordered requested delta. Later planning defines safe execution 
 {"kind": "project.membership.remove"}
 ```
 
-A Project target is required. Removal is destructive to Project-local values and therefore remains subject to the existing complete-state and preservation rules.
+The target's Project context is already explicit. Removal is destructive to Project-local values and therefore remains subject to the existing complete-state and preservation rules.
 
 ### Contract-backed dimensions
 
@@ -265,7 +256,7 @@ Before a v1 envelope can be executed without an agent, later queue planning must
 
 - the comment qualifies under the resolved collaboration/authority rule;
 - the preflight candidate equals `spec.target.repository` and `spec.target.issue`;
-- any Project locator equals the checked selected Project;
+- the Project locator equals the checked selected Project;
 - every action is allowed by the checked contract and deterministic executor;
 - requested values are valid contract values;
 - no action conflicts with another action or with queue completion semantics;
