@@ -235,6 +235,48 @@ Stable v1 reasons are:
 
 The initial deterministic subset is deliberately small: Project membership add, Class/Priority/Status set, and exact parent set. Other v1 actions fall back to an agent until #179 provides a verified deterministic executor. An explicit item-level review directive remains attached to a `deterministic` result; it is not parser fallback.
 
+### Deterministic execution and receipts
+
+A `deterministic` classification may be passed to `scripts/queue-execute.py`. The executor reuses the classifier rather than parsing authority independently, and executes only the classifier-supported actions.
+
+The executor prefers the tested `projects` CLI for Project membership, Project field values and queue-completion issue edits. Native parent relationships use the documented GitHub sub-issue endpoint because the CLI does not support them. An operational failure is never retried through another mutation surface.
+
+Before each write, the owning operation performs a fresh target-centred read. Every successful mutation requires independent readback. Before queue completion, the executor also verifies that unrelated issue title/body/state/labels/assignees/milestone state still matches its baseline; Project field mutations rely on the CLI's own unrelated-field preservation check.
+
+The one-line JSON receipt contains:
+
+- `status`: overall `applied_verified`, `partial_failure`, `needs_agent`, `blocked` or `review_required`;
+- `target`, the exact repository and issue;
+- the classifier outcome and original planned actions;
+- `operations`, each with `applied_verified`, `no_change`, `not_attempted`, `read_failed`, `mutation_failed` or `verification_failed`;
+- `preservation` when independent preservation checks completed;
+- `completion` when the completion comment and queue-label/state mutation were attempted;
+- the original item-level `review` directive for later agent review.
+
+A `before` review directive produces `review_required` and zero writes. An `after` directive stays attached to the receipt.
+
+Queue completion happens only after every authorised operation and preservation check succeeds. The executor writes one concise verified-administration comment, removes the queue label, and closes the issue only for `temporary_handoff`. An `existing_task` remains open.
+
+Stable executor reasons include:
+
+| Reason | Meaning |
+| --- | --- |
+| `queue.execute.classifier_failed` | classifier did not produce usable JSON |
+| `queue.execute.before_review_required` | explicit review must happen before writes |
+| `queue.execute.projects_unavailable` | deterministic CLI backend is unavailable |
+| `queue.execute.contract_unavailable` / `queue.execute.contract_invalid` | checked local contract cannot be used |
+| `queue.execute.baseline_read_failed` / `queue.execute.baseline_state_changed` | fresh pre-write issue state is unavailable or no longer queue-eligible |
+| `queue.execute.membership_failed` | verified Project membership addition failed |
+| `queue.execute.field_binding_not_deterministic` | requested dimension is not on the supported Project-field path |
+| `queue.execute.field_plan_failed` / `queue.execute.field_mutation_failed` | Project field inspection or verified mutation failed |
+| `queue.execute.parent_failed` | native parent mutation or readback failed |
+| `queue.execute.completion_read_failed` / `queue.execute.completion_state_changed` | fresh state before queue completion is unavailable or changed |
+| `queue.execute.preservation_failed` | unrelated issue state changed before completion |
+| `queue.execute.comment_failed` | verified completion comment failed |
+| `queue.execute.completion_failed` | queue label/state completion failed |
+
+A partial receipt is evidence, not permission to retry. Leave the queue item visible and re-inspect live state before any recovery.
+
 ## Trusted administrative items
 
 For a queue issue that satisfies the applicable authority rule above, do not ask the operator for a routine preview or confirmation.
