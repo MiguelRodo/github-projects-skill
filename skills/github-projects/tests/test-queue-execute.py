@@ -81,8 +81,12 @@ state = load()
 if method == "GET" and endpoint == "repos/octo/issues/issues/42":
     print(json.dumps({
         "id": 4200,
+        "title": "changed" if state.get("tampered") else "original",
+        "body": "body",
         "state": "open" if state["open"] else "closed",
         "labels": [{"name": "pj:implement-chat"}] if state["queued"] else [],
+        "assignees": [],
+        "milestone": None,
         "user": {"login": "octocat"},
     }))
     sys.exit(0)
@@ -151,6 +155,8 @@ if method == "POST" and endpoint == "repos/octo/issues/issues/17/sub_issues":
         print("parent failure", file=sys.stderr)
         sys.exit(1)
     state["parent"] = True
+    if scenario == "preservation_fail":
+        state["tampered"] = True
     save(state)
     print(json.dumps({"id": 4200}))
     sys.exit(0)
@@ -272,6 +278,7 @@ def initial_state(scenario: str) -> dict:
         ),
         "parent": scenario in {"noop", "field_fail", "completion_fail", "temporary"},
         "comments": [],
+        "tampered": False,
     }
 
 
@@ -353,6 +360,17 @@ def main() -> None:
         assert receipt["status"] == "needs_agent", receipt
         assert state["queued"] and gh_writes == [] and project_writes == []
 
+        contract_path = tmp / "project.md"
+        contract_path.write_text(
+            CONTRACT.replace("| Priority | project field | Priority |", "| Priority | issue field | Priority |"),
+            encoding="utf-8",
+        )
+        receipt, state, gh_writes, project_writes = execute(tmp, "happy")
+        assert receipt["status"] == "needs_agent", receipt
+        assert receipt["reason"] == "queue.execute.field_binding_not_deterministic"
+        assert state["queued"] and gh_writes == [] and project_writes == []
+        contract_path.write_text(CONTRACT, encoding="utf-8")
+
         receipt, state, gh_writes, project_writes = execute(tmp, "membership_fail")
         assert receipt["status"] == "partial_failure", receipt
         assert receipt["reason"] == "queue.execute.membership_failed"
@@ -369,6 +387,12 @@ def main() -> None:
         assert receipt["status"] == "partial_failure", receipt
         assert receipt["reason"] == "queue.execute.parent_failed"
         assert state["queued"] and "parent_post" in gh_writes and "comment_post" not in gh_writes
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "preservation_fail")
+        assert receipt["status"] == "partial_failure", receipt
+        assert receipt["reason"] == "queue.execute.preservation_failed"
+        assert state["queued"] and "parent_post" in gh_writes and "comment_post" not in gh_writes
+        assert not any(line.startswith("issue edit ") for line in project_writes)
 
         receipt, state, gh_writes, _ = execute(tmp, "completion_fail")
         assert receipt["status"] == "partial_failure", receipt
