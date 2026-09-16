@@ -179,7 +179,8 @@ or changing GitHub state.
 Its tab-separated output begins with exactly one status row:
 
 - `status ready`: one or more following `candidate` rows identify the bounded
-  queue items and resolved Project/sub-project scope;
+  queue items, resolved Project/sub-project scope, local repository root and exact
+  resolved contract path;
 - `status empty`: managed scope matched but no open queue issue matched;
 - `status unmatched`: the selector combination matched no managed queue scope.
 

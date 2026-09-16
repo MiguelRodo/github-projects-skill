@@ -153,7 +153,7 @@ assert_line() {
 : >"$tmp/provider.log"
 output="$(run_preflight --repo octo/issues --project personal --subproject monitoring)"
 expected_status="$(printf 'status\tready')"
-expected_candidate="$(printf 'candidate\tocto/issues\t42\thttps://github.com/octo/issues/issues/42\tpersonal\tmonitoring\t%s' "$workspace/issues")"
+expected_candidate="$(printf 'candidate\tocto/issues\t42\thttps://github.com/octo/issues/issues/42\tpersonal\tmonitoring\t%s\t%s' "$workspace/issues" "$workspace/issues/.projects/projects/personal.md")"
 assert_line "$expected_status" "$output"
 assert_line "$expected_candidate" "$output"
 grep -Fq -- '--state open' "$tmp/provider.log"

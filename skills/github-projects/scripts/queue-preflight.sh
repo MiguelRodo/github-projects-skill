@@ -172,8 +172,8 @@ add_scope() {
   fi
   [ -n "$route_label" ] || route_label="-"
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$repository" "$queue_label" "$route_label" "$sub_label" "$project_identity" "$sub_key" "$root" >>"$scopes"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$repository" "$queue_label" "$route_label" "$sub_label" "$project_identity" "$sub_key" "$root" "$contract" >>"$scopes"
 }
 
 for root in "$workspace"/*; do
@@ -237,7 +237,7 @@ fi
 
 sort -u "$scopes" -o "$scopes"
 
-while IFS=$'\t' read -r repository queue_label route_label sub_label project_identity sub_key root; do
+while IFS=$'\t' read -r repository queue_label route_label sub_label project_identity sub_key root contract; do
   args=(issue list --repo "$repository" --state open --label "$queue_label" --limit 1000 --json number,url)
   [ "$route_label" = "-" ] || args+=(--label "$route_label")
   [ "$sub_label" = "-" ] || args+=(--label "$sub_label")
@@ -253,8 +253,8 @@ while IFS=$'\t' read -r repository queue_label route_label sub_label project_ide
 
   while IFS=$'\t' read -r number url; do
     [ -n "$number" ] || continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$repository" "$number" "$url" "$project_identity" "$sub_key" "$root" >>"$candidates"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$repository" "$number" "$url" "$project_identity" "$sub_key" "$root" "$contract" >>"$candidates"
   done <<<"$found"
 done <"$scopes"
 
@@ -269,7 +269,7 @@ candidate_count="$(wc -l <"$tmp/unique")"
   die "queue preflight found $candidate_count candidates; refine the selectors"
 
 printf 'status\tready\n'
-while IFS=$'\t' read -r repository number url project_identity sub_key root; do
-  printf 'candidate\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$repository" "$number" "$url" "$project_identity" "$sub_key" "$root"
+while IFS=$'\t' read -r repository number url project_identity sub_key root contract; do
+  printf 'candidate\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$repository" "$number" "$url" "$project_identity" "$sub_key" "$root" "$contract"
 done <"$tmp/unique"
