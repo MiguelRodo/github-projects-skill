@@ -159,6 +159,28 @@ For every selector:
 
 When no selector is supplied, retain the ordinary cross-repository behaviour above.
 
+### Deterministic preflight
+
+Before launching an agent for local queue processing, a caller may run
+`scripts/queue-preflight.sh --workspace WORKSPACE` with the same optional
+`--repo`, `--project` and `--subproject` selectors. The preflight is read-only:
+it validates managed local contracts, derives only contract-declared routing and
+sub-project labels, and lists matching open queue issues without creating labels
+or changing GitHub state.
+
+Its tab-separated output begins with exactly one status row:
+
+- `status ready`: one or more following `candidate` rows identify the bounded
+  queue items and resolved Project/sub-project scope;
+- `status empty`: managed scope matched but no open queue issue matched;
+- `status unmatched`: the selector combination matched no managed queue scope.
+
+A caller should avoid model startup for `empty` and `unmatched`. For `ready`,
+pass the candidate identities to the agent so it can apply the authority,
+administrative-only, stale-state and independent-readback rules below without
+rediscovering the workspace. Preflight discovery itself never establishes
+mutation authority.
+
 ## Trusted administrative items
 
 For a queue issue that satisfies the applicable authority rule above, do not ask the operator for a routine preview or confirmation.
