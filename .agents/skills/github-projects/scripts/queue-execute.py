@@ -82,6 +82,7 @@ def receipt(
     operations: list[dict[str, Any]],
     completion: dict[str, Any] | None = None,
     reason: str | None = None,
+    preservation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     value: dict[str, Any] = {
         "status": status,
@@ -99,6 +100,8 @@ def receipt(
     }
     if completion is not None:
         value["completion"] = completion
+    if preservation is not None:
+        value["preservation"] = preservation
     if reason is not None:
         value["reason"] = reason
     return value
@@ -107,6 +110,26 @@ def receipt(
 def emit(value: dict[str, Any]) -> int:
     print(json.dumps(value, separators=(",", ":"), sort_keys=True))
     return 0
+
+
+def issue_snapshot(issue: dict[str, Any]) -> dict[str, Any]:
+    milestone = issue.get("milestone")
+    return {
+        "title": issue.get("title"),
+        "body": issue.get("body"),
+        "state": issue.get("state"),
+        "labels": sorted(
+            item.get("name")
+            for item in issue.get("labels", [])
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        ),
+        "assignees": sorted(
+            item.get("login")
+            for item in issue.get("assignees", [])
+            if isinstance(item, dict) and isinstance(item.get("login"), str)
+        ),
+        "milestone": milestone.get("number") if isinstance(milestone, dict) else None,
+    }
 
 
 def project_command(
@@ -149,7 +172,13 @@ def set_parent(gh: str, repository: str, issue: int, parent: int) -> tuple[dict[
     if not isinstance(child_id, int):
         return op("issue.parent.set", "read_failed", error="child REST database ID missing"), "child REST database ID missing"
     if any(item.get("id") == child_id for item in before):
-        return op("issue.parent.set", "no_change", parent=parent, childId=child_id), None
+        return op(
+            "issue.parent.set",
+            "no_change",
+            parent=parent,
+            childId=child_id,
+            preservation={"existingSubIssues": "verified"},
+        ), None
 
     proc = run(
         gh,
@@ -163,6 +192,8 @@ def set_parent(gh: str, repository: str, issue: int, parent: int) -> tuple[dict[
         f"repos/{repository}/issues/{parent}/sub_issues",
         "-F",
         f"sub_issue_id={child_id}",
+        "-F",
+        "replace_parent=true",
     )
     if proc.returncode:
         error = proc.stderr.strip() or proc.stdout.strip() or "parent mutation failed"
@@ -180,9 +211,19 @@ def set_parent(gh: str, repository: str, issue: int, parent: int) -> tuple[dict[
         )
     except (RuntimeError, json.JSONDecodeError) as exc:
         return op("issue.parent.set", "verification_failed", error=str(exc)), str(exc)
-    if not any(item.get("id") == child_id for item in after):
+    after_ids = {item.get("id") for item in after}
+    before_ids = {item.get("id") for item in before}
+    if child_id not in after_ids:
         return op("issue.parent.set", "verification_failed", error="parent readback mismatch"), "parent readback mismatch"
-    return op("issue.parent.set", "applied_verified", parent=parent, childId=child_id), None
+    if not before_ids <= after_ids:
+        return op("issue.parent.set", "verification_failed", error="existing sub-issue relationship changed"), "existing sub-issue relationship changed"
+    return op(
+        "issue.parent.set",
+        "applied_verified",
+        parent=parent,
+        childId=child_id,
+        preservation={"existingSubIssues": "verified"},
+    ), None
 
 
 def ensure_comment(gh: str, repository: str, issue: int, body: str) -> tuple[dict[str, Any], str | None]:
@@ -294,6 +335,26 @@ def main() -> int:
     if not project_number.isdigit():
         return emit(receipt(classified, "blocked", [], reason="queue.execute.contract_invalid"))
 
+    try:
+        baseline_issue = gh_json(args.gh, "api", f"repos/{args.repository}/issues/{args.issue}")
+    except (RuntimeError, json.JSONDecodeError) as exc:
+        value = receipt(classified, "blocked", [], reason="queue.execute.baseline_read_failed")
+        value["error"] = str(exc)
+        return emit(value)
+    baseline_labels = {
+        item.get("name")
+        for item in baseline_issue.get("labels", [])
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    if baseline_issue.get("state") != "open" or queue_label not in baseline_labels:
+        return emit(receipt(
+            classified,
+            "blocked",
+            [],
+            reason="queue.execute.baseline_state_changed",
+        ))
+    baseline_snapshot = issue_snapshot(baseline_issue)
+
     actions = classified["actions"]
     operations: list[dict[str, Any]] = []
     if any(action["kind"] == "project.membership.add" for action in actions):
@@ -404,6 +465,14 @@ def main() -> int:
         )
         value["error"] = str(exc)
         return emit(value)
+    if issue_snapshot(fresh_issue) != baseline_snapshot:
+        return emit(receipt(
+            classified,
+            "partial_failure",
+            operations,
+            reason="queue.execute.preservation_failed",
+            preservation={"issueState": "mismatch"},
+        ))
     labels = {
         item.get("name")
         for item in fresh_issue.get("labels", [])
@@ -456,6 +525,10 @@ def main() -> int:
             operations,
             completion={"comment": comment, "queue": {"status": "mutation_failed", "error": error}},
             reason="queue.execute.completion_failed",
+            preservation={
+                "issueState": "verified",
+                "projectScalarFields": "verified_by_projects_cli" if dimensions else "not_applicable",
+            },
         ))
 
     return emit(receipt(
@@ -464,7 +537,15 @@ def main() -> int:
         operations,
         completion={
             "comment": comment,
-            "queue": {"status": "applied_verified", "evidence": completion_result},
+            "queue": {
+                "status": "applied_verified",
+                "evidence": completion_result,
+                "preservation": "verified_by_projects_cli",
+            },
+        },
+        preservation={
+            "issueState": "verified",
+            "projectScalarFields": "verified_by_projects_cli" if dimensions else "not_applicable",
         },
     ))
 
