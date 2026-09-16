@@ -310,12 +310,12 @@ For `needs_agent`, the executor attaches `agentContext` using the versioned `git
 - the exact repository/issue target and checked local contract path/root;
 - the classifier or executor reason that caused fallback;
 - the authenticated GitHub login used for the queue decision;
-- a fresh issue snapshot limited to title, body, state, labels, assignees, milestone and author;
+- a fresh issue snapshot limited to title, bounded body, state, labels, assignees, milestone and author;
 - the resolved Project/queue identity from the checked contract;
-- only comments beginning with `PJ implementation authority:`, including author and edit timestamps;
+- at most the 20 latest comments beginning with `PJ implementation authority:`, with bounded bodies, author/edit timestamps and explicit truncation metadata;
 - an explicit `github_issue_project_administration_only` effect boundary.
 
-The agent may re-read that exact issue and exact checked contract when stale state must be verified before a write. It should not rediscover the workspace, broaden to unrelated repositories/Projects, or treat other accessible data as implicit authority. The handoff exists to eliminate that discovery step.
+If bounded text was truncated and is material to interpretation, the agent may re-read only that exact issue/comment. The agent may also re-read that exact issue and exact checked contract when stale state must be verified before a write. It should not rediscover the workspace, broaden to unrelated repositories/Projects, or treat other accessible data as implicit authority. The handoff exists to eliminate that discovery step.
 
 Classifier `needs_agent` reasons are fallback-eligible, including legacy or missing structured authority, malformed/unsupported envelopes that remain human-interpretable, edited/untrusted authority requiring operator judgement, unsupported deterministic actions, contract values needing interpretation and non-deterministic parent requests. Executor-level `needs_agent` reasons such as an unavailable `projects` backend, a conflicting otherwise-valid plan, or a field location outside the deterministic executor are handled the same way.
 
