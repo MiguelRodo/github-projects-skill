@@ -28,6 +28,13 @@ grep -Fq 'delegate the substantive task to another coding agent' "$reference"
 grep -Fq 'Substantive work is never queue-executable' "$reference"
 grep -Fq 'separate explicit non-queue invocation' "$reference"
 grep -Fq 'Chat implementation label | pj:implement-chat' "$contract"
+grep -Fq '### Optional queue selectors' "$reference"
+grep -Fq 'When more than one selector is supplied, apply their intersection.' "$reference"
+grep -Fq "resolved contract's declared `Project key`" "$reference"
+grep -Fq 'single-Project contract without a `Project key` row' "$reference"
+grep -Fq 'sub-project vocabulary' "$reference"
+grep -Fq 'Search only **open** issues carrying the configured queue label.' "$reference"
+grep -Fq 'Closed issues are never queue candidates.' "$reference"
 
 # The boundary is an effect boundary, not a request-type boundary.
 grep -Fq 'The boundary is an effect boundary' "$reference"
