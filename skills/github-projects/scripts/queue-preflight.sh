@@ -233,7 +233,7 @@ while IFS=$'\t' read -r repository queue_label route_label sub_label project_ide
   [ "$route_label" = "-" ] || args+=(--label "$route_label")
   [ "$sub_label" = "-" ] || args+=(--label "$sub_label")
 
-  if ! found="$(gh "${args[@]}" --jq '.[] | [.number, .url] | @tsv' 2>&1)"; then
+  if ! found="$("$gh_bin" "${args[@]}" --jq '.[] | [.number, .url] | @tsv' 2>&1)"; then
     die "GitHub queue read failed for $repository: $found"
   fi
 
