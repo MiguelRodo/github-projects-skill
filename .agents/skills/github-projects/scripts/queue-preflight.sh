@@ -237,7 +237,8 @@ fi
 
 sort -u "$scopes" -o "$scopes"
 
-while IFS=
+while IFS="	" read -r repository queue_label route_label sub_label project_identity sub_key root contract; do
+  args=(issue list --repo "$repository" --state open --label "$queue_label" --limit 1000 --json number,url)
   [ "$route_label" = "-" ] || args+=(--label "$route_label")
   [ "$sub_label" = "-" ] || args+=(--label "$sub_label")
 
