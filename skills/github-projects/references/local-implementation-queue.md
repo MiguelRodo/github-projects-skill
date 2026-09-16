@@ -129,14 +129,33 @@ Queue mode is cross-repository. From the shared workspace:
 
 Do not scan arbitrary unrelated repositories merely because they are accessible to the GitHub account. The local `.projects` contracts define the managed queue-discovery set.
 
-### Optional repository selector
+### Optional queue selectors
 
-A queue-processing request may include one optional repository selector to narrow step 2 before label creation or issue search.
+A queue-processing request may include optional repository, Project and sub-project selectors. Each selector narrows the managed queue-discovery set. When more than one selector is supplied, apply their intersection. Apply selectors as early as the checked local contracts allow, before queue-label creation or issue search for scopes that have already been ruled out.
+
+Repository selector:
 
 - A selector containing `/`, such as `example-user/issues`, matches that exact managed `owner/repo` value case-insensitively.
 - A bare repository name, such as `issues`, matches every managed issue repository whose repository-name component is exactly `issues`, regardless of owner.
-- Never broaden the selector into fuzzy or substring matching and never use it to scan repositories outside the managed set discovered from local contracts.
-- If the selector matches no managed issue repository, stop without mutation and report the unmatched selector.
+
+Project selector:
+
+- Match case-insensitively and exactly against the resolved contract's declared `Project key` when present.
+- For a single-Project contract without a `Project key` row, use its exact declared `Project title` as the human selector identity.
+- For a dispatcher, match an exact route `Project key` and resolve only that child contract before continuing queue discovery.
+
+Sub-project selector:
+
+- Match case-insensitively and exactly against a key declared in the resolved Project contract's sub-project vocabulary, where the provider label is `subproject:<key>`.
+- A sub-project selector may be supplied without a Project selector. Resolve it only through managed Project contracts and process every managed Project scope that declares that exact sub-project key.
+- Do not treat an arbitrary existing `subproject:*` label as configured merely because it exists on GitHub.
+
+For every selector:
+
+- Never broaden exact matching into fuzzy or substring matching and never use a selector to scan repositories, Projects or labels outside the managed set discovered from local contracts.
+- Search only **open** issues carrying the configured queue label. Closed issues are never queue candidates.
+- If the supplied selector combination matches no managed scope, stop without mutation and report the unmatched selector combination.
+- A selector narrows discovery only; it does not change queue authority, trust, effect boundaries or completion rules.
 
 When no selector is supplied, retain the ordinary cross-repository behaviour above.
 
