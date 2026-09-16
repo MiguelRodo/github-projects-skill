@@ -82,7 +82,11 @@ if method == "GET" and endpoint == "repos/octo/issues/issues/42":
     print(json.dumps({
         "id": 4200,
         "title": "changed" if state.get("tampered") else "original",
-        "body": "body",
+        "body": (
+            "Please organise this as Priority P1; leave the substantive task untouched."
+            if scenario == "no_authority"
+            else "body"
+        ),
         "state": "open" if state["open"] else "closed",
         "labels": [{"name": "pj:implement-chat"}] if state["queued"] else [],
         "assignees": [],
@@ -128,6 +132,10 @@ if method == "GET" and endpoint.startswith("repos/octo/issues/issues/42/comments
         envelope["spec"]["actions"].append(
             {"kind": "dimension.value.set", "dimension": "priority", "value": "P2"}
         )
+    if scenario == "unsupported":
+        envelope["spec"]["actions"].append(
+            {"kind": "issue.label.add", "label": "triage"}
+        )
     if scenario == "needs_agent":
         authority = "PJ implementation authority: please sort this out."
     else:
@@ -136,7 +144,7 @@ if method == "GET" and endpoint.startswith("repos/octo/issues/issues/42/comments
             + json.dumps(envelope)
             + "\n```"
         )
-    comments = [{
+    comments = [] if scenario == "no_authority" else [{
         "id": 1,
         "body": authority,
         "user": {"login": "octocat"},
@@ -394,6 +402,20 @@ def main() -> None:
         assert receipt["status"] == "needs_agent", receipt
         assert receipt["target"] == {"repository": "octo/issues", "issue": 42}
         assert_agent_context(receipt, tmp, "queue.agent.legacy_authority")
+        assert state["queued"] and gh_writes == [] and project_writes == []
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "no_authority")
+        assert receipt["status"] == "needs_agent", receipt
+        assert receipt["reason"] == "queue.agent.structured_authority_missing"
+        context = receipt["agentContext"]
+        assert context["authorityComments"] == []
+        assert context["issue"]["body"].startswith("Please organise this as Priority P1")
+        assert state["queued"] and gh_writes == [] and project_writes == []
+
+        receipt, state, gh_writes, project_writes = execute(tmp, "unsupported")
+        assert receipt["status"] == "needs_agent", receipt
+        assert receipt["reason"] == "queue.agent.action_not_deterministic"
+        assert_agent_context(receipt, tmp, "queue.agent.action_not_deterministic")
         assert state["queued"] and gh_writes == [] and project_writes == []
 
         receipt, state, gh_writes, project_writes = execute(tmp, "blocked")
