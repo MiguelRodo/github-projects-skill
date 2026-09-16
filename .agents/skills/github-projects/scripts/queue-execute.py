@@ -13,6 +13,7 @@ from typing import Any
 
 from queue_agent import build_agent_context
 from queue_common import flatten_pages, gh_json, json_command, run, table_value
+from queue_review import build_review_context
 
 
 def field_locations(text: str) -> dict[str, tuple[str, str]]:
@@ -52,6 +53,7 @@ def receipt(
     preservation: dict[str, Any] | None = None,
     remaining: list[dict[str, Any]] | None = None,
     agent_context: dict[str, Any] | None = None,
+    review_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     planned = classification.get("actions", [])
     value: dict[str, Any] = {
@@ -75,6 +77,8 @@ def receipt(
         value["preservation"] = preservation
     if agent_context is not None:
         value["agentContext"] = agent_context
+    if review_context is not None:
+        value["reviewContext"] = review_context
     if reason is not None:
         value["reason"] = reason
     return value
@@ -362,11 +366,31 @@ def main() -> int:
 
     review = classified.get("review")
     if isinstance(review, dict) and review.get("timing") == "before":
+        try:
+            context = build_review_context(
+                args.gh,
+                args.contract,
+                args.root,
+                args.repository,
+                args.issue,
+                classified,
+                "before",
+            )
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            value = receipt(
+                classified,
+                "blocked",
+                [],
+                reason="queue.execute.review_context_failed",
+            )
+            value["error"] = str(exc)
+            return emit(value)
         return emit(receipt(
             classified,
             "review_required",
             [],
             reason="queue.execute.before_review_required",
+            review_context=context,
         ))
 
     if shutil.which(args.projects) is None:
@@ -549,6 +573,55 @@ def main() -> int:
         if guard_reason == "queue.execute.preservation_failed":
             extra["preservation"] = {"issueState": "mismatch"}
         return finish("partial_failure", guard_reason, **extra)
+
+    verified_preservation = {
+        "issueState": "verified",
+        "projectScalarFields": (
+            "verified_by_projects_cli" if dimensions else "not_applicable"
+        ),
+    }
+    if isinstance(review, dict) and review.get("timing") == "after":
+        execution_receipt = receipt(
+            classified,
+            "applied_verified",
+            operations,
+            completion={"status": "pending_review"},
+            preservation=verified_preservation,
+            remaining=[],
+        )
+        try:
+            context = build_review_context(
+                args.gh,
+                args.contract,
+                args.root,
+                args.repository,
+                args.issue,
+                classified,
+                "after",
+                execution_receipt=execution_receipt,
+            )
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            value = receipt(
+                classified,
+                "partial_failure",
+                operations,
+                completion={"status": "pending_review"},
+                preservation=verified_preservation,
+                reason="queue.execute.review_context_failed",
+                remaining=[],
+            )
+            value["error"] = str(exc)
+            return emit(value)
+        return emit(receipt(
+            classified,
+            "review_required",
+            operations,
+            completion={"status": "pending_review"},
+            preservation=verified_preservation,
+            reason="queue.execute.after_review_required",
+            remaining=[],
+            review_context=context,
+        ))
 
     summary = f"PJ deterministic administration: verified {len(operations)} operation group(s)."
     comment, error = ensure_comment(args.gh, args.repository, args.issue, summary)
