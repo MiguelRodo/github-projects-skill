@@ -237,7 +237,8 @@ fi
 
 sort -u "$scopes" -o "$scopes"
 
-while IFS=  args=(issue list --repo "$repository" --state open --label "$queue_label" --limit 1000 --json number,url)
+while IFS=
+  args=(issue list --repo "$repository" --state open --label "$queue_label" --limit 1000 --json number,url)
   [ "$route_label" = "-" ] || args+=(--label "$route_label")
   [ "$sub_label" = "-" ] || args+=(--label "$sub_label")
 
@@ -268,7 +269,8 @@ candidate_count="$(wc -l <"$tmp/unique")"
   die "queue preflight found $candidate_count candidates; refine the selectors"
 
 printf 'status\tready\n'
-while IFS=done <"$tmp/unique"
+while IFS=
+done <"$tmp/unique"
 \t' read -r repository queue_label route_label sub_label project_identity sub_key root contract; do
   args=(issue list --repo "$repository" --state open --label "$queue_label" --limit 1000 --json number,url)
   [ "$route_label" = "-" ] || args+=(--label "$route_label")
