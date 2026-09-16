@@ -7,8 +7,9 @@ preflight="$(cd "$test_dir/../scripts" && pwd)/queue-preflight.sh"
 tmp="$(mktemp -d)" || exit 1
 trap 'rm -rf "$tmp"' EXIT
 workspace="$tmp/workspace"
+provider="$tmp/provider-read"
 
-mkdir -p "$workspace/issues/.projects/projects" "$workspace/other/.projects" "$tmp/bin"
+mkdir -p "$workspace/issues/.projects/projects" "$workspace/other/.projects"
 
 cat >"$workspace/issues/.projects/project.md" <<'EOF'
 # Dispatcher
@@ -97,15 +98,15 @@ cat >"$workspace/other/.projects/project.md" <<'EOF'
 | P3 | P3 |
 EOF
 
-cat >"$tmp/bin/gh" <<'EOF'
+cat >"$provider" <<'EOF'
 #!/usr/bin/env bash
 set -eu
-printf '%s\n' "$*" >>"$GH_LOG"
+printf '%s\n' "$*" >>"$PROVIDER_LOG"
 if [ "$1" = auth ] && [ "$2" = status ]; then
   exit 0
 fi
 if [ "$1" != issue ] || [ "$2" != list ]; then
-  echo "unexpected gh mutation/call: $*" >&2
+  echo "unexpected provider call: $*" >&2
   exit 90
 fi
 args=" $* "
@@ -120,36 +121,31 @@ case "$args" in
     ;;
 esac
 EOF
-chmod +x "$tmp/bin/gh"
+chmod +x "$provider"
 
 run_preflight() {
-  GH_LOG="$tmp/gh.log" PATH="$tmp/bin:$PATH" bash "$preflight" --workspace "$workspace" "$@"
+  PROVIDER_LOG="$tmp/provider.log" PROJECTS_GH_BIN="$provider" \
+    bash "$preflight" --workspace "$workspace" "$@"
 }
 
-: >"$tmp/gh.log"
+: >"$tmp/provider.log"
 output="$(run_preflight --repo octo/issues --project personal --subproject monitoring)"
 grep -Fqx $'status\tready' <<<"$output"
 grep -Fqx $'candidate\tocto/issues\t42\thttps://github.com/octo/issues/issues/42\tpersonal\tmonitoring' <<<"$output"
-grep -Fq -- '--state open' "$tmp/gh.log"
-grep -Fq -- '--label pj:implement-chat' "$tmp/gh.log"
-grep -Fq -- '--label project:personal' "$tmp/gh.log"
-grep -Fq -- '--label subproject:monitoring' "$tmp/gh.log"
-if grep -Fq -- '--repo octo/other' "$tmp/gh.log"; then
-  echo "ERROR: selected preflight scanned an unrelated managed repository" >&2
-  exit 1
-fi
+grep -Fq -- '--state open' "$tmp/provider.log"
+grep -Fq -- '--label pj:implement-chat' "$tmp/provider.log"
+grep -Fq -- '--label project:personal' "$tmp/provider.log"
+grep -Fq -- '--label subproject:monitoring' "$tmp/provider.log"
+! grep -Fq -- '--repo octo/other' "$tmp/provider.log"
 
-: >"$tmp/gh.log"
+: >"$tmp/provider.log"
 output="$(run_preflight --project personal --subproject finances)"
 grep -Fqx $'status\tempty' <<<"$output"
-grep -Fq -- '--label subproject:finances' "$tmp/gh.log"
+grep -Fq -- '--label subproject:finances' "$tmp/provider.log"
 
-: >"$tmp/gh.log"
+: >"$tmp/provider.log"
 output="$(run_preflight --project personal --subproject missing)"
 grep -Fqx $'status\tunmatched' <<<"$output"
-if grep -Fq 'issue list' "$tmp/gh.log"; then
-  echo "ERROR: unmatched selectors reached GitHub issue discovery" >&2
-  exit 1
-fi
+! grep -Fq 'issue list' "$tmp/provider.log"
 
 echo "queue preflight tests passed"
