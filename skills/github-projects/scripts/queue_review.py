@@ -7,6 +7,7 @@ from typing import Any
 from queue_agent import build_agent_context
 
 VERSION = "github-projects/queue-review-context/v1"
+RESULT_VERSION = "github-projects/queue-review-result/v1"
 FULL_FOCUS = [
     "authority",
     "scope",
@@ -37,6 +38,89 @@ def resolve_review_plan(
         "before": before,
         "after": after,
     }
+
+
+
+
+def validate_review_result(
+    value: Any,
+    classification: dict[str, Any],
+    timing: str,
+) -> None:
+    """Verify a review approval without allowing it to broaden authority."""
+    if timing not in {"before", "after"}:
+        raise ValueError(f"unsupported review timing: {timing}")
+    if not isinstance(value, dict) or set(value) != {"apiVersion", "outcome", "context"}:
+        raise ValueError("review result has an invalid shape")
+    if value["apiVersion"] != RESULT_VERSION or value["outcome"] != "approved":
+        raise ValueError("review result is not an approved v1 result")
+
+    context = value["context"]
+    if not isinstance(context, dict):
+        raise ValueError("review result context is missing")
+    required = {
+        "apiVersion",
+        "effectBoundary",
+        "mode",
+        "timing",
+        "focus",
+        "note",
+        "noteMayAuthoriseMutations",
+        "authorisedActions",
+        "plan",
+        "agentContext",
+    }
+    allowed = required | {"executionReceipt"}
+    if not required <= set(context) <= allowed:
+        raise ValueError("review context has an invalid shape")
+    if (
+        context["apiVersion"] != VERSION
+        or context["effectBoundary"] != "github_issue_project_administration_only"
+        or context["mode"] != "review_only"
+        or context["timing"] != timing
+        or context["noteMayAuthoriseMutations"] is not False
+        or context["authorisedActions"] != classification.get("actions", [])
+    ):
+        raise ValueError("review result does not match the current authorised plan")
+
+    review = classification.get("review")
+    if not isinstance(review, dict) or review.get("timing") != timing:
+        raise ValueError("review result does not match the current item review")
+    if context["focus"] != review.get("focus") or context["note"] != review.get("note"):
+        raise ValueError("review result focus or note does not match current authority")
+
+    plan = context["plan"]
+    if (
+        not isinstance(plan, dict)
+        or plan.get("itemRequired") is not True
+        or plan.get("itemTiming") != timing
+        or plan.get(timing) is not True
+    ):
+        raise ValueError("review result policy does not match current authority")
+
+    agent = context["agentContext"]
+    target = agent.get("target") if isinstance(agent, dict) else None
+    if (
+        not isinstance(target, dict)
+        or target.get("repository") != classification.get("repository")
+        or target.get("issue") != classification.get("issue")
+    ):
+        raise ValueError("review result target does not match the current item")
+
+    execution = context.get("executionReceipt")
+    if timing == "before":
+        if execution is not None:
+            raise ValueError("before-review result must not contain an execution receipt")
+        return
+
+    if (
+        not isinstance(execution, dict)
+        or execution.get("status") != "applied_verified"
+        or execution.get("planned") != classification.get("actions", [])
+        or execution.get("remaining") != []
+        or execution.get("completion") != {"status": "pending_review"}
+    ):
+        raise ValueError("after-review result lacks a verified matching execution receipt")
 
 
 def build_review_context(
