@@ -38,11 +38,7 @@ def build_agent_context(
     decision: dict[str, Any],
 ) -> dict[str, Any]:
     """Return exact-target context without broad workspace discovery."""
-    root_path = Path(root).resolve()
     checked_contract = Path(contract_path).resolve()
-    if root_path != checked_contract and root_path not in checked_contract.parents:
-        raise RuntimeError("checked contract is outside the resolved repository root")
-
     contract = checked_contract.read_text(encoding="utf-8")
     queue_label = table_value(contract, "Chat implementation label") or "pj:implement-chat"
     contract_repository = table_value(contract, "Issue repository")
