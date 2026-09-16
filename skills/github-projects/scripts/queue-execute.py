@@ -109,10 +109,17 @@ def emit(value: dict[str, Any]) -> int:
     return 0
 
 
-def project_base(projects: str, root: str, repository: str, project_number: str) -> list[str]:
+def project_command(
+    projects: str,
+    subcommand: str,
+    root: str,
+    repository: str,
+    project_number: str,
+) -> list[str]:
     return [
         projects,
         "project",
+        subcommand,
         "--root",
         root,
         "--repo",
@@ -277,7 +284,9 @@ def main() -> int:
     try:
         contract = Path(args.contract).read_text(encoding="utf-8")
     except OSError as exc:
-        return emit(receipt(classified, "blocked", [], reason=f"queue.execute.contract_unavailable:{exc}"))
+        value = receipt(classified, "blocked", [], reason="queue.execute.contract_unavailable")
+        value["error"] = str(exc)
+        return emit(value)
 
     project_number = table_value(contract, "Project number")
     queue_label = table_value(contract, "Chat implementation label") or "pj:implement-chat"
@@ -287,13 +296,12 @@ def main() -> int:
 
     actions = classified["actions"]
     operations: list[dict[str, Any]] = []
-    base = project_base(args.projects, args.root, args.repository, project_number)
-
     if any(action["kind"] == "project.membership.add" for action in actions):
         result, error = command_json(
-            base
+            project_command(
+                args.projects, "item-add", args.root, args.repository, project_number
+            )
             + [
-                "item-add",
                 "--issue",
                 str(args.issue),
                 "--apply",
@@ -332,9 +340,10 @@ def main() -> int:
             flags.extend([f"--{dimension}", action["value"]])
 
         plan, error = command_json(
-            base
+            project_command(
+                args.projects, "item-edit", args.root, args.repository, project_number
+            )
             + [
-                "item-edit",
                 "--issue",
                 str(args.issue),
                 *flags,
@@ -360,9 +369,10 @@ def main() -> int:
             operations.append(op("dimension.value.set", "no_change", actions=dimensions, evidence=plan))
         else:
             result, error = command_json(
-                base
+                project_command(
+                    args.projects, "item-edit", args.root, args.repository, project_number
+                )
                 + [
-                    "item-edit",
                     "--issue",
                     str(args.issue),
                     *flags,
@@ -386,7 +396,14 @@ def main() -> int:
     try:
         fresh_issue = gh_json(args.gh, "api", f"repos/{args.repository}/issues/{args.issue}")
     except (RuntimeError, json.JSONDecodeError) as exc:
-        return emit(receipt(classified, "partial_failure", operations, reason=f"queue.execute.completion_read_failed:{exc}"))
+        value = receipt(
+            classified,
+            "partial_failure",
+            operations,
+            reason="queue.execute.completion_read_failed",
+        )
+        value["error"] = str(exc)
+        return emit(value)
     labels = {
         item.get("name")
         for item in fresh_issue.get("labels", [])
