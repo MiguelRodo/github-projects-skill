@@ -13,7 +13,7 @@ from typing import Any
 
 from queue_agent import build_agent_context
 from queue_common import flatten_pages, gh_json, json_command, run, table_value
-from queue_review import build_review_context
+from queue_review import build_review_context, validate_review_result
 
 
 def field_locations(text: str) -> dict[str, tuple[str, str]]:
@@ -315,6 +315,7 @@ def main() -> int:
     parser.add_argument("--issue", required=True, type=int)
     parser.add_argument("--gh", default=os.environ.get("PROJECTS_GH_BIN", "gh"))
     parser.add_argument("--projects", default=os.environ.get("PROJECTS_BIN", "projects"))
+    parser.add_argument("--review-result", help="JSON review approval for a prior reviewContext")
     args = parser.parse_args()
 
     classifier_path = Path(__file__).with_name("queue-classify.py")
@@ -365,33 +366,56 @@ def main() -> int:
         ))
 
     review = classified.get("review")
-    if isinstance(review, dict) and review.get("timing") == "before":
+    review_result: Any = None
+    review_result_error: str | None = None
+    if args.review_result:
         try:
-            context = build_review_context(
-                args.gh,
-                args.contract,
-                args.root,
-                args.repository,
-                args.issue,
-                classified,
-                "before",
-            )
-        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            review_result = json.loads(Path(args.review_result).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            review_result_error = str(exc)
+
+    if isinstance(review, dict) and review.get("timing") == "before":
+        approved = False
+        if review_result_error is None and review_result is not None:
+            try:
+                validate_review_result(review_result, classified, "before")
+                approved = True
+            except ValueError as exc:
+                review_result_error = str(exc)
+        if not approved:
+            try:
+                context = build_review_context(
+                    args.gh,
+                    args.contract,
+                    args.root,
+                    args.repository,
+                    args.issue,
+                    classified,
+                    "before",
+                )
+            except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                value = receipt(
+                    classified,
+                    "blocked",
+                    [],
+                    reason="queue.execute.review_context_failed",
+                )
+                value["error"] = str(exc)
+                return emit(value)
             value = receipt(
                 classified,
-                "blocked",
+                "review_required",
                 [],
-                reason="queue.execute.review_context_failed",
+                reason=(
+                    "queue.execute.review_result_invalid"
+                    if review_result_error is not None
+                    else "queue.execute.before_review_required"
+                ),
+                review_context=context,
             )
-            value["error"] = str(exc)
+            if review_result_error is not None:
+                value["error"] = review_result_error
             return emit(value)
-        return emit(receipt(
-            classified,
-            "review_required",
-            [],
-            reason="queue.execute.before_review_required",
-            review_context=context,
-        ))
 
     if shutil.which(args.projects) is None:
         return emit(agent_fallback_receipt(
@@ -581,47 +605,62 @@ def main() -> int:
         ),
     }
     if isinstance(review, dict) and review.get("timing") == "after":
-        execution_receipt = receipt(
-            classified,
-            "applied_verified",
-            operations,
-            completion={"status": "pending_review"},
-            preservation=verified_preservation,
-            remaining=[],
-        )
-        try:
-            context = build_review_context(
-                args.gh,
-                args.contract,
-                args.root,
-                args.repository,
-                args.issue,
+        approved = False
+        if review_result_error is None and review_result is not None:
+            try:
+                validate_review_result(review_result, classified, "after")
+                approved = True
+            except ValueError as exc:
+                review_result_error = str(exc)
+        if not approved:
+            execution_receipt = receipt(
                 classified,
-                "after",
-                execution_receipt=execution_receipt,
-            )
-        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
-            value = receipt(
-                classified,
-                "partial_failure",
+                "applied_verified",
                 operations,
                 completion={"status": "pending_review"},
                 preservation=verified_preservation,
-                reason="queue.execute.review_context_failed",
                 remaining=[],
             )
-            value["error"] = str(exc)
+            try:
+                context = build_review_context(
+                    args.gh,
+                    args.contract,
+                    args.root,
+                    args.repository,
+                    args.issue,
+                    classified,
+                    "after",
+                    execution_receipt=execution_receipt,
+                )
+            except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                value = receipt(
+                    classified,
+                    "partial_failure",
+                    operations,
+                    completion={"status": "pending_review"},
+                    preservation=verified_preservation,
+                    reason="queue.execute.review_context_failed",
+                    remaining=[],
+                )
+                value["error"] = str(exc)
+                return emit(value)
+            value = receipt(
+                classified,
+                "review_required",
+                operations,
+                completion={"status": "pending_review"},
+                preservation=verified_preservation,
+                reason=(
+                    "queue.execute.review_result_invalid"
+                    if review_result_error is not None
+                    else "queue.execute.after_review_required"
+                ),
+                remaining=[],
+                review_context=context,
+            )
+            if review_result_error is not None:
+                value["error"] = review_result_error
             return emit(value)
-        return emit(receipt(
-            classified,
-            "review_required",
-            operations,
-            completion={"status": "pending_review"},
-            preservation=verified_preservation,
-            reason="queue.execute.after_review_required",
-            remaining=[],
-            review_context=context,
-        ))
 
     summary = f"PJ deterministic administration: verified {len(operations)} operation group(s)."
     comment, error = ensure_comment(args.gh, args.repository, args.issue, summary)
