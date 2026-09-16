@@ -250,21 +250,24 @@ The one-line JSON receipt contains:
 - the classifier outcome and original planned actions;
 - `operations`, each with `applied_verified`, `no_change`, `read_failed`, `mutation_failed` or `verification_failed`;
 - `remaining`, the authorised actions not yet verified when execution stops;
-- `agentContext` only when the final outcome is `needs_agent`, containing the bounded exact-target handoff described below;
+- `agentContext` only when the final outcome is `needs_agent`, containing the bounded exact-target fallback handoff described below;
+- `reviewContext` only when a mandatory item-level review is ready for an agent, keeping review separate from fallback;
 - `preservation` when independent preservation checks completed;
 - `completion` when the completion comment and queue-label/state mutation were attempted;
 - the original item-level `review` directive for later agent review.
 
-A `before` review directive produces `review_required` and zero writes. An `after` directive stays attached to the receipt.
+A `before` review directive produces `review_required` and zero writes. An `after` directive allows the deterministic administrative actions and independent readback to run first, then produces `review_required` with `completion.status=pending_review`. While after-review is pending, the queue label remains and a temporary handoff remains open. The review packet includes the verified execution receipt so the agent reviews what actually happened.
 
-Queue completion happens only after every authorised operation and preservation check succeeds. The executor writes one concise verified-administration comment, removes the queue label, and closes the issue only for `temporary_handoff`. An `existing_task` remains open.
+Queue completion happens only after every authorised operation, preservation check and mandatory item-level review succeeds. Without pending review, the executor writes one concise verified-administration comment, removes the queue label, and closes the issue only for `temporary_handoff`. An `existing_task` remains open.
 
 Stable executor reasons include:
 
 | Reason | Meaning |
 | --- | --- |
 | `queue.execute.classifier_failed` | classifier did not produce usable JSON |
-| `queue.execute.before_review_required` | explicit review must happen before writes |
+| `queue.execute.before_review_required` | explicit item review must happen before writes |
+| `queue.execute.after_review_required` | deterministic writes verified; explicit review is required before queue completion |
+| `queue.execute.review_context_failed` | required review could not be packaged safely; do not bypass it |
 | `queue.execute.projects_unavailable` | deterministic CLI backend is unavailable |
 | `queue.execute.plan_conflict` | the deterministic plan repeats a singleton action or dimension and needs interpretation |
 | `queue.execute.agent_context_failed` | a safe bounded agent handoff could not be prepared, so fallback is blocked |
@@ -280,6 +283,23 @@ Stable executor reasons include:
 | `queue.execute.completion_failed` | queue label/state completion failed |
 
 A partial receipt is evidence, not permission to retry. Leave the queue item visible and re-inspect live state before any recovery.
+
+### Mandatory item review and operator policy
+
+A structured review directive is creator intent on an otherwise deterministic item. It is not a `needs_agent` classification and does not grant any mutation beyond `spec.actions`.
+
+The executor emits a versioned `github-projects/queue-review-context/v1` packet when item review is due. It carries the exact bounded target context, timing, requested focus selectors, optional note, the original authorised actions and `noteMayAuthoriseMutations=false`. An `after` packet additionally embeds the verified deterministic execution receipt. Review notes are data to inspect, never additional authority.
+
+Queue-level launcher policy combines with item review rather than replacing it:
+
+- `auto` adds no operator-forced review and preserves any item-level `before` or `after` requirement;
+- `before` forces a bounded before-review for every selected candidate;
+- `after` forces a bounded after-review for every selected candidate;
+- if operator policy and item timing differ, both reviews are required. For example, item `before` plus operator `after` means before-review, deterministic execution, then after-review.
+
+This precedence means a launcher can request more agent involvement but cannot suppress, move or weaken creator-required review. The `github-projects` skill exposes this policy resolution for the `pj` launcher; launcher integration itself remains in `MiguelRodo/pj`.
+
+Unknown review timing/focus values do not become review packets. They fail deterministic envelope validation and use the ordinary safe fallback path. A review note that asks for an extra mutation likewise does not broaden `authorisedActions`; any revised administrative delta needs fresh normal authority.
 
 ### Agent escalation and legacy fallback
 
