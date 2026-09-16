@@ -122,8 +122,9 @@ done
 [ -z "$subproject_selector" ] || valid_scope_selector "$subproject_selector" ||
   die "invalid sub-project selector: $subproject_selector"
 
-command -v gh >/dev/null 2>&1 || die "GitHub CLI (gh) is required"
-gh auth status >/dev/null 2>&1 || die "gh is not authenticated"
+gh_bin="${PROJECTS_GH_BIN:-gh}"
+command -v "$gh_bin" >/dev/null 2>&1 || die "GitHub CLI (gh) is required"
+"$gh_bin" auth status >/dev/null 2>&1 || die "gh is not authenticated"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
 validator="$script_dir/validate-contract.sh"
