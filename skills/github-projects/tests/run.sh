@@ -600,4 +600,4 @@ grep -Fq 'could not find or access issue repository: missing/repo' \
   "$test_tmp_dir/init-invalid-issue-repo.log"
 test ! -e "$test_tmp_dir/init-invalid-issue-repo/.projects/project.md"
 
-echo "github-projects tests passed"
+bash "$test_dir/queue-preflight.sh"\n\necho "github-projects tests passed"
