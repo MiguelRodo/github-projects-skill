@@ -69,7 +69,12 @@ The queue label is queue state. **Do not put an action that adds or removes the 
 
 For deterministic v1, add a structured authority comment even in a solo/personal Project. Solo governance can accept less for ordinary agent fallback, but the deterministic classifier requires the machine-readable envelope.
 
-In collaborative/shared governance, the comment is also the mutation authority itself and must be authored by the same GitHub account used by the local authenticated `gh` session.
+The acting account matters:
+
+- in solo/personal governance, the existing issue must have been created by the same GitHub account used by the local authenticated `gh` session, and the structured authority comment must come from that account;
+- in collaborative/shared governance, the issue author need not be that account, but the structured authority comment is the mutation authority and must be authored by the same account used by local authenticated `gh`.
+
+If the migration agent cannot establish which account local `gh` will use, it must not claim the item is deterministic-ready.
 
 For a deterministic existing task, use this shape:
 
