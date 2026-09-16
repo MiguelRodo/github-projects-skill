@@ -94,6 +94,8 @@ The queue-level agent policy is additive. `auto` preserves only item-required re
 
 The review handoff is `github-projects/queue-review-context/v1`. It repeats the authorised actions explicitly and marks the note as non-authoritative. Any revised administrative delta proposed during review must satisfy the ordinary authority rules before mutation.
 
+Approval is returned separately as `github-projects/queue-review-result/v1` with `outcome: approved` and the exact reviewed context. The executor revalidates that result against the freshly classified target, actions, timing, focus and note. An after-review approval must also carry the matching verified execution receipt. A stale or mismatched result does not waive review.
+
 ## Complete example
 
 ````text
