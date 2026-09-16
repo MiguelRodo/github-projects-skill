@@ -185,7 +185,9 @@ agent may perform and verify the authorised GitHub/Project administration only.
 Substantive task work requires a separate explicit non-queue invocation.
 
 See the [queue reference](references/local-implementation-queue.md) for authority,
-discovery, readback and fallback rules. The optional
+discovery, readback and fallback rules. To prepare existing issues for the
+machine-checkable path, follow the [deterministic pj queue migration guide](references/pj-queue-migration.md).
+The optional
 [`projects` CLI](https://github.com/MiguelRodo/github-projects-skill/blob/main/docs/cli.md)
 performs supported GitHub operations; `pj` launches the agent that directs them.
 

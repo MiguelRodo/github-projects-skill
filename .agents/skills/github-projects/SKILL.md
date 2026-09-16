@@ -106,6 +106,8 @@ A labelled existing task issue is a valid reconciliation target. Its ordinary im
 
 When this surface already knows the exact bounded administrative delta, prefer adding the versioned structured authority comment in [the queue authority envelope reference](references/queue-authority-envelope.md), including in solo governance where a separate prose authority comment would not otherwise be required. This front-loads interpretation for deterministic local execution without broadening authority. It is an optimisation, not a requirement for ordinary human-authored or legacy queue items; unstructured items remain valid queue input and fall back to an agent when deterministic processing cannot interpret them safely.
 
+When asked to prepare or migrate existing issues specifically for deterministic `pj -i` handling, follow [the pj queue migration guide](references/pj-queue-migration.md). Keep the ordinary issue prose intact, use only the executor's current deterministic action subset, and put the machine-checkable administrative delta in a new structured authority comment.
+
 If the local queue is not configured or cannot be created safely, return the smallest executable command block that completes the operation. Use placeholders only for facts that cannot be discovered. Do not claim that returned commands ran.
 
 Copy-and-paste command handoffs must be safe to paste into an interactive shell. Do not include command-wide shell-option changes such as `set -e`, `set -u`, `set -o pipefail`, `set -euo pipefail`, or combined variants. Prefer ordinary commands that leave the caller's shell behaviour unchanged. If a shell-state change is genuinely required, scope it to a subprocess so it does not persist after the command finishes.
