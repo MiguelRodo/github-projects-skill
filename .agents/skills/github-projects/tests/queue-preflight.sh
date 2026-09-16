@@ -102,10 +102,10 @@ cat >"$provider" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$*" >>"$PROVIDER_LOG"
-if [ "$1" = auth ] && [ "$2" = status ]; then
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
   exit 0
 fi
-if [ "$1" != issue ] || [ "$2" != list ]; then
+if [ "${1:-}" != issue ] || [ "${2:-}" != list ]; then
   echo "unexpected provider call: $*" >&2
   exit 90
 fi
@@ -124,7 +124,7 @@ EOF
 chmod +x "$provider"
 
 run_preflight() {
-  PROVIDER_LOG="$tmp/provider.log" PROJECTS_GH_BIN="$provider"     bash "$preflight" --workspace "$workspace" "$@"
+  PROVIDER_LOG="$tmp/provider.log" PROJECTS_GH_BIN="$provider" bash "$preflight" --workspace "$workspace" "$@"
 }
 
 assert_line() {
@@ -138,8 +138,9 @@ assert_line() {
 
 : >"$tmp/provider.log"
 output="$(run_preflight --repo octo/issues --project personal --subproject monitoring)"
+expected_status="$(printf 'status\tready')"
 expected_candidate="$(printf 'candidate\tocto/issues\t42\thttps://github.com/octo/issues/issues/42\tpersonal\tmonitoring\t%s' "$workspace/issues")"
-assert_line 
+assert_line "$expected_status" "$output"
 assert_line "$expected_candidate" "$output"
 grep -Fq -- '--state open' "$tmp/provider.log"
 grep -Fq -- '--label pj:implement-chat' "$tmp/provider.log"
@@ -149,110 +150,12 @@ grep -Fq -- '--label subproject:monitoring' "$tmp/provider.log"
 
 : >"$tmp/provider.log"
 output="$(run_preflight --project personal --subproject finances)"
-assert_line 
+assert_line "$(printf 'status\tempty')" "$output"
 grep -Fq -- '--label subproject:finances' "$tmp/provider.log"
 
 : >"$tmp/provider.log"
 output="$(run_preflight --project personal --subproject missing)"
-assert_line 
-! grep -Fq 'issue list' "$tmp/provider.log"
-
-echo "queue preflight tests passed"
-status\tready' "$output"
-grep -Fqx "$expected_candidate" <<<"$output"
-grep -Fq -- '--state open' "$tmp/provider.log"
-grep -Fq -- '--label pj:implement-chat' "$tmp/provider.log"
-grep -Fq -- '--label project:personal' "$tmp/provider.log"
-grep -Fq -- '--label subproject:monitoring' "$tmp/provider.log"
-! grep -Fq -- '--repo octo/other' "$tmp/provider.log"
-
-: >"$tmp/provider.log"
-output="$(run_preflight --project personal --subproject finances)"
-grep -Fqx $'status\tempty' <<<"$output"
-grep -Fq -- '--label subproject:finances' "$tmp/provider.log"
-
-: >"$tmp/provider.log"
-output="$(run_preflight --project personal --subproject missing)"
-grep -Fqx $'status\tunmatched' <<<"$output"
-! grep -Fq 'issue list' "$tmp/provider.log"
-
-echo "queue preflight tests passed"
-status\tempty' "$output"
-grep -Fq -- '--label subproject:finances' "$tmp/provider.log"
-
-: >"$tmp/provider.log"
-output="$(run_preflight --project personal --subproject missing)"
-grep -Fqx $'status\tunmatched' <<<"$output"
-! grep -Fq 'issue list' "$tmp/provider.log"
-
-echo "queue preflight tests passed"
-status\tready' "$output"
-grep -Fqx "$expected_candidate" <<<"$output"
-grep -Fq -- '--state open' "$tmp/provider.log"
-grep -Fq -- '--label pj:implement-chat' "$tmp/provider.log"
-grep -Fq -- '--label project:personal' "$tmp/provider.log"
-grep -Fq -- '--label subproject:monitoring' "$tmp/provider.log"
-! grep -Fq -- '--repo octo/other' "$tmp/provider.log"
-
-: >"$tmp/provider.log"
-output="$(run_preflight --project personal --subproject finances)"
-grep -Fqx $'status\tempty' <<<"$output"
-grep -Fq -- '--label subproject:finances' "$tmp/provider.log"
-
-: >"$tmp/provider.log"
-output="$(run_preflight --project personal --subproject missing)"
-grep -Fqx $'status\tunmatched' <<<"$output"
-! grep -Fq 'issue list' "$tmp/provider.log"
-
-echo "queue preflight tests passed"
-status\tunmatched' "$output"
-! grep -Fq 'issue list' "$tmp/provider.log"
-
-echo "queue preflight tests passed"
-status\tready' "$output"
-grep -Fqx "$expected_candidate" <<<"$output"
-grep -Fq -- '--state open' "$tmp/provider.log"
-grep -Fq -- '--label pj:implement-chat' "$tmp/provider.log"
-grep -Fq -- '--label project:personal' "$tmp/provider.log"
-grep -Fq -- '--label subproject:monitoring' "$tmp/provider.log"
-! grep -Fq -- '--repo octo/other' "$tmp/provider.log"
-
-: >"$tmp/provider.log"
-output="$(run_preflight --project personal --subproject finances)"
-grep -Fqx $'status\tempty' <<<"$output"
-grep -Fq -- '--label subproject:finances' "$tmp/provider.log"
-
-: >"$tmp/provider.log"
-output="$(run_preflight --project personal --subproject missing)"
-grep -Fqx $'status\tunmatched' <<<"$output"
-! grep -Fq 'issue list' "$tmp/provider.log"
-
-echo "queue preflight tests passed"
-status\tempty' "$output"
-grep -Fq -- '--label subproject:finances' "$tmp/provider.log"
-
-: >"$tmp/provider.log"
-output="$(run_preflight --project personal --subproject missing)"
-grep -Fqx $'status\tunmatched' <<<"$output"
-! grep -Fq 'issue list' "$tmp/provider.log"
-
-echo "queue preflight tests passed"
-status\tready' "$output"
-grep -Fqx "$expected_candidate" <<<"$output"
-grep -Fq -- '--state open' "$tmp/provider.log"
-grep -Fq -- '--label pj:implement-chat' "$tmp/provider.log"
-grep -Fq -- '--label project:personal' "$tmp/provider.log"
-grep -Fq -- '--label subproject:monitoring' "$tmp/provider.log"
-! grep -Fq -- '--repo octo/other' "$tmp/provider.log"
-
-: >"$tmp/provider.log"
-output="$(run_preflight --project personal --subproject finances)"
-grep -Fqx $'status\tempty' <<<"$output"
-grep -Fq -- '--label subproject:finances' "$tmp/provider.log"
-
-: >"$tmp/provider.log"
-output="$(run_preflight --project personal --subproject missing)"
-grep -Fqx $'status\tunmatched' <<<"$output"
+assert_line "$(printf 'status\tunmatched')" "$output"
 ! grep -Fq 'issue list' "$tmp/provider.log"
 
 echo "queue preflight tests passed"
