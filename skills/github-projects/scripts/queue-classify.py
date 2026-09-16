@@ -7,10 +7,11 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+from queue_common import flatten_pages, gh_json, run, table_value
 
 MARKER = "PJ implementation authority:"
 VERSION = "github-projects/queue-authority/v1"
@@ -34,32 +35,6 @@ REVIEW_FOCUS = {
 def emit(classification: str, reason: str, **extra: Any) -> None:
     payload = {"classification": classification, "reason": reason, **extra}
     print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
-
-
-def run(gh: str, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [gh, *args],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-def gh_json(gh: str, *args: str) -> Any:
-    proc = run(gh, *args)
-    if proc.returncode:
-        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "GitHub read failed")
-    return json.loads(proc.stdout)
-
-
-def table_value(text: str, wanted: str) -> str:
-    for line in text.splitlines():
-        if not line.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.split("|")[1:-1]]
-        if len(cells) >= 2 and cells[0] == wanted:
-            return cells[1]
-    return ""
 
 
 def section_first_column(text: str, heading: str) -> set[str]:
@@ -93,14 +68,6 @@ def governance(text: str) -> str:
     if re.search(r"\bpersonal Project\b", text, re.I):
         return "solo"
     return "collaborative"
-
-
-def flatten_pages(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    if value and all(isinstance(page, list) for page in value):
-        return [item for page in value for item in page if isinstance(item, dict)]
-    return [item for item in value if isinstance(item, dict)]
 
 
 def structured_payload(body: str) -> tuple[str, Any]:
