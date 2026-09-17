@@ -60,6 +60,26 @@ priority_value() {
   ' "$file"
 }
 
+priority_mapping_count() {
+  local file="$1" wanted="$2"
+  awk -F'|' -v wanted="$wanted" '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    /^## Priority mapping[[:space:]]*$/ { in_mapping = 1; next }
+    in_mapping && /^## / { exit }
+    in_mapping && /^\|/ {
+      key = trim($2)
+      if (key == wanted) {
+        count++
+      }
+    }
+    END { print count + 0 }
+  ' "$file"
+}
+
 validate_priority_mapping() {
   local file="$1" common provider providers="" count duplicate pending_count
   grep -Eq '^## Priority mapping[[:space:]]*$' "$file" ||
@@ -80,7 +100,7 @@ validate_priority_mapping() {
   for common in P0 P1 P2 P3; do
     provider="$(priority_value "$file" "$common")"
     [[ -n "$provider" ]] || die "$file is missing a non-empty $common mapping"
-    count="$(grep -Ec "^\\|[[:space:]]*$common[[:space:]]*\\|" "$file")"
+    count="$(priority_mapping_count "$file" "$common")"
     [[ "$count" == "1" ]] || die "$file must map $common exactly once"
     providers+="$provider"$'\n'
   done

@@ -17,6 +17,11 @@ bash "$validator" "$test_dir/fixtures/single"
 bash "$validator" "$test_dir/fixtures/single-user"
 bash "$validator" "$test_dir/fixtures/dispatcher"
 bash "$validator" "$test_dir/fixtures/empty-dispatcher"
+bash "$validator" "$test_dir/fixtures/priority-values"
+if bash "$validator" "$test_dir/fixtures/duplicate-priority" >/dev/null 2>&1; then
+  echo "ERROR: duplicate Priority mapping unexpectedly validated" >&2
+  exit 1
+fi
 if bash "$validator" "$test_dir/fixtures/invalid" >/dev/null 2>&1; then
   echo "ERROR: lossy Priority mapping unexpectedly validated" >&2
   exit 1
