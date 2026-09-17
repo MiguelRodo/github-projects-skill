@@ -38,7 +38,11 @@ grep -Fq 'create implementation branches or pull requests' "$reference"
 grep -Fq 'delegate the substantive task to another coding agent' "$reference"
 grep -Fq 'Substantive work is never queue-executable' "$reference"
 grep -Fq 'separate explicit non-queue invocation' "$reference"
-grep -Fq 'Chat implementation label | pj:implement-chat' "$contract"
+grep -Fq 'pj:implement-chat' "$contract"
+if grep -Fq 'Chat implementation label | pj:implement-chat' "$contract"; then
+  echo "ERROR: repository contract repeats default Chat implementation label" >&2
+  exit 1
+fi
 grep -Fq '### Optional queue selectors' "$reference"
 grep -Fq 'When more than one selector is supplied, apply their intersection.' "$reference"
 grep -Fq 'declared `Project key`' "$reference"
