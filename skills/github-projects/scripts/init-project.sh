@@ -13,6 +13,7 @@ transaction_dir=""
 changed_contract_paths=()
 issue_repository=""
 first_request_project_context=""
+live_setup_state=""
 section_number=0
 colour_reset=""
 colour_bold=""
@@ -314,11 +315,28 @@ EOF
 EOF
 }
 
+report_onboarding_result() {
+  case "$live_setup_state" in
+    deferred)
+      warning "Repository onboarding is complete, but the standard live Project profile is still pending."
+      echo "Install projects, then rerun this initializer to finish the live setup."
+      ;;
+    incomplete)
+      warning "Repository onboarding is complete, but the standard live Project profile was not applied."
+      echo "Authorise the organisation-wide schema change shown above, then rerun this initializer."
+      ;;
+    *)
+      success "Repository onboarding is complete."
+      ;;
+  esac
+}
+
 setup_standard_project() {
   local number="$1" plan
 
   section "Set up the live Project"
   if ! command -v projects >/dev/null 2>&1; then
+    live_setup_state="deferred"
     warning "The projects CLI is not installed, so the standard live Project profile is still pending."
     echo "Install projects, then rerun this initializer. See docs/cli.md in github-projects-skill."
     return 0
@@ -330,6 +348,7 @@ setup_standard_project() {
 
   if printf '%s\n' "$plan" | grep -Eq \
        '"requiresOrganizationSchema"[[:space:]]*:[[:space:]]*true'; then
+    [[ "$live_setup_state" == "deferred" ]] || live_setup_state="incomplete"
     warning "The standard field profile needs organisation-wide Issue Type or Priority changes, so it was not applied."
     projects project setup-fields --root "$repository_root" \
       --project-number "$number" ||
@@ -862,7 +881,7 @@ if [[ -e "$contract_file" ]]; then
     print_first_request
   fi
   echo
-  success "Repository onboarding is complete."
+  report_onboarding_result
   exit 0
 fi
 
@@ -909,7 +928,7 @@ if ! ask_yes_no "Does this repository use one GitHub Project?" yes; then
     print_first_request
   fi
   echo
-  success "Repository onboarding is complete."
+  report_onboarding_result
   exit 0
 fi
 
@@ -948,4 +967,4 @@ print_codex_setup
 print_first_request
 
 echo
-success "Repository onboarding is complete."
+report_onboarding_result

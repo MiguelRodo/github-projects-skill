@@ -388,6 +388,43 @@ if grep -Fq 'setup-backlog-view' "$test_tmp_dir/org-schema-projects.log"; then
   exit 1
 fi
 
+mkdir -p "$test_tmp_dir/init-org-schema"
+git -C "$test_tmp_dir/init-org-schema" init -q
+(
+  cd "$test_tmp_dir/init-org-schema"
+  printf '\n\n\n\n12\n\n\n' | PATH="$test_tmp_dir/bin:$PATH" \
+    PROJECTS_NEEDS_ORG_SCHEMA=true bash "$initializer" \
+    >"$test_tmp_dir/init-org-schema.log" 2>&1
+)
+bash "$validator" "$test_tmp_dir/init-org-schema"
+if grep -Fq 'Repository onboarding is complete.' "$test_tmp_dir/init-org-schema.log"; then
+  echo "ERROR: initializer claimed complete onboarding without the standard live profile" >&2
+  exit 1
+fi
+grep -Fq 'the standard live Project profile was not applied' \
+  "$test_tmp_dir/init-org-schema.log"
+
+# A PATH with everything onboarding needs except a projects CLI.
+mkdir -p "$test_tmp_dir/bin-no-projects"
+for tool in awk bash cat cp date dirname find git grep head mkdir mktemp mv rm sed sort tr uniq; do
+  ln -s "$(command -v "$tool")" "$test_tmp_dir/bin-no-projects/$tool"
+done
+ln -s "$test_tmp_dir/bin/gh" "$test_tmp_dir/bin-no-projects/gh"
+mkdir -p "$test_tmp_dir/init-deferred"
+git -C "$test_tmp_dir/init-deferred" init -q
+(
+  cd "$test_tmp_dir/init-deferred"
+  printf '\n\n\n\n12\n\n\n' | PATH="$test_tmp_dir/bin-no-projects" \
+    bash "$initializer" >"$test_tmp_dir/init-deferred.log" 2>&1
+)
+bash "$validator" "$test_tmp_dir/init-deferred"
+if grep -Fq 'Repository onboarding is complete.' "$test_tmp_dir/init-deferred.log"; then
+  echo "ERROR: initializer claimed complete onboarding without the projects CLI" >&2
+  exit 1
+fi
+grep -Fq 'the standard live Project profile is still pending' \
+  "$test_tmp_dir/init-deferred.log"
+
 mkdir -p "$test_tmp_dir/init-multiple"
 git -C "$test_tmp_dir/init-multiple" init -q
 (

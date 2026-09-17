@@ -84,7 +84,7 @@ For several Projects, it creates a validated empty dispatcher and offers to add 
 
 The initializer writes only topology, routing, governance and field locations into the repository contract. Shared Class / Issue Type, Priority and Status semantics stay in the skill rather than being copied into every contract.
 
-When the `projects` CLI is available, onboarding also reconciles the standard field profile and the `Backlog` view, with independent readback. Organisation-wide Issue Type or Priority changes are planned and reported but are never applied without a separate explicit `--allow-organization-schema` action. If `projects` is not installed, repository onboarding still completes and reports that the live profile remains pending.
+When the `projects` CLI is available, onboarding also reconciles the standard field profile and the `Backlog` view, with independent readback. Organisation-wide Issue Type or Priority changes are planned and reported but are never applied without a separate explicit `--allow-organization-schema` action. If `projects` is not installed, repository onboarding still completes and reports that the live profile remains pending; the closing summary says the same when an organisation-wide schema change still needs separate authorisation.
 
 It then asks whether it may stage, commit and push only the onboarding files. A failed commit or push leaves the work in a recoverable local state and prints the next command. Commit and push those files before using a remote chat or agent.
 
