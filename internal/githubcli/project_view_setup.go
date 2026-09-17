@@ -25,19 +25,19 @@ type StandardBacklogViewChange struct {
 // StandardBacklogViewPlan describes the live Backlog-view delta without
 // mutating GitHub.
 type StandardBacklogViewPlan struct {
-	Project       ProjectIdentity              `json:"project"`
-	OwnerType     string                       `json:"ownerType"`
-	VisibleFields []string                     `json:"visibleFields"`
+	Project       ProjectIdentity             `json:"project"`
+	OwnerType     string                      `json:"ownerType"`
+	VisibleFields []string                    `json:"visibleFields"`
 	Changes       []StandardBacklogViewChange `json:"changes"`
 }
 
 // StandardBacklogViewResult is returned after an independently verified apply.
 type StandardBacklogViewResult struct {
-	Project       ProjectIdentity              `json:"project"`
-	OwnerType     string                       `json:"ownerType"`
-	VisibleFields []string                     `json:"visibleFields"`
+	Project       ProjectIdentity             `json:"project"`
+	OwnerType     string                      `json:"ownerType"`
+	VisibleFields []string                    `json:"visibleFields"`
 	Applied       []StandardBacklogViewChange `json:"applied"`
-	Verified      bool                         `json:"verified"`
+	Verified      bool                        `json:"verified"`
 }
 
 type restProjectField struct {
@@ -84,10 +84,10 @@ type projectViewSortConnection struct {
 }
 
 type projectViewNode struct {
-	ID            string `json:"id"`
-	Number        int    `json:"number"`
-	Name          string `json:"name"`
-	Layout        string `json:"layout"`
+	ID            string  `json:"id"`
+	Number        int     `json:"number"`
+	Name          string  `json:"name"`
+	Layout        string  `json:"layout"`
 	Filter        *string `json:"filter"`
 	Configuration struct {
 		VisibleFields projectViewFieldConnection `json:"visibleFields"`
@@ -124,11 +124,11 @@ type projectViewsResponse struct {
 }
 
 type backlogViewState struct {
-	ownerType string
-	schema    detailedProjectSchema
+	ownerType  string
+	schema     detailedProjectSchema
 	restFields []restProjectField
-	views     []projectViewNode
-	spec      backlogViewSpec
+	views      []projectViewNode
+	spec       backlogViewSpec
 }
 
 func queryRESTProjectFields(ctx context.Context, runner Runner, project contract.Project, ownerType string) ([]restProjectField, error) {
@@ -421,10 +421,10 @@ func planStandardBacklogViewFromState(project contract.Project, state backlogVie
 		visible = append(visible, field.Name)
 	}
 	return StandardBacklogViewPlan{
-		Project: ProjectIdentity{Owner: project.Owner, Number: project.Number, Title: project.Title},
-		OwnerType: state.ownerType,
+		Project:       ProjectIdentity{Owner: project.Owner, Number: project.Number, Title: project.Title},
+		OwnerType:     state.ownerType,
 		VisibleFields: visible,
-		Changes: changes,
+		Changes:       changes,
 	}, nil
 }
 
@@ -496,10 +496,10 @@ func updateBacklogView(ctx context.Context, runner Runner, viewID string, spec b
 	body := map[string]any{
 		"query": query,
 		"variables": map[string]any{"input": map[string]any{
-			"viewId": viewID,
-			"name": standardBacklogViewName,
-			"layout": "TABLE_LAYOUT",
-			"filter": "",
+			"viewId":        viewID,
+			"name":          standardBacklogViewName,
+			"layout":        "TABLE_LAYOUT",
+			"filter":        "",
 			"configuration": map[string]any{"visibleFieldIds": idsFromFields(spec.Visible)},
 		}},
 	}
@@ -511,7 +511,7 @@ func updateBacklogView(ctx context.Context, runner Runner, viewID string, spec b
 
 func deleteProjectView(ctx context.Context, runner Runner, viewID string) error {
 	query := `mutation($viewId: ID!) {
-  deleteProjectV2View(input: {viewId: $viewId}) { projectV2 { id } }
+  deleteProjectV2View(input: {viewId: $viewId}) { projectV2View { id } }
 }`
 	body := map[string]any{"query": query, "variables": map[string]any{"viewId": viewID}}
 	if _, err := runJSONInput(ctx, runner, body, "api", "graphql", "--input", "-"); err != nil {
@@ -646,10 +646,10 @@ func ApplyStandardBacklogView(ctx context.Context, runner Runner, project contra
 		return StandardBacklogViewResult{}, err
 	}
 	return StandardBacklogViewResult{
-		Project: initialPlan.Project,
-		OwnerType: initialPlan.OwnerType,
+		Project:       initialPlan.Project,
+		OwnerType:     initialPlan.OwnerType,
 		VisibleFields: initialPlan.VisibleFields,
-		Applied: freshPlan.Changes,
-		Verified: true,
+		Applied:       freshPlan.Changes,
+		Verified:      true,
 	}, nil
 }

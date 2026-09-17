@@ -16,7 +16,7 @@ func backlogTestSpec() backlogViewSpec {
 			{Name: "Priority", RESTID: 3, NodeID: "priority"},
 			{Name: "Class", RESTID: 4, NodeID: "class"},
 		},
-		Status: backlogField{Name: "Status", RESTID: 2, NodeID: "status"},
+		Status:   backlogField{Name: "Status", RESTID: 2, NodeID: "status"},
 		Priority: backlogField{Name: "Priority", RESTID: 3, NodeID: "priority"},
 	}
 }
