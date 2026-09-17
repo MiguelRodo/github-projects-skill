@@ -10,9 +10,6 @@
 | Project title | projects |
 | Routing | Project 40 membership; no routing label |
 | Privacy | public repository with a private user Project; public issue content only |
-| Issue write-up style | tidy |
-| Issue prose style | natural-direct |
-| Chat implementation label | pj:implement-chat |
 
 ## Field locations
 
@@ -23,47 +20,6 @@
 | Status | project field | Status |
 | Due date | project field | Target date |
 | Parent | native issue relationship | Parent issue |
-
-## Priority mapping
-
-This Project uses the common names directly.
-
-| Common value | Provider value | Colour |
-| --- | --- | --- |
-| P0 | P0 | RED |
-| P1 | P1 | ORANGE |
-| P2 | P2 | YELLOW |
-| P3 | P3 | PURPLE |
-
-## Class values
-
-| Option | Colour |
-| --- | --- |
-| Task | GRAY |
-| Bug | RED |
-| Enhancement | GREEN |
-| Data | PINK |
-| Analysis | PURPLE |
-| Deliverable | ORANGE |
-| Documentation | YELLOW |
-| Epic | BLUE |
-
-## Status mapping
-
-| Common value | Provider value |
-| --- | --- |
-| Todo | Todo |
-| In progress | In progress |
-| Done | Done |
-
-## Live target
-
-- Class is a required single-select Project field with exactly the values and colours above.
-- Priority is a required single-select Project field with exactly P0, P1, P2 and P3 and the colours above.
-- Target date is optional and remains blank unless an issue has a real deadline.
-- Use native parent and sub-issue relationships for roadmap hierarchy. Parenthood does not imply Epic.
-- `Research`, `Raw data` and `Processed data` are retired Class values and are not part of the active vocabulary.
-- Workstream is not part of the active contract and no live Workstream field is expected.
 
 ## Governance
 
