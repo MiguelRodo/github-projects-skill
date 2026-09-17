@@ -26,7 +26,7 @@ Read [the repository contract reference](references/repository-contract.md) when
 - A `single` contract resolves directly.
 - A `dispatcher` contract must resolve exactly one row by an explicit Project number, routing label, Project key, or other exact identifier supplied by the request or live issue state. Then read the referenced `.projects/projects/*.md` contract. A zero-route dispatcher is a valid onboarding state, not an operational Project context; for ordinary administration, stop and tell the operator to rerun the initializer and add a Project.
 - All identifiers supplied by the user, contract, issue and Project must agree. Stop on zero matches, multiple matches, or disagreement.
-- Treat live GitHub as authority for current issue, membership, field, option and hierarchy state. Treat `.projects/` as authority for topology, mappings, governance and source requirements.
+- Treat live GitHub as authority for current issue, membership, field, option and hierarchy state. Treat `.projects/` as authority for topology, explicit local overrides, governance and source requirements. Shared defaults come from this skill rather than being copied into every contract.
 - Retrieve an external source only when the local contract requires it for this operation. An exact requested change is not a scope-design task.
 
 ## Interpret short requests
@@ -59,32 +59,44 @@ If a contract supplies another prose-style value, stop and identify the unsuppor
 
 When creating, refining or applying Class or Issue Type values, follow [the Issue Type and Class design reference](references/issue-types.md).
 
-- `Task` is the ordinary fallback when no more informative type adds useful meaning.
-- The reusable default vocabulary is `Task`, `Bug`, `Enhancement`, `Data`, `Analysis`, `Deliverable`, `Documentation` and `Epic`. A repository may keep a smaller or deliberately local vocabulary.
+The shared default vocabulary is `Task`, `Bug`, `Enhancement`, `Data`, `Analysis`, `Deliverable`, `Documentation` and `Epic`. `Task` is the ordinary fallback when no more informative type adds useful meaning. A repository may declare a smaller or deliberately local vocabulary as an explicit contract override.
+
 - `Data` covers source-data acquisition and stewardship as well as transformation, validation and production of derived analysis-ready data.
 - `Deliverable` means one bounded formal output or event that is handed over, submitted, presented, released, assessed or otherwise consumed as an output. It includes reports, manuscripts, presentations, posters, submissions, grant applications, protocols, handovers and software releases.
-- `Epic` is a broad coordination outcome, not a synonym for top-level issue or parent issue. Parenthood and Class are independent, so a Task, Deliverable, Analysis or other type may have sub-issues without becoming an Epic.
-- `Research` is not a default type. Use Task for ordinary exploratory or decision work, Analysis when the main output is an analytical result, or Enhancement when the work develops or improves an existing method or system, unless the repository deliberately retains another local type.
-- Workstream is not a standard semantic dimension. If an older Project still has a custom field named `Workstream`, treat it as legacy or unmanaged state unless the resolved repository contract deliberately documents it as non-standard metadata. Do not require or populate it merely because it exists.
-- Routing remains separate through repository/Project topology and declared `project:*` or `subproject:*` labels where applicable. Native parent/sub-issue relationships carry hierarchy. Milestones are optional temporal or checkpoint groupings, not a replacement classification dimension.
-- Colour is presentational. Reuse provider-supported colours when categories outnumber distinct colours; colour uniqueness must not block ordinary administration unless the local contract explicitly makes a palette exact.
+- `Epic` is a broad coordination outcome, not a synonym for top-level issue or parent issue. Native parent/sub-issue relationships carry hierarchy independently, so a Task, Deliverable, Analysis or other type may have sub-issues without becoming an Epic.
+- Routing remains separate through repository/Project topology and declared `project:*` or `subproject:*` labels where applicable. Milestones are optional temporal or checkpoint groupings, not a replacement classification dimension.
 
-When the user explicitly asks to bootstrap, migrate or substantially reorganise a whole Project, also follow the whole-Project organisation guidance in [the Issue Type and Class design reference](references/issue-types.md). Do not use that guidance to restructure a routine or narrowly requested change. In broad organisation work, treat the Project as the container, prefer independently meaningful top-level outcomes, and choose body checkboxes versus sub-issues according to whether the work needs independent planning state.
+The shared Class palette used by standard setup is:
 
-Use this default common Priority vocabulary unless the resolved contract declares a complete override:
-
-| Common value | Provider value |
+| Class | Colour |
 | --- | --- |
-| P0 | Urgent |
-| P1 | High |
-| P2 | Medium |
-| P3 | Low |
+| Task | GRAY |
+| Bug | RED |
+| Enhancement | GREEN |
+| Data | PINK |
+| Analysis | PURPLE |
+| Deliverable | ORANGE |
+| Documentation | YELLOW |
+| Epic | BLUE |
 
-Mappings must be one-to-one. Never collapse two provider values into one common value or use different read and write mappings. Discover the exact live provider option before a write and stop if it does not match the contract.
+When the user explicitly asks to bootstrap, migrate or substantially reorganise a whole Project, also follow the whole-Project organisation guidance in [the Issue Type and Class design reference](references/issue-types.md). Do not use that guidance to restructure a routine or narrowly requested change.
 
-An initial repository contract may instead say `Priority mapping status: pending`. This preserves the Project's existing field and options during onboarding. Do not rank, interpret or change Priority while that marker remains. Confirm the provider location, inspect the live options, propose a complete one-to-one mapping, and record both in the contract before any Priority operation. Changing the live option set is a separate mutation and requires explicit authority.
+## Priority and Status defaults
 
-For single-select option colours, follow any exact palette in the repository contract. If none is declared and the choice is only presentational, choose stable colours that fit the option meanings without asking the user to design a palette. Preserve useful existing colours. Read [the repository contract reference](references/repository-contract.md) when creating or changing option definitions.
+Unless the resolved contract declares a complete override, use the common Priority names directly:
+
+| Common value | Provider value | Colour |
+| --- | --- | --- |
+| P0 | P0 | RED |
+| P1 | P1 | ORANGE |
+| P2 | P2 | YELLOW |
+| P3 | P3 | PURPLE |
+
+Mappings must be one-to-one. Never collapse two provider values into one common value or use different read and write mappings. An explicit `Priority mapping status: pending` disables Priority administration until the live field is inspected. Absence of a Priority mapping means the shared P0-P3 default.
+
+When no explicit Status mapping is declared, use `Todo`, `In progress` and `Done`. Obvious spelling/spacing variants may be normalised before the exact live provider option is checked. A deliberate non-standard lifecycle may be declared as a local override.
+
+Class/Priority colours are setup/presentation defaults, not continuously enforced repository contract state. Follow an exact palette in the contract only when a repository deliberately declares one.
 
 ## Choose an execution surface
 
@@ -98,37 +110,31 @@ When `projects` is installed, read [the CLI execution reference](references/proj
 
 The CLI remains optional to install. When it is absent, the installed version lacks the required command/flag, or the operation is unsupported, briefly state that reason and use [the direct GitHub operations reference](references/github-operations.md). Native hierarchy, Project field definitions and membership removal are examples of unsupported mutations. Do not invent CLI commands or treat authentication, permission, validation, stale-state or readback failures as capability gaps. Stop on those failures; do not retry the mutation through another endpoint.
 
-If the current surface cannot perform an authorised GitHub issue or Project mutation, inspect as far as safely possible. When the resolved Project contract declares a `Chat implementation label` and the current surface can add that label safely, use [the local Chat-to-pj administration queue](references/local-implementation-queue.md) instead of asking the user to remember a shell command.
+If the current surface cannot perform an authorised GitHub issue or Project mutation, inspect as far as safely possible. When the resolved Project contract enables the Chat implementation handoff, use [the local Chat-to-pj administration queue](references/local-implementation-queue.md) instead of asking the user to remember a shell command. The handoff label defaults to `pj:implement-chat` when the contract does not declare a row; an explicit row may override or disable it.
 
 The queue is administrative-only by effect. It constrains the results the local agent may produce, not the tooling it may use: the `projects` CLI, `gh`, REST, GraphQL and shell or Python helpers all remain available for GitHub administration. Never use the queue to authorise repository implementation, file edits, implementation tests, measurement or analysis work, branches or pull requests.
 
-A labelled existing task issue is a valid reconciliation target. Its ordinary imperative prose describes the work the task represents and never causes the issue's administrative work to be skipped: apply the bounded administrative instruction and leave the substantive work untouched. In a resolved contract that establishes solo administration, the label plus a matching issue author are sufficient authority. In collaborative or shared governance, and whenever governance is missing or ambiguous, the issue body is mutable collaborative text, so require an unedited `PJ implementation authority:` comment from the account currently authenticated in local `gh` that states the administrative delta itself. A temporary handoff or an unusual, explicit mutation always needs that comment. Report the mutation as queued, not completed.
+A labelled existing task issue is a valid reconciliation target. Its ordinary imperative prose describes the work the task represents and never causes the issue's administrative work to be skipped: apply the bounded administrative instruction and leave the substantive work untouched. In a resolved contract that establishes solo administration, the label plus a matching issue author are sufficient authority. In collaborative or shared governance, and whenever governance is missing or ambiguous, require an unedited `PJ implementation authority:` comment from the account currently authenticated in local `gh` that states the administrative delta itself. A temporary handoff or an unusual explicit mutation always needs that comment. Report the mutation as queued, not completed.
 
-When this surface already knows the exact bounded administrative delta, prefer adding the versioned structured authority comment in [the queue authority envelope reference](references/queue-authority-envelope.md), including in solo governance where a separate prose authority comment would not otherwise be required. This front-loads interpretation for deterministic local execution without broadening authority. It is an optimisation, not a requirement for ordinary human-authored or legacy queue items; unstructured items remain valid queue input and fall back to an agent when deterministic processing cannot interpret them safely.
+When this surface already knows the exact bounded administrative delta, prefer adding the versioned structured authority comment in [the queue authority envelope reference](references/queue-authority-envelope.md). This front-loads interpretation for deterministic local execution without broadening authority. Unstructured items remain valid queue input and fall back to an agent when deterministic processing cannot interpret them safely.
 
 When asked to prepare or migrate existing issues specifically for deterministic `pj -i` handling, follow [the pj queue migration guide](references/pj-queue-migration.md). Keep the ordinary issue prose intact, use only the executor's current deterministic action subset, and put the machine-checkable administrative delta in a new structured authority comment.
 
 If the local queue is not configured or cannot be created safely, return the smallest executable command block that completes the operation. Use placeholders only for facts that cannot be discovered. Do not claim that returned commands ran.
 
-Copy-and-paste command handoffs must be safe to paste into an interactive shell. Do not include command-wide shell-option changes such as `set -e`, `set -u`, `set -o pipefail`, `set -euo pipefail`, or combined variants. Prefer ordinary commands that leave the caller's shell behaviour unchanged. If a shell-state change is genuinely required, scope it to a subprocess so it does not persist after the command finishes.
+Copy-and-paste command handoffs must be safe to paste into an interactive shell. Do not include command-wide shell-option changes such as `set -e`, `set -u`, `set -o pipefail`, `set -euo pipefail`, or combined variants. Prefer ordinary commands that leave the caller's shell behaviour unchanged.
 
 Run `scripts/setup.sh` when preparing an environment or when `gh` prerequisites are missing. The host must provide credentials and network access. Never print, persist, transform or request a token in a prompt.
 
-When adopting the skill in a repository that does not yet have `.projects/project.md`, run `scripts/init-project.sh` from that repository. It discovers live GitHub facts, asks only for local choices, writes the first single-Project contract or an empty multi-Project dispatcher, and adds a bounded `AGENTS.md` routing section. For a dispatcher, it offers to add Projects one at a time, discovering each live Project and asking only for its routing identity. Rerunning it can add another Project without replacing current routes. It never mutates live issues, labels or Projects. New resolved Project contracts should carry the standard `Chat implementation label | pj:implement-chat` local handoff setting unless the repository deliberately opts out.
+When adopting the skill in a repository that does not yet have `.projects/project.md`, run `scripts/init-project.sh` from that repository. It discovers live GitHub facts, asks only for local choices, writes the first single-Project contract or an empty multi-Project dispatcher, and adds a bounded `AGENTS.md` routing section. The shared behavioural defaults above do not need to be copied into a contract. #201 owns updating generated onboarding contracts after the standard live field profile is implemented.
 
 ## Inspect and plan
 
-For every target issue, read the current:
-
-- stable issue identity, URL and state;
-- Project identity and membership;
-- affected field definition, location, option and current value;
-- labels, assignees, milestone and relevant native hierarchy;
-- any other state the proposed operation could replace or remove.
+For every target issue, read the current stable issue identity, Project identity/membership, affected field definition/location/option/current value, labels, assignees, milestone, relevant native hierarchy and any other state the proposed operation could replace or remove.
 
 State the exact requested delta. Separate it from necessary implied changes. Adding Project membership is an implied change only when the requested Project field cannot exist without it and the contract authorises membership.
 
-For a read-only ranking, translate provider values through the resolved mapping and order P0, P1, P2, then P3. Apply any requested tie-breaker; otherwise report the tie rather than inventing precision.
+For a read-only ranking, order P0, P1, P2, then P3 after applying any explicit mapping. Apply any requested tie-breaker; otherwise report the tie rather than inventing precision.
 
 ## Apply a mutation safely
 
@@ -144,19 +150,13 @@ Do not replace a whole collection when an additive or field-specific operation e
 
 After writing, perform a separate targeted read. A successful mutation response is not verification. Report success only when the independently observed value equals the requested provider-native value and the preservation set remains intact.
 
-Stop on ambiguity, missing permission, stale state, unavailable required sources, an unexpected collateral change, or failed readback.
+Stop on ambiguity, missing permission, stale state, unavailable required sources, an unexpected collateral change or failed readback.
 
 ## Report
 
 For a read, report the resolved context, relevant values, ranking rule and any unavailable field.
 
-For a write, report separately:
-
-- requested delta;
-- applied delta;
-- independent readback;
-- preserved state relevant to the mutation;
-- any remaining manual action.
+For a write, report the requested delta, applied delta, independent readback, preserved state relevant to the mutation and any remaining manual action.
 
 Keep private issue content within its authorised repository and surface. Never copy credentials or private task details into a public issue, PR, log or evidence report.
 
