@@ -26,18 +26,20 @@ Usage:
   projects project item-list [flags]
   projects project item-add [flags]
   projects project item-edit [flags]
+  projects project setup-fields [flags]
   projects update check [flags]
   projects version [--json]
 
 Commands:
-  contract validate   Validate the complete .projects contract without GitHub access.
-  issue create        Plan or create an issue on GitHub with verified readback.
-  issue edit          Plan or edit an issue on GitHub with verified readback.
-  project item-list   Resolve one declared Project and read every item with a count check.
-  project item-add    Plan or add an issue to a declared Project.
-  project item-edit   Plan or edit field values on a Project item with verified readback.
-  update check        Check the latest GitHub release without installing anything.
-  version             Show the installed build version.
+  contract validate      Validate the complete .projects contract without GitHub access.
+  issue create           Plan or create an issue on GitHub with verified readback.
+  issue edit             Plan or edit an issue on GitHub with verified readback.
+  project item-list      Resolve one declared Project and read every item with a count check.
+  project item-add       Plan or add an issue to a declared Project.
+  project item-edit      Plan or edit field values on a Project item with verified readback.
+  project setup-fields   Plan or apply the shared one-time Project field profile.
+  update check           Check the latest GitHub release without installing anything.
+  version                Show the installed build version.
 
 Run "projects <command> --help" for command flags.
 `
@@ -78,9 +80,11 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, runner gi
 				return runProjectItemAdd(ctx, args[2:], stdout, stderr, runner)
 			case "item-edit":
 				return runProjectItemEdit(ctx, args[2:], stdout, stderr, runner)
+			case "setup-fields":
+				return runProjectSetupFields(ctx, args[2:], stdout, stderr, runner)
 			}
 		}
-		return usageError(stderr, "project requires the item-list, item-add, or item-edit subcommand")
+		return usageError(stderr, "project requires the item-list, item-add, item-edit, or setup-fields subcommand")
 	case "update":
 		if len(args) >= 2 && args[1] == "check" {
 			return runUpdateCheck(ctx, args[2:], stdout, stderr, runner)
