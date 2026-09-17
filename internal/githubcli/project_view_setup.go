@@ -19,18 +19,18 @@ type StandardBacklogViewChange struct {
 }
 
 type StandardBacklogViewPlan struct {
-	Project       ProjectIdentity              `json:"project"`
-	OwnerType     string                       `json:"ownerType"`
-	VisibleFields []string                     `json:"visibleFields"`
+	Project       ProjectIdentity             `json:"project"`
+	OwnerType     string                      `json:"ownerType"`
+	VisibleFields []string                    `json:"visibleFields"`
 	Changes       []StandardBacklogViewChange `json:"changes"`
 }
 
 type StandardBacklogViewResult struct {
-	Project       ProjectIdentity              `json:"project"`
-	OwnerType     string                       `json:"ownerType"`
-	VisibleFields []string                     `json:"visibleFields"`
+	Project       ProjectIdentity             `json:"project"`
+	OwnerType     string                      `json:"ownerType"`
+	VisibleFields []string                    `json:"visibleFields"`
 	Applied       []StandardBacklogViewChange `json:"applied"`
-	Verified      bool                         `json:"verified"`
+	Verified      bool                        `json:"verified"`
 }
 
 type restProjectField struct {
@@ -77,11 +77,11 @@ type projectViewSortConnection struct {
 }
 
 type projectViewNode struct {
-	ID     string  `json:"id"`
-	Number int     `json:"number"`
-	Name   string  `json:"name"`
-	Layout string  `json:"layout"`
-	Filter *string `json:"filter"`
+	ID            string  `json:"id"`
+	Number        int     `json:"number"`
+	Name          string  `json:"name"`
+	Layout        string  `json:"layout"`
+	Filter        *string `json:"filter"`
 	Configuration struct {
 		VisibleFields projectViewFieldConnection `json:"visibleFields"`
 	} `json:"configuration"`
