@@ -126,7 +126,7 @@ Copy-and-paste command handoffs must be safe to paste into an interactive shell.
 
 Run `scripts/setup.sh` when preparing an environment or when `gh` prerequisites are missing. The host must provide credentials and network access. Never print, persist, transform or request a token in a prompt.
 
-When adopting the skill in a repository that does not yet have `.projects/project.md`, run `scripts/init-project.sh` from that repository. It discovers live GitHub facts, asks only for local choices, writes the first single-Project contract or an empty multi-Project dispatcher, and adds a bounded `AGENTS.md` routing section. The shared behavioural defaults above do not need to be copied into a contract. #201 owns updating generated onboarding contracts after the standard live field profile is implemented.
+When adopting the skill in a repository that does not yet have `.projects/project.md`, run `scripts/init-project.sh` from that repository. It discovers live GitHub facts, asks only for local choices, writes the first minimal single-Project contract or an empty multi-Project dispatcher, and adds a bounded `AGENTS.md` routing section. The shared behavioural defaults above do not need to be copied into a contract. When `projects` is available, onboarding also reconciles the standard Project field profile and Backlog view.
 
 ## Inspect and plan
 

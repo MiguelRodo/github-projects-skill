@@ -83,8 +83,9 @@ behaviour that should not be lost during a port.
   child-route consistency and safe pending Priority state.
 - `setup.sh` checks tools, authentication and declared identities. It can run a
   repository-local extension or deliberate replacement.
-- `init-project.sh` discovers facts, writes repository configuration only,
-  preserves existing routes and validates temporary output before replacement.
+- `init-project.sh` discovers facts, writes the minimal repository configuration,
+  preserves existing routes, and delegates one-time standard field/view setup to
+  `projects` when available; organisation-wide schema changes remain explicit.
 
 Go replacements need parity tests against the existing fixtures before a shell
 entry point is retired. No script is removed merely because an equivalent Go
