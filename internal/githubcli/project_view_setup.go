@@ -288,6 +288,14 @@ func buildBacklogViewSpec(project contract.Project, ownerType string, fields []r
 		if !ok {
 			continue
 		}
+		if wantedField.dataType == "issue_type" {
+			// GitHub's public API cannot make an organisation Issue Type field
+			// visible in a Project view: the REST create ignores it and the
+			// GraphQL update rejects it with "Visible fields must be available
+			// in the view". The field is still located and used for issue
+			// classification, so it is not required as a view column.
+			continue
+		}
 		spec.Visible = append(spec.Visible, field)
 		if strings.EqualFold(field.Name, "Status") {
 			spec.Status = field
@@ -342,12 +350,19 @@ func viewFieldNodeIDs(fields []projectViewFieldRef) []string {
 	return ids
 }
 
-func sameStrings(left, right []string) bool {
+// sameFieldSet compares visible fields as an unordered set: GitHub returns a
+// view's visible fields in its own display order rather than the requested one.
+func sameFieldSet(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
 	}
-	for i := range left {
-		if left[i] != right[i] {
+	counts := make(map[string]int, len(left))
+	for _, value := range left {
+		counts[value]++
+	}
+	for _, value := range right {
+		counts[value]--
+		if counts[value] < 0 {
 			return false
 		}
 	}
@@ -364,7 +379,7 @@ func backlogViewGroupSortMatches(view projectViewNode, spec backlogViewSpec) boo
 
 func backlogViewMatchesBasic(view projectViewNode, spec backlogViewSpec) bool {
 	filterEmpty := view.Filter == nil || strings.TrimSpace(*view.Filter) == ""
-	return strings.EqualFold(view.Layout, "TABLE_LAYOUT") && filterEmpty && sameStrings(viewFieldNodeIDs(view.Configuration.VisibleFields.Nodes), fieldNodeIDs(spec.Visible))
+	return strings.EqualFold(view.Layout, "TABLE_LAYOUT") && filterEmpty && sameFieldSet(viewFieldNodeIDs(view.Configuration.VisibleFields.Nodes), fieldNodeIDs(spec.Visible))
 }
 
 func backlogViewMatches(view projectViewNode, spec backlogViewSpec) bool {
@@ -432,15 +447,9 @@ func createBacklogView(ctx context.Context, runner Runner, project contract.Proj
 	}
 	endpoint := fmt.Sprintf("orgs/%s/projectsV2/%d/views", project.Owner, project.Number)
 	if state.ownerType == "user" {
-		out, err := runner.Run(ctx, "api", "users/"+project.Owner, "--jq", ".id")
-		if err != nil {
-			return "", fmt.Errorf("resolve user database ID for Project view creation: %w", err)
-		}
-		userID := strings.TrimSpace(string(out))
-		if _, err := strconv.ParseInt(userID, 10, 64); err != nil {
-			return "", fmt.Errorf("invalid user database ID %q for %s", userID, project.Owner)
-		}
-		endpoint = fmt.Sprintf("users/%s/projectsV2/%d/views", userID, project.Number)
+		// GitHub requires the account login here. The numeric database ID is
+		// not accepted and returns 404.
+		endpoint = fmt.Sprintf("users/%s/projectsV2/%d/views", project.Owner, project.Number)
 	}
 	args := []string{"api", "--method", "POST"}
 	args = append(args, apiHeaders()...)
