@@ -92,9 +92,9 @@ func TestResolveDispatcher(t *testing.T) {
 		{name: "label", selector: Selector{RoutingLabel: "project:beta"}, wantKey: "beta"},
 		{name: "number", selector: Selector{Number: 4}, wantKey: "alpha"},
 		{
-			name: "agreeing identifiers",
+			name:     "agreeing identifiers",
 			selector: Selector{Key: "beta", RoutingLabel: "project:beta", Number: 5},
-			wantKey: "beta",
+			wantKey:  "beta",
 		},
 	}
 	for _, test := range tests {
