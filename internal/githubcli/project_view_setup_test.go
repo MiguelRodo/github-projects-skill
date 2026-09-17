@@ -100,14 +100,14 @@ func TestPlanBacklogViewRejectsAmbiguousDuplicates(t *testing.T) {
 
 func TestBuildBacklogViewSpecUsesStandardOrderAndSkipsUnavailableOptionalFields(t *testing.T) {
 	project := contract.Project{Owner: "octo-user", Number: 4, Title: "Planning"}
-	schema := detailedProjectSchema{Fields: map[string]detailedProjectField{}}
-	rest := []restProjectField{}
-	for index, name := range []string{"Title", "Status", "Assignees", "Priority", "Class"} {
-		key := strings.ToLower(name)
-		schema.Fields[key] = detailedProjectField{ID: "node-" + key, Name: name}
-		rest = append(rest, restProjectField{ID: index + 1, NodeID: "node-" + key, Name: name})
+	fields := []restProjectField{
+		{ID: 1, NodeID: "node-title", Name: "Title", DataType: "title"},
+		{ID: 2, NodeID: "node-status", Name: "Status", DataType: "single_select"},
+		{ID: 3, NodeID: "node-assignees", Name: "People", DataType: "assignees"},
+		{ID: 4, NodeID: "node-priority", Name: "Priority", DataType: "single_select"},
+		{ID: 5, NodeID: "node-class", Name: "Class", DataType: "single_select"},
 	}
-	spec, err := buildBacklogViewSpec(project, "user", schema, rest)
+	spec, err := buildBacklogViewSpec(project, "user", fields)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestBuildBacklogViewSpecUsesStandardOrderAndSkipsUnavailableOptionalFields(
 	for _, field := range spec.Visible {
 		names = append(names, field.Name)
 	}
-	want := []string{"Title", "Status", "Assignees", "Priority", "Class"}
+	want := []string{"Title", "Status", "People", "Priority", "Class"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("visible = %#v, want %#v", names, want)
 	}
@@ -123,19 +123,17 @@ func TestBuildBacklogViewSpecUsesStandardOrderAndSkipsUnavailableOptionalFields(
 
 func TestBuildBacklogViewSpecUsesIssueTypeForOrganization(t *testing.T) {
 	project := contract.Project{Owner: "octo-org", Number: 12, Title: "Planning"}
-	names := []string{"Title", "Status", "Priority", "Issue Type"}
-	schema := detailedProjectSchema{Fields: map[string]detailedProjectField{}}
-	var rest []restProjectField
-	for index, name := range names {
-		key := strings.ToLower(name)
-		schema.Fields[key] = detailedProjectField{ID: "node-" + key, Name: name}
-		rest = append(rest, restProjectField{ID: index + 1, NodeID: "node-" + key, Name: name})
+	fields := []restProjectField{
+		{ID: 1, NodeID: "node-title", Name: "Title", DataType: "title"},
+		{ID: 2, NodeID: "node-status", Name: "Status", DataType: "single_select"},
+		{ID: 3, NodeID: "node-priority", Name: "Priority", DataType: "single_select"},
+		{ID: 4, NodeID: "node-issue-type", Name: "Type", DataType: "issue_type"},
 	}
-	spec, err := buildBacklogViewSpec(project, "organization", schema, rest)
+	spec, err := buildBacklogViewSpec(project, "organization", fields)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := spec.Visible[len(spec.Visible)-1].Name; got != "Issue Type" {
-		t.Fatalf("last visible field = %q, want Issue Type", got)
+	if got := spec.Visible[len(spec.Visible)-1].Name; got != "Type" {
+		t.Fatalf("last visible field = %q, want Type", got)
 	}
 }
