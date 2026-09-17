@@ -93,11 +93,7 @@ func TestResolveDispatcher(t *testing.T) {
 		{name: "number", selector: Selector{Number: 4}, wantKey: "alpha"},
 		{
 			name: "agreeing identifiers",
-			selector: Selector{
-				Key:          "beta",
-				RoutingLabel: "project:beta",
-				Number:       5,
-			},
+			selector: Selector{Key: "beta", RoutingLabel: "project:beta", Number: 5},
 			wantKey: "beta",
 		},
 	}
@@ -122,12 +118,7 @@ func TestResolveDispatcherRejectsMissingOrDisagreeingSelectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	for _, selector := range []Selector{
-		{},
-		{Key: "alpha", Number: 5},
-		{Key: "missing"},
-	} {
+	for _, selector := range []Selector{{}, {Key: "alpha", Number: 5}, {Key: "missing"}} {
 		if _, err := configuration.Resolve(selector); err == nil {
 			t.Fatalf("Resolve(%+v) error = nil", selector)
 		}
@@ -162,7 +153,6 @@ func TestProjectFieldLocationsAndHelpers(t *testing.T) {
 		t.Fatalf("Priority field location = %+v", loc)
 	}
 
-	// Priority resolution
 	if val, err := p.ResolvePriority("P0"); err != nil || val != "Urgent" {
 		t.Fatalf("ResolvePriority(P0) = %q, err = %v", val, err)
 	}
@@ -170,13 +160,6 @@ func TestProjectFieldLocationsAndHelpers(t *testing.T) {
 		t.Fatal("ResolvePriority(P99) error = nil")
 	}
 
-	// Class validation when empty allows anything
-	if val, err := p.ValidateClass("task"); err != nil || val != "task" {
-		t.Fatalf("ValidateClass(task) = %q, err = %v", val, err)
-	}
-
-	// Class validation with declared values
-	p.ClassValues = []string{"Task", "Bug"}
 	if val, err := p.ValidateClass("task"); err != nil || val != "Task" {
 		t.Fatalf("ValidateClass(task) = %q, err = %v", val, err)
 	}
@@ -184,7 +167,14 @@ func TestProjectFieldLocationsAndHelpers(t *testing.T) {
 		t.Fatal("ValidateClass(NonExistentClass) error = nil")
 	}
 
-	// Status mapping
+	p.ClassValues = []string{"Task", "Bug"}
+	if val, err := p.ValidateClass("task"); err != nil || val != "Task" {
+		t.Fatalf("ValidateClass(task) with override = %q, err = %v", val, err)
+	}
+	if _, err := p.ValidateClass("Analysis"); err == nil {
+		t.Fatal("ValidateClass(Analysis) error = nil with smaller override")
+	}
+
 	if val, err := p.ResolveStatus("Todo"); err != nil || val != "Todo" {
 		t.Fatalf("ResolveStatus(Todo) = %q, err = %v, want Todo", val, err)
 	}
@@ -193,6 +183,33 @@ func TestProjectFieldLocationsAndHelpers(t *testing.T) {
 		t.Fatalf("ResolveStatus(backlog) = %q, err = %v, want Backlog", val, err)
 	}
 	if _, err := p.ResolveStatus("Done"); err == nil {
-		t.Fatal("ResolveStatus(Done) error = nil")
+		t.Fatal("ResolveStatus(Done) error = nil with explicit override")
+	}
+}
+
+func TestSharedDefaultsWhenSectionsAreOmitted(t *testing.T) {
+	t.Parallel()
+	configuration, err := Load(fixtureRoot(t, "single-user"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := configuration.Project
+	if p == nil {
+		t.Fatal("Project is nil")
+	}
+	if val, err := p.ResolvePriority("p2"); err != nil || val != "P2" {
+		t.Fatalf("ResolvePriority(p2) = %q, err = %v, want P2", val, err)
+	}
+	if val, err := p.ValidateClass("documentation"); err != nil || val != "Documentation" {
+		t.Fatalf("ValidateClass(documentation) = %q, err = %v", val, err)
+	}
+	for input, want := range map[string]string{
+		"to do":       "Todo",
+		"IN_PROGRESS": "In progress",
+		"completed":   "Done",
+	} {
+		if got, err := p.ResolveStatus(input); err != nil || got != want {
+			t.Fatalf("ResolveStatus(%q) = %q, err = %v, want %q", input, got, err, want)
+		}
 	}
 }
