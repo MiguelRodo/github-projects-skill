@@ -70,11 +70,12 @@ type detailedProjectOption struct {
 }
 
 type detailedProjectField struct {
-	Typename string
-	ID       string
-	Name     string
-	DataType string
-	Options  []detailedProjectOption
+	Typename     string
+	ID           string
+	Name         string
+	DataType     string
+	IsIssueField bool
+	Options      []detailedProjectOption
 }
 
 type detailedProjectSchema struct {
@@ -85,11 +86,12 @@ type detailedProjectSchema struct {
 }
 
 type detailedProjectFieldNode struct {
-	Typename string `json:"__typename"`
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	DataType string `json:"dataType"`
-	Options  []struct {
+	Typename     string `json:"__typename"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	DataType     string `json:"dataType"`
+	IsIssueField bool   `json:"isIssueField"`
+	Options      []struct {
 		ID          string `json:"id"`
 		Name        string `json:"name"`
 		Color       string `json:"color"`
@@ -133,7 +135,7 @@ func queryDetailedProjectSchema(ctx context.Context, runner Runner, project cont
       fields(first: 100) {
         nodes {
           __typename
-          ... on ProjectV2FieldCommon { id name dataType }
+          ... on ProjectV2FieldCommon { id name dataType isIssueField }
           ... on ProjectV2SingleSelectField { options { id name color description } }
         }
         pageInfo { hasNextPage }
@@ -169,7 +171,7 @@ func queryDetailedProjectSchema(ctx context.Context, runner Runner, project cont
 	}
 	schema := detailedProjectSchema{ID: data.ID, Number: data.Number, Title: data.Title, Fields: make(map[string]detailedProjectField)}
 	for _, node := range data.Fields.Nodes {
-		field := detailedProjectField{Typename: node.Typename, ID: node.ID, Name: node.Name, DataType: node.DataType}
+		field := detailedProjectField{Typename: node.Typename, ID: node.ID, Name: node.Name, DataType: node.DataType, IsIssueField: node.IsIssueField}
 		for _, option := range node.Options {
 			field.Options = append(field.Options, detailedProjectOption{ID: option.ID, Name: option.Name, Color: strings.ToUpper(option.Color), Description: option.Description})
 		}
@@ -182,13 +184,36 @@ func queryDetailedProjectSchema(ctx context.Context, runner Runner, project cont
 	return schema, nil
 }
 
-type organizationIssueTypeDefinition struct {
-	ID          int    `json:"id"`
+type organizationIssueTypeListRecord struct {
 	NodeID      string `json:"node_id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Color       string `json:"color"`
-	Enabled     bool   `json:"is_enabled"`
+}
+
+type organizationIssueTypeDefinition struct {
+	NodeID      string
+	Name        string
+	Description string
+	Color       string
+	Enabled     bool
+}
+
+type organizationIssueTypeGraphQLResponse struct {
+	Data struct {
+		Organization *struct {
+			ID string `json:"id"`
+		} `json:"organization"`
+		Nodes []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Color       string `json:"color"`
+			IsEnabled   bool   `json:"isEnabled"`
+		} `json:"nodes"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
 }
 
 type organizationIssueFieldOptionDefinition struct {
@@ -208,23 +233,82 @@ type organizationIssueFieldDefinition struct {
 	Options     []organizationIssueFieldOptionDefinition `json:"options"`
 }
 
-func queryOrganizationIssueTypes(ctx context.Context, runner Runner, owner string) ([]organizationIssueTypeDefinition, error) {
+func runJSONInput(ctx context.Context, runner Runner, body any, args ...string) ([]byte, error) {
+	stdinRunner, ok := runner.(inputRunner)
+	if !ok {
+		return nil, errors.New("GitHub runner does not support JSON request bodies")
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("encode GitHub request: %w", err)
+	}
+	return stdinRunner.RunInput(ctx, encoded, args...)
+}
+
+func queryOrganizationIssueTypes(ctx context.Context, runner Runner, project contract.Project) (string, []organizationIssueTypeDefinition, error) {
 	args := []string{"api", "--paginate", "--slurp"}
 	args = append(args, apiHeaders()...)
-	args = append(args, "orgs/"+owner+"/issue-types?per_page=100")
+	args = append(args, "orgs/"+project.Owner+"/issue-types?per_page=100")
 	out, err := runner.Run(ctx, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list organization issue types for %s: %w", owner, err)
+		return "", nil, fmt.Errorf("list organization issue types for %s: %w", project.Owner, err)
 	}
-	var pages [][]organizationIssueTypeDefinition
+	var pages [][]organizationIssueTypeListRecord
 	if err := json.Unmarshal(out, &pages); err != nil {
-		return nil, fmt.Errorf("decode organization issue types: %w", err)
+		return "", nil, fmt.Errorf("decode organization issue types: %w", err)
 	}
-	var result []organizationIssueTypeDefinition
+	var records []organizationIssueTypeListRecord
 	for _, page := range pages {
-		result = append(result, page...)
+		records = append(records, page...)
 	}
-	return result, nil
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		if record.NodeID == "" {
+			return "", nil, fmt.Errorf("organization issue type %q has no node id", record.Name)
+		}
+		ids = append(ids, record.NodeID)
+	}
+
+	query := `query($login: String!, $ids: [ID!]!) {
+  organization(login: $login) { id }
+  nodes(ids: $ids) {
+    ... on IssueType { id name description color isEnabled }
+  }
+}`
+	body := map[string]any{"query": query, "variables": map[string]any{"login": project.Owner, "ids": ids}}
+	graphOut, err := runJSONInput(ctx, runner, body, "api", "graphql", "--input", "-")
+	if err != nil {
+		return "", nil, fmt.Errorf("read organization issue type definitions: %w", err)
+	}
+	var resp organizationIssueTypeGraphQLResponse
+	if err := json.Unmarshal(graphOut, &resp); err != nil {
+		return "", nil, fmt.Errorf("decode organization issue type definitions: %w", err)
+	}
+	if len(resp.Errors) > 0 {
+		return "", nil, fmt.Errorf("GraphQL error querying organization issue types: %s", resp.Errors[0].Message)
+	}
+	if resp.Data.Organization == nil || resp.Data.Organization.ID == "" {
+		return "", nil, fmt.Errorf("organization %s was not returned by GraphQL", project.Owner)
+	}
+	if len(resp.Data.Nodes) != len(records) {
+		return "", nil, fmt.Errorf("organization issue type readback returned %d nodes for %d listed types", len(resp.Data.Nodes), len(records))
+	}
+	definitions := make([]organizationIssueTypeDefinition, 0, len(resp.Data.Nodes))
+	seen := make(map[string]bool)
+	for _, node := range resp.Data.Nodes {
+		if node.ID == "" || node.Name == "" {
+			return "", nil, errors.New("organization issue type GraphQL read returned an incomplete node")
+		}
+		if seen[node.ID] {
+			return "", nil, fmt.Errorf("organization issue type node %s appeared more than once", node.ID)
+		}
+		seen[node.ID] = true
+		definitions = append(definitions, organizationIssueTypeDefinition{
+			NodeID: node.ID, Name: node.Name, Description: node.Description,
+			Color: strings.ToUpper(node.Color), Enabled: node.IsEnabled,
+		})
+	}
+	return resp.Data.Organization.ID, definitions, nil
 }
 
 func queryOrganizationIssueFieldDefinitions(ctx context.Context, runner Runner, owner string) ([]organizationIssueFieldDefinition, error) {
@@ -247,11 +331,12 @@ func queryOrganizationIssueFieldDefinitions(ctx context.Context, runner Runner, 
 }
 
 type setupState struct {
-	ownerType     string
-	project       detailedProjectSchema
-	issueTypes    []organizationIssueTypeDefinition
-	issueFields   []organizationIssueFieldDefinition
-	priorityField *organizationIssueFieldDefinition
+	ownerType      string
+	project        detailedProjectSchema
+	organizationID string
+	issueTypes     []organizationIssueTypeDefinition
+	issueFields    []organizationIssueFieldDefinition
+	priorityField  *organizationIssueFieldDefinition
 }
 
 func inspectStandardProjectSetup(ctx context.Context, runner Runner, project contract.Project) (setupState, error) {
@@ -276,7 +361,7 @@ func inspectStandardProjectSetup(ctx context.Context, runner Runner, project con
 	}
 	state := setupState{ownerType: ownerType, project: projectSchema}
 	if ownerType == "organization" {
-		state.issueTypes, err = queryOrganizationIssueTypes(ctx, runner, project.Owner)
+		state.organizationID, state.issueTypes, err = queryOrganizationIssueTypes(ctx, runner, project)
 		if err != nil {
 			return setupState{}, err
 		}
@@ -394,16 +479,10 @@ func reconcileOrganizationPriorityOptions(current []organizationIssueFieldOption
 		}
 		result = append(result, organizationIssueFieldOptionDefinition{ID: id, Name: option.Name, Description: option.Description, Color: strings.ToLower(option.Color), Priority: i + 1})
 	}
-	for i := range current {
-		if current[i].Priority != i+1 && current[i].Priority != 0 {
-			changed = true
-			break
-		}
-	}
 	return result, changed, nil
 }
 
-func planProjectField(changes *[]StandardProjectSetupChange, state setupState, name, dataType string, options []standardOption, ownerType string) error {
+func planProjectField(changes *[]StandardProjectSetupChange, state setupState, name, dataType string, options []standardOption) error {
 	field, exists := state.project.Fields[strings.ToLower(name)]
 	if !exists {
 		*changes = append(*changes, StandardProjectSetupChange{Scope: "project", Action: "create_field", Name: name, Detail: dataType})
@@ -415,8 +494,8 @@ func planProjectField(changes *[]StandardProjectSetupChange, state setupState, n
 	if len(options) == 0 {
 		return nil
 	}
-	if field.Typename != "ProjectV2SingleSelectField" {
-		return fmt.Errorf("Project field %q is %s, want a project single-select field", name, field.Typename)
+	if field.Typename != "ProjectV2SingleSelectField" || field.IsIssueField {
+		return fmt.Errorf("Project field %q is not a Project-local single-select field", name)
 	}
 	_, changed, err := reconcileProjectOptions(field.Options, options)
 	if err != nil {
@@ -428,28 +507,22 @@ func planProjectField(changes *[]StandardProjectSetupChange, state setupState, n
 	return nil
 }
 
-// PlanStandardProjectSetup inspects live Project and organization schema and
-// returns only the changes needed for the shared standard profile.
-func PlanStandardProjectSetup(ctx context.Context, runner Runner, project contract.Project) (StandardProjectSetupPlan, error) {
-	state, err := inspectStandardProjectSetup(ctx, runner, project)
-	if err != nil {
-		return StandardProjectSetupPlan{}, err
-	}
+func planStandardProjectSetupFromState(project contract.Project, state setupState) (StandardProjectSetupPlan, error) {
 	plan := StandardProjectSetupPlan{
 		Project:   ProjectIdentity{Number: project.Number, Owner: project.Owner, Title: project.Title},
 		OwnerType: state.ownerType,
 	}
-	if err := planProjectField(&plan.Changes, state, "Due date", "DATE", nil, state.ownerType); err != nil {
+	if err := planProjectField(&plan.Changes, state, "Due date", "DATE", nil); err != nil {
 		return StandardProjectSetupPlan{}, err
 	}
-	if err := planProjectField(&plan.Changes, state, "Target date", "DATE", nil, state.ownerType); err != nil {
+	if err := planProjectField(&plan.Changes, state, "Target date", "DATE", nil); err != nil {
 		return StandardProjectSetupPlan{}, err
 	}
 	if state.ownerType == "user" {
-		if err := planProjectField(&plan.Changes, state, "Class", "SINGLE_SELECT", standardClassOptions, state.ownerType); err != nil {
+		if err := planProjectField(&plan.Changes, state, "Class", "SINGLE_SELECT", standardClassOptions); err != nil {
 			return StandardProjectSetupPlan{}, err
 		}
-		if err := planProjectField(&plan.Changes, state, "Priority", "SINGLE_SELECT", standardPriorityOptions, state.ownerType); err != nil {
+		if err := planProjectField(&plan.Changes, state, "Priority", "SINGLE_SELECT", standardPriorityOptions); err != nil {
 			return StandardProjectSetupPlan{}, err
 		}
 		return plan, nil
@@ -493,40 +566,46 @@ func PlanStandardProjectSetup(ctx context.Context, runner Runner, project contra
 	}
 	if field, exists := state.project.Fields["priority"]; !exists {
 		plan.Changes = append(plan.Changes, StandardProjectSetupChange{Scope: "project", Action: "attach_issue_field", Name: "Priority"})
-	} else if field.Typename != "ProjectV2IssueField" {
-		return StandardProjectSetupPlan{}, fmt.Errorf("organization Project already has non-issue field %q named Priority", field.Typename)
+	} else if !field.IsIssueField || field.DataType != "SINGLE_SELECT" {
+		return StandardProjectSetupPlan{}, fmt.Errorf("organization Project has a non-issue or non-single-select field named Priority")
 	}
 	return plan, nil
 }
 
-func runJSONInput(ctx context.Context, runner Runner, body any, args ...string) ([]byte, error) {
-	stdinRunner, ok := runner.(inputRunner)
-	if !ok {
-		return nil, errors.New("GitHub runner does not support JSON request bodies")
-	}
-	encoded, err := json.Marshal(body)
+// PlanStandardProjectSetup inspects live Project and organization schema and
+// returns only the changes needed for the shared standard profile.
+func PlanStandardProjectSetup(ctx context.Context, runner Runner, project contract.Project) (StandardProjectSetupPlan, error) {
+	state, err := inspectStandardProjectSetup(ctx, runner, project)
 	if err != nil {
-		return nil, fmt.Errorf("encode GitHub request: %w", err)
+		return StandardProjectSetupPlan{}, err
 	}
-	return stdinRunner.RunInput(ctx, encoded, args...)
+	return planStandardProjectSetupFromState(project, state)
 }
 
 func createProjectField(ctx context.Context, runner Runner, projectID, name, dataType string, options []standardOption) error {
-	variables := map[string]any{"projectId": projectID, "name": name, "dataType": dataType}
-	if len(options) > 0 {
-		items := make([]map[string]any, 0, len(options))
-		for _, option := range options {
-			items = append(items, map[string]any{"name": option.Name, "color": option.Color, "description": ""})
+	if len(options) == 0 {
+		query := `mutation($projectId: ID!, $name: String!, $dataType: ProjectV2CustomFieldType!) {
+  createProjectV2Field(input: {projectId: $projectId, name: $name, dataType: $dataType}) {
+    projectV2Field { ... on ProjectV2FieldCommon { id name dataType } }
+  }
+}`
+		body := map[string]any{"query": query, "variables": map[string]any{"projectId": projectID, "name": name, "dataType": dataType}}
+		if _, err := runJSONInput(ctx, runner, body, "api", "graphql", "--input", "-"); err != nil {
+			return fmt.Errorf("create Project field %q: %w", name, err)
 		}
-		variables["options"] = items
+		return nil
 	}
-	query := `mutation($projectId: ID!, $name: String!, $dataType: ProjectV2CustomFieldType!, $options: [ProjectV2SingleSelectFieldOptionInput!]) {
+	items := make([]map[string]any, 0, len(options))
+	for _, option := range options {
+		items = append(items, map[string]any{"name": option.Name, "color": option.Color, "description": ""})
+	}
+	query := `mutation($projectId: ID!, $name: String!, $dataType: ProjectV2CustomFieldType!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
   createProjectV2Field(input: {projectId: $projectId, name: $name, dataType: $dataType, singleSelectOptions: $options}) {
     projectV2Field { ... on ProjectV2FieldCommon { id name dataType } }
   }
 }`
-	_, err := runJSONInput(ctx, runner, map[string]any{"query": query, "variables": variables}, "api", "graphql", "--input", "-")
-	if err != nil {
+	body := map[string]any{"query": query, "variables": map[string]any{"projectId": projectID, "name": name, "dataType": dataType, "options": items}}
+	if _, err := runJSONInput(ctx, runner, body, "api", "graphql", "--input", "-"); err != nil {
 		return fmt.Errorf("create Project field %q: %w", name, err)
 	}
 	return nil
@@ -553,32 +632,37 @@ func updateProjectSingleSelect(ctx context.Context, runner Runner, field detaile
     projectV2Field { ... on ProjectV2SingleSelectField { id name options { id name color description } } }
   }
 }`
-	_, err = runJSONInput(ctx, runner, map[string]any{"query": query, "variables": map[string]any{"fieldId": field.ID, "options": payloadOptions}}, "api", "graphql", "--input", "-")
-	if err != nil {
+	body := map[string]any{"query": query, "variables": map[string]any{"fieldId": field.ID, "options": payloadOptions}}
+	if _, err := runJSONInput(ctx, runner, body, "api", "graphql", "--input", "-"); err != nil {
 		return fmt.Errorf("update Project field %q: %w", field.Name, err)
 	}
 	return nil
 }
 
-func createOrganizationIssueType(ctx context.Context, runner Runner, owner string, desired standardOption) error {
-	body := map[string]any{"name": desired.Name, "is_enabled": true, "description": "", "color": strings.ToLower(desired.Color)}
-	args := []string{"api", "--method", "POST"}
-	args = append(args, apiHeaders()...)
-	args = append(args, "orgs/"+owner+"/issue-types", "--input", "-")
-	_, err := runJSONInput(ctx, runner, body, args...)
-	if err != nil {
+func createOrganizationIssueType(ctx context.Context, runner Runner, organizationID string, desired standardOption) error {
+	query := `mutation($ownerId: ID!, $name: String!, $color: IssueTypeColor!) {
+  createIssueType(input: {ownerId: $ownerId, name: $name, description: "", isEnabled: true, color: $color}) {
+    issueType { id name color isEnabled }
+  }
+}`
+	body := map[string]any{"query": query, "variables": map[string]any{"ownerId": organizationID, "name": desired.Name, "color": desired.Color}}
+	if _, err := runJSONInput(ctx, runner, body, "api", "graphql", "--input", "-"); err != nil {
 		return fmt.Errorf("create organization issue type %q: %w", desired.Name, err)
 	}
 	return nil
 }
 
-func updateOrganizationIssueType(ctx context.Context, runner Runner, owner string, current organizationIssueTypeDefinition, desired standardOption) error {
-	body := map[string]any{"name": desired.Name, "is_enabled": true, "description": current.Description, "color": strings.ToLower(desired.Color)}
-	args := []string{"api", "--method", "PUT"}
-	args = append(args, apiHeaders()...)
-	args = append(args, fmt.Sprintf("orgs/%s/issue-types/%d", owner, current.ID), "--input", "-")
-	_, err := runJSONInput(ctx, runner, body, args...)
-	if err != nil {
+func updateOrganizationIssueType(ctx context.Context, runner Runner, current organizationIssueTypeDefinition, desired standardOption) error {
+	query := `mutation($issueTypeId: ID!, $name: String!, $description: String, $color: IssueTypeColor!) {
+  updateIssueType(input: {issueTypeId: $issueTypeId, name: $name, description: $description, isEnabled: true, color: $color}) {
+    issueType { id name color isEnabled }
+  }
+}`
+	body := map[string]any{"query": query, "variables": map[string]any{
+		"issueTypeId": current.NodeID, "name": desired.Name,
+		"description": current.Description, "color": desired.Color,
+	}}
+	if _, err := runJSONInput(ctx, runner, body, "api", "graphql", "--input", "-"); err != nil {
 		return fmt.Errorf("update organization issue type %q: %w", desired.Name, err)
 	}
 	return nil
@@ -606,8 +690,7 @@ func createOrganizationPriority(ctx context.Context, runner Runner, owner string
 	args := []string{"api", "--method", "POST"}
 	args = append(args, apiHeaders()...)
 	args = append(args, "orgs/"+owner+"/issue-fields", "--input", "-")
-	_, err := runJSONInput(ctx, runner, body, args...)
-	if err != nil {
+	if _, err := runJSONInput(ctx, runner, body, args...); err != nil {
 		return fmt.Errorf("create organization Priority issue field: %w", err)
 	}
 	return nil
@@ -625,8 +708,7 @@ func updateOrganizationPriority(ctx context.Context, runner Runner, owner string
 	args := []string{"api", "--method", "PATCH"}
 	args = append(args, apiHeaders()...)
 	args = append(args, fmt.Sprintf("orgs/%s/issue-fields/%d", owner, field.ID), "--input", "-")
-	_, err = runJSONInput(ctx, runner, body, args...)
-	if err != nil {
+	if _, err := runJSONInput(ctx, runner, body, args...); err != nil {
 		return fmt.Errorf("update organization Priority issue field: %w", err)
 	}
 	return nil
@@ -637,14 +719,13 @@ func attachOrganizationIssueField(ctx context.Context, runner Runner, project co
 	args := []string{"api", "--method", "POST"}
 	args = append(args, apiHeaders()...)
 	args = append(args, fmt.Sprintf("orgs/%s/projectsV2/%d/fields", project.Owner, project.Number), "--input", "-")
-	_, err := runJSONInput(ctx, runner, body, args...)
-	if err != nil {
+	if _, err := runJSONInput(ctx, runner, body, args...); err != nil {
 		return fmt.Errorf("attach organization Priority issue field to Project: %w", err)
 	}
 	return nil
 }
 
-func applyProjectFieldChange(ctx context.Context, runner Runner, project contract.Project, state setupState, change StandardProjectSetupChange) error {
+func applyProjectFieldChange(ctx context.Context, runner Runner, state setupState, change StandardProjectSetupChange) error {
 	switch change.Action {
 	case "create_field":
 		var options []standardOption
@@ -665,11 +746,14 @@ func applyProjectFieldChange(ctx context.Context, runner Runner, project contrac
 	}
 }
 
-// ApplyStandardProjectSetup performs the planned setup and then independently
-// re-inspects the live schema. Organization-wide schema changes require the
-// explicit allowOrganizationSchema flag before any mutation occurs.
+// ApplyStandardProjectSetup performs standard setup and independently re-reads
+// the live schema. Organization-wide changes need an explicit opt-in flag.
 func ApplyStandardProjectSetup(ctx context.Context, runner Runner, project contract.Project, allowOrganizationSchema bool) (StandardProjectSetupResult, error) {
-	plan, err := PlanStandardProjectSetup(ctx, runner, project)
+	state, err := inspectStandardProjectSetup(ctx, runner, project)
+	if err != nil {
+		return StandardProjectSetupResult{}, err
+	}
+	plan, err := planStandardProjectSetupFromState(project, state)
 	if err != nil {
 		return StandardProjectSetupResult{}, err
 	}
@@ -679,10 +763,6 @@ func ApplyStandardProjectSetup(ctx context.Context, runner Runner, project contr
 	if len(plan.Changes) == 0 {
 		return StandardProjectSetupResult{Project: plan.Project, OwnerType: plan.OwnerType, Verified: true}, nil
 	}
-	state, err := inspectStandardProjectSetup(ctx, runner, project)
-	if err != nil {
-		return StandardProjectSetupResult{}, fmt.Errorf("stale pre-write inspection: %w", err)
-	}
 
 	for _, change := range plan.Changes {
 		if change.Scope != "organization" {
@@ -691,7 +771,7 @@ func ApplyStandardProjectSetup(ctx context.Context, runner Runner, project contr
 		switch change.Action {
 		case "create_issue_type":
 			desired, _ := standardOptionByCurrentName(change.Name, standardClassOptions)
-			if err := createOrganizationIssueType(ctx, runner, project.Owner, desired); err != nil {
+			if err := createOrganizationIssueType(ctx, runner, state.organizationID, desired); err != nil {
 				return StandardProjectSetupResult{}, err
 			}
 		case "reconcile_issue_type":
@@ -707,7 +787,7 @@ func ApplyStandardProjectSetup(ctx context.Context, runner Runner, project contr
 				return StandardProjectSetupResult{}, fmt.Errorf("organization issue type %q disappeared after preflight", change.Name)
 			}
 			desired, _ := standardOptionByCurrentName(change.Name, standardClassOptions)
-			if err := updateOrganizationIssueType(ctx, runner, project.Owner, current, desired); err != nil {
+			if err := updateOrganizationIssueType(ctx, runner, current, desired); err != nil {
 				return StandardProjectSetupResult{}, err
 			}
 		case "create_issue_field":
@@ -728,7 +808,7 @@ func ApplyStandardProjectSetup(ctx context.Context, runner Runner, project contr
 		if change.Scope != "project" || change.Action == "attach_issue_field" {
 			continue
 		}
-		if err := applyProjectFieldChange(ctx, runner, project, state, change); err != nil {
+		if err := applyProjectFieldChange(ctx, runner, state, change); err != nil {
 			return StandardProjectSetupResult{}, err
 		}
 	}
@@ -738,6 +818,7 @@ func ApplyStandardProjectSetup(ctx context.Context, runner Runner, project contr
 		for _, change := range plan.Changes {
 			if change.Action == "attach_issue_field" && change.Name == "Priority" {
 				needsAttach = true
+				break
 			}
 		}
 		if needsAttach {
