@@ -35,17 +35,26 @@ This Project uses the common names directly.
 | P2 | P2 |
 | P3 | P3 |
 
+## Priority values
+
+| Option | Colour |
+| --- | --- |
+| P0 | RED |
+| P1 | ORANGE |
+| P2 | YELLOW |
+| P3 | PURPLE |
+
 ## Class values
 
 | Option | Colour |
 | --- | --- |
-| Task | YELLOW |
+| Task | GRAY |
 | Bug | RED |
 | Enhancement | GREEN |
 | Data | PINK |
 | Analysis | PURPLE |
 | Deliverable | ORANGE |
-| Documentation | GRAY |
+| Documentation | YELLOW |
 | Epic | BLUE |
 
 ## Status mapping
@@ -59,7 +68,7 @@ This Project uses the common names directly.
 ## Live target
 
 - Class is a required single-select Project field with exactly the values and colours above.
-- Priority is a required single-select Project field with exactly P0, P1, P2 and P3.
+- Priority is a required single-select Project field with exactly P0, P1, P2 and P3 and the colours above.
 - Target date is optional and remains blank unless an issue has a real deadline.
 - Use native parent and sub-issue relationships for roadmap hierarchy. Parenthood does not imply Epic.
 - `Research`, `Raw data` and `Processed data` are retired Class values and are not part of the active vocabulary.
