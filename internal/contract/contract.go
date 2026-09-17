@@ -18,10 +18,10 @@ var (
 	repositoryPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 	ownerPattern      = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 	credentialPattern = regexp.MustCompile(`(?i)(gh[pousr]_[A-Za-z0-9]{20,}|GH_TOKEN[[:space:]]*=|GITHUB_TOKEN[[:space:]]*=)`)
+	defaultPriority   = map[string]string{"P0": "P0", "P1": "P1", "P2": "P2", "P3": "P3"}
+	defaultClasses    = []string{"Task", "Bug", "Enhancement", "Data", "Analysis", "Deliverable", "Documentation", "Epic"}
 )
 
-// Configuration is a validated repository contract. A single contract has a
-// Project. A dispatcher has Routes whose Projects come from its child files.
 type Configuration struct {
 	Root       string   `json:"root"`
 	Path       string   `json:"path"`
@@ -31,13 +31,11 @@ type Configuration struct {
 	Routes     []Route  `json:"routes,omitempty"`
 }
 
-// FieldLocation defines where a dimension lives on the provider.
 type FieldLocation struct {
 	Location string `json:"location"`
 	Field    string `json:"field"`
 }
 
-// Project contains the stable values needed to identify one GitHub Project.
 type Project struct {
 	Key            string                   `json:"key,omitempty"`
 	Owner          string                   `json:"owner"`
@@ -55,62 +53,66 @@ type Project struct {
 	StatusValues   map[string]string        `json:"statusValues,omitempty"`
 }
 
-// ResolvePriority maps common P0..P3 to the provider's option name.
 func (p Project) ResolvePriority(common string) (string, error) {
 	if p.Pending {
 		return "", fmt.Errorf("%s has Priority mapping status: pending", p.ContractPath)
 	}
 	commonUpper := strings.ToUpper(strings.TrimSpace(common))
-	val, ok := p.Priority[commonUpper]
+	mapping := p.Priority
+	if len(mapping) == 0 {
+		mapping = defaultPriority
+	}
+	val, ok := mapping[commonUpper]
 	if !ok {
 		return "", fmt.Errorf("unknown priority %q; supported values are P0, P1, P2, P3", common)
 	}
 	return val, nil
 }
 
-// ValidateClass validates a class name against contract Class values if declared.
 func (p Project) ValidateClass(class string) (string, error) {
-	if len(p.ClassValues) == 0 {
-		return class, nil
+	values := p.ClassValues
+	if len(values) == 0 {
+		values = defaultClasses
 	}
-	for _, valid := range p.ClassValues {
-		if strings.EqualFold(valid, class) {
+	for _, valid := range values {
+		if strings.EqualFold(valid, strings.TrimSpace(class)) {
 			return valid, nil
 		}
 	}
-	return "", fmt.Errorf("invalid class %q; declared options in %s: %s", class, p.ContractPath, strings.Join(p.ClassValues, ", "))
+	return "", fmt.Errorf("invalid class %q; supported options in %s: %s", class, p.ContractPath, strings.Join(values, ", "))
 }
 
-// ResolveStatus maps or validates a status value against the contract. When a
-// mapping is declared, both its common and provider-native names are accepted,
-// but an undeclared value is rejected instead of being passed through to a
-// similarly named live option by accident.
 func (p Project) ResolveStatus(status string) (string, error) {
 	trimmed := strings.TrimSpace(status)
 	if trimmed == "" {
 		return "", errors.New("status must not be empty")
 	}
-	if len(p.StatusValues) == 0 {
+	if len(p.StatusValues) > 0 {
+		commonValues := make([]string, 0, len(p.StatusValues))
+		for common, provider := range p.StatusValues {
+			commonValues = append(commonValues, common)
+			if strings.EqualFold(common, trimmed) || strings.EqualFold(provider, trimmed) {
+				return provider, nil
+			}
+		}
+		sort.Strings(commonValues)
+		return "", fmt.Errorf("unknown status %q; declared common values in %s: %s", status, p.ContractPath, strings.Join(commonValues, ", "))
+	}
+
+	normalized := strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(trimmed))
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	switch normalized {
+	case "todo", "to do":
+		return "Todo", nil
+	case "in progress", "inprogress":
+		return "In progress", nil
+	case "done", "complete", "completed":
+		return "Done", nil
+	default:
 		return trimmed, nil
 	}
-
-	commonValues := make([]string, 0, len(p.StatusValues))
-	for common, provider := range p.StatusValues {
-		commonValues = append(commonValues, common)
-		if strings.EqualFold(common, trimmed) || strings.EqualFold(provider, trimmed) {
-			return provider, nil
-		}
-	}
-	sort.Strings(commonValues)
-	return "", fmt.Errorf(
-		"unknown status %q; declared common values in %s: %s",
-		status,
-		p.ContractPath,
-		strings.Join(commonValues, ", "),
-	)
 }
 
-// Route joins one dispatcher selector to its validated child Project.
 type Route struct {
 	Key          string  `json:"key"`
 	RoutingLabel string  `json:"routingLabel"`
@@ -119,16 +121,12 @@ type Route struct {
 	Project      Project `json:"project"`
 }
 
-// Selector contains any exact identifiers supplied for dispatcher resolution.
-// When several identifiers are supplied, they must all select the same route.
 type Selector struct {
 	Key          string
 	RoutingLabel string
 	Number       int
 }
 
-// Load validates the complete contract rooted at root and returns its parsed
-// form. It does not inspect or mutate GitHub.
 func Load(root string) (*Configuration, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -141,13 +139,11 @@ func Load(root string) (*Configuration, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("repository root is not a directory: %s", absRoot)
 	}
-
 	path := filepath.Join(absRoot, filepath.FromSlash(contractPath))
 	doc, err := parseDocument(path)
 	if err != nil {
 		return nil, err
 	}
-
 	mode, err := requiredMetadata(doc, "Mode")
 	if err != nil {
 		return nil, err
@@ -158,13 +154,7 @@ func Load(root string) (*Configuration, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &Configuration{
-			Root:       absRoot,
-			Path:       path,
-			Mode:       mode,
-			Repository: project.Repository,
-			Project:    &project,
-		}, nil
+		return &Configuration{Root: absRoot, Path: path, Mode: mode, Repository: project.Repository, Project: &project}, nil
 	case "dispatcher":
 		return validateDispatcher(absRoot, doc)
 	default:
@@ -172,7 +162,6 @@ func Load(root string) (*Configuration, error) {
 	}
 }
 
-// Resolve selects one Project from a validated configuration.
 func (c *Configuration) Resolve(selector Selector) (Project, error) {
 	if c.Mode == "single" {
 		if c.Project == nil {
@@ -189,11 +178,9 @@ func (c *Configuration) Resolve(selector Selector) (Project, error) {
 		}
 		return *c.Project, nil
 	}
-
 	if selector.Key == "" && selector.RoutingLabel == "" && selector.Number == 0 {
 		return Project{}, errors.New("dispatcher resolution requires --project-key, --routing-label or --project-number")
 	}
-
 	matches := make([]Route, 0, 1)
 	for _, route := range c.Routes {
 		if selector.Key != "" && route.Key != selector.Key {
@@ -207,10 +194,9 @@ func (c *Configuration) Resolve(selector Selector) (Project, error) {
 		}
 		matches = append(matches, route)
 	}
-
 	switch len(matches) {
 	case 0:
-		return Project{}, fmt.Errorf("the supplied selector does not match a configured Project route")
+		return Project{}, errors.New("the supplied selector does not match a configured Project route")
 	case 1:
 		return matches[0].Project, nil
 	default:
@@ -234,24 +220,16 @@ func parseDocument(path string) (*document, error) {
 		return nil, fmt.Errorf("read Project contract %s: %w", path, err)
 	}
 	defer file.Close()
-
-	doc := &document{
-		path:     path,
-		metadata: make(map[string][]string),
-		sections: make(map[string][][]string),
-	}
+	doc := &document{path: path, metadata: make(map[string][]string), sections: make(map[string][][]string)}
 	var text strings.Builder
 	section := ""
 	inMetadata := true
 	scanner := bufio.NewScanner(file)
-	// Contract files should be small, but allow long governance lines without
-	// inheriting Scanner's 64 KiB token limit.
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSuffix(scanner.Text(), "\r")
 		text.WriteString(line)
 		text.WriteByte('\n')
-
 		if strings.HasPrefix(line, "## ") {
 			section = strings.TrimSpace(strings.TrimPrefix(line, "## "))
 			inMetadata = false
@@ -341,7 +319,6 @@ func validateProjectDocument(doc *document, expectedMode string) (Project, error
 	if mode != expectedMode {
 		return Project{}, fmt.Errorf("%s must use Mode %s", doc.path, expectedMode)
 	}
-
 	project := Project{ContractPath: doc.path}
 	if expectedMode == "project" {
 		project.Key, err = requiredMetadata(doc, "Project key")
@@ -390,7 +367,6 @@ func validateProjectDocument(doc *document, expectedMode string) (Project, error
 	if err != nil {
 		return Project{}, err
 	}
-
 	if _, ok := doc.sections["Field locations"]; !ok {
 		return Project{}, fmt.Errorf("%s is missing Field locations", doc.path)
 	}
@@ -404,23 +380,16 @@ func validateProjectDocument(doc *document, expectedMode string) (Project, error
 	if err := validateColourTables(doc); err != nil {
 		return Project{}, err
 	}
-	if err := validateStyle(doc, "Issue write-up style", map[string]bool{
-		"": true, "direct": true, "tidy": true, "unrestricted": true,
-	}); err != nil {
+	if err := validateStyle(doc, "Issue write-up style", map[string]bool{"": true, "direct": true, "tidy": true, "unrestricted": true}); err != nil {
 		return Project{}, err
 	}
-	if err := validateStyle(doc, "Issue prose style", map[string]bool{
-		"": true, "natural-direct": true,
-	}); err != nil {
+	if err := validateStyle(doc, "Issue prose style", map[string]bool{"": true, "natural-direct": true}); err != nil {
 		return Project{}, err
 	}
 	project.FieldLocations = make(map[string]FieldLocation)
 	for _, row := range doc.sections["Field locations"] {
 		if len(row) >= 3 && row[0] != "Common dimension" {
-			project.FieldLocations[row[0]] = FieldLocation{
-				Location: row[1],
-				Field:    row[2],
-			}
+			project.FieldLocations[row[0]] = FieldLocation{Location: row[1], Field: row[2]}
 		}
 	}
 	if rows, ok := doc.sections["Class values"]; ok {
@@ -438,7 +407,6 @@ func validateProjectDocument(doc *document, expectedMode string) (Project, error
 			}
 		}
 	}
-
 	if credentialPattern.MatchString(doc.text) {
 		return Project{}, fmt.Errorf("%s appears to contain a credential", doc.path)
 	}
@@ -448,7 +416,7 @@ func validateProjectDocument(doc *document, expectedMode string) (Project, error
 func validatePriority(doc *document) (map[string]string, bool, error) {
 	rows, ok := doc.sections["Priority mapping"]
 	if !ok {
-		return nil, false, fmt.Errorf("%s is missing the Priority mapping section", doc.path)
+		return nil, false, nil
 	}
 	pendingLine := "Priority mapping status: pending"
 	pendingCount := 0
@@ -457,7 +425,6 @@ func validatePriority(doc *document) (map[string]string, bool, error) {
 			pendingCount++
 		}
 	}
-
 	mapping := map[string]string{}
 	counts := map[string]int{}
 	for _, row := range rows {
@@ -481,7 +448,6 @@ func validatePriority(doc *document) (map[string]string, bool, error) {
 		}
 		return nil, true, nil
 	}
-
 	providerSeen := map[string]bool{}
 	for _, common := range []string{"P0", "P1", "P2", "P3"} {
 		if counts[common] != 1 || mapping[common] == "" {
@@ -496,10 +462,7 @@ func validatePriority(doc *document) (map[string]string, bool, error) {
 }
 
 func validateColourTables(doc *document) error {
-	allowed := map[string]bool{
-		"BLUE": true, "GRAY": true, "GREEN": true, "ORANGE": true,
-		"PINK": true, "PURPLE": true, "RED": true, "YELLOW": true,
-	}
+	allowed := map[string]bool{"BLUE": true, "GRAY": true, "GREEN": true, "ORANGE": true, "PINK": true, "PURPLE": true, "RED": true, "YELLOW": true}
 	sectionNames := make([]string, 0, len(doc.sections))
 	for name := range doc.sections {
 		sectionNames = append(sectionNames, name)
@@ -576,13 +539,7 @@ func validateDispatcher(root string, doc *document) (*Configuration, error) {
 	if !ok {
 		return nil, fmt.Errorf("%s is missing Routes", doc.path)
 	}
-
-	configuration := &Configuration{
-		Root:       root,
-		Path:       doc.path,
-		Mode:       "dispatcher",
-		Repository: repository,
-	}
+	configuration := &Configuration{Root: root, Path: doc.path, Mode: "dispatcher", Repository: repository}
 	keys := map[string]bool{}
 	labels := map[string]bool{}
 	numbers := map[int]bool{}
@@ -599,10 +556,7 @@ func validateDispatcher(root string, doc *document) (*Configuration, error) {
 			return nil, fmt.Errorf("%s has an invalid route Project number", doc.path)
 		}
 		cleanRelative := filepath.ToSlash(filepath.Clean(filepath.FromSlash(childRelative)))
-		if !strings.HasPrefix(childRelative, ".projects/projects/") ||
-			!strings.HasSuffix(childRelative, ".md") ||
-			strings.Contains(childRelative, "..") ||
-			cleanRelative != childRelative {
+		if !strings.HasPrefix(childRelative, ".projects/projects/") || !strings.HasSuffix(childRelative, ".md") || strings.Contains(childRelative, "..") || cleanRelative != childRelative {
 			return nil, fmt.Errorf("%s route contract must be under .projects/projects/", doc.path)
 		}
 		if keys[key] {
@@ -615,7 +569,6 @@ func validateDispatcher(root string, doc *document) (*Configuration, error) {
 			return nil, fmt.Errorf("%s has a duplicate Project number", doc.path)
 		}
 		keys[key], labels[label], numbers[number] = true, true, true
-
 		childPath := filepath.Join(root, filepath.FromSlash(childRelative))
 		childDoc, err := parseDocument(childPath)
 		if err != nil {
@@ -637,13 +590,7 @@ func validateDispatcher(root string, doc *document) (*Configuration, error) {
 		if project.Repository != repository {
 			return nil, fmt.Errorf("%s issue repository disagrees with %s", doc.path, childRelative)
 		}
-		configuration.Routes = append(configuration.Routes, Route{
-			Key:          key,
-			RoutingLabel: label,
-			Number:       number,
-			ContractPath: childPath,
-			Project:      project,
-		})
+		configuration.Routes = append(configuration.Routes, Route{Key: key, RoutingLabel: label, Number: number, ContractPath: childPath, Project: project})
 	}
 	return configuration, nil
 }
@@ -665,7 +612,6 @@ func sectionHasFirstCell(rows [][]string, wanted string) bool {
 	return false
 }
 
-// RouteChoices returns stable selectors for a useful resolution error or UI.
 func (c *Configuration) RouteChoices() []string {
 	choices := make([]string, 0, len(c.Routes))
 	for _, route := range c.Routes {
