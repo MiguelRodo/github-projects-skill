@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # Guided, repository-local onboarding for github-projects. This script
-# writes repository configuration only. It never changes live GitHub issues or
-# Project fields. Keep this file compatible with Bash 3.2.
+# writes repository configuration and delegates the shared one-time live Project
+# profile to the projects CLI when it is available. Keep this file compatible with Bash 3.2.
 set +x
 set -Eeuo pipefail
 
@@ -13,7 +13,6 @@ transaction_dir=""
 changed_contract_paths=()
 issue_repository=""
 first_request_project_context=""
-first_request_class_name="Issue Type or Class"
 section_number=0
 colour_reset=""
 colour_bold=""
@@ -225,6 +224,7 @@ discover_project() {
       project_query='query($login: String!, $number: Int!) { user(login: $login) { projectV2(number: $number) { number title public } } }'
       class_location="project field"
       class_field="Class"
+      priority_location="project field"
       ;;
     Organization)
       project_owner_type="organization"
@@ -232,6 +232,7 @@ discover_project() {
       project_query='query($login: String!, $number: Int!) { organization(login: $login) { projectV2(number: $number) { number title public } } }'
       class_location="organization issue type"
       class_field="Issue Type"
+      priority_location="organization issue field"
       ;;
     *) die "unsupported GitHub owner type: $observed_owner_type" ;;
   esac
@@ -254,11 +255,6 @@ discover_project() {
     privacy="$visibility_lower repository"
   fi
 
-  if [[ "$project_owner_type" == "organization" ]]; then
-    first_request_class_name="Issue Type"
-  else
-    first_request_class_name="Class"
-  fi
   first_request_project_context="GitHub Project $project_owner/$project_number"
   success "Found $project_title, owned by the GitHub $project_owner_type $project_owner."
 }
@@ -290,33 +286,16 @@ EOF
 | Project title | $project_title |
 | Routing | $routing |
 | Privacy | $privacy |
-| Issue write-up style | tidy |
-| Issue prose style | natural-direct |
 
 ## Field locations
 
 | Common dimension | Provider location | Provider field |
 | --- | --- | --- |
 | Class | $class_location | $class_field |
-| Priority | pending live inspection | Priority |
+| Priority | $priority_location | Priority |
 | Status | project field | Status |
 | Due date | project field | Target date |
 | Parent | native issue relationship | Parent issue |
-
-## Priority mapping
-
-Priority mapping status: pending
-
-The initializer left the Project's existing Priority field and options unchanged.
-Before using Priority, an agent must confirm its provider location, inspect the
-live options and replace the pending status with a complete one-to-one P0, P1,
-P2 and P3 mapping.
-
-## Class / Issue Type
-
-The Class or Issue Type option set is intentionally not fixed by onboarding.
-An agent may inspect the existing issues and suggest a useful vocabulary before
-the live Project is changed. Workstream is not a standard semantic dimension.
 
 ## Governance
 
@@ -333,6 +312,45 @@ EOF
 - Assignment is explicit only unless a later repository decision says otherwise.
 - Exact requested administration requires no separate scope-design source.
 EOF
+}
+
+setup_standard_project() {
+  local number="$1" plan
+
+  section "Set up the live Project"
+  if ! command -v projects >/dev/null 2>&1; then
+    warning "The projects CLI is not installed, so the standard live Project profile is still pending."
+    echo "Install projects, then rerun this initializer. See docs/cli.md in github-projects-skill."
+    return 0
+  fi
+
+  plan="$(projects project setup-fields --root "$repository_root" \
+    --project-number "$number" --json)" ||
+    die "could not plan the standard Project field setup"
+
+  if printf '%s\n' "$plan" | grep -Eq \
+       '"requiresOrganizationSchema"[[:space:]]*:[[:space:]]*true'; then
+    warning "The standard field profile needs organisation-wide Issue Type or Priority changes, so it was not applied."
+    projects project setup-fields --root "$repository_root" \
+      --project-number "$number" ||
+      die "could not show the organisation-wide field plan"
+    echo
+    echo "After you explicitly approve those organisation-wide changes, run:"
+    printf '  projects project setup-fields --root %q --project-number %s --apply --allow-organization-schema\n' \
+      "$repository_root" "$number"
+    printf '  projects project setup-backlog-view --root %q --project-number %s --apply\n' \
+      "$repository_root" "$number"
+    echo "Then rerun this initializer to verify the complete standard setup."
+    return 0
+  fi
+
+  projects project setup-fields --root "$repository_root" \
+    --project-number "$number" --apply ||
+    die "could not apply the standard Project field setup"
+  projects project setup-backlog-view --root "$repository_root" \
+    --project-number "$number" --apply ||
+    die "could not apply the standard Backlog view setup"
+  success "Verified the standard Project fields and Backlog view."
 }
 
 create_dispatcher_contract() {
@@ -463,6 +481,7 @@ add_project_to_dispatcher() {
       die "the configured Project title no longer matches GitHub"
     first_request_project_context="Project $project_owner/$project_number"
     note "Project $project_owner/$project_number is already configured; no route was changed."
+    setup_standard_project "$project_number"
     return 0
   fi
 
@@ -507,6 +526,7 @@ add_project_to_dispatcher() {
   mark_contract_path "$child_contract"
   first_request_project_context="Project key $project_key ($project_owner/$project_number)"
   success "Added Project $project_owner/$project_number as route $project_key."
+  setup_standard_project "$project_number"
 }
 
 configure_dispatcher_projects() {
@@ -525,7 +545,7 @@ configure_dispatcher_projects() {
 }
 
 load_first_request_from_dispatcher() {
-  local route project_key project_number child_contract leaf owner owner_type
+  local route project_key project_number child_contract leaf owner
   route="$(awk -F'|' '
     function trim(value) {
       sub(/^[[:space:]]+/, "", value)
@@ -546,15 +566,7 @@ load_first_request_from_dispatcher() {
   IFS=$'\t' read -r project_key project_number child_contract <<<"$route"
   leaf="$repository_root/$child_contract"
   owner="$(contract_table_value "$leaf" "Project owner")"
-  owner_type="$(contract_table_value "$leaf" "Owner type")"
   first_request_project_context="Project key $project_key ($owner/$project_number)"
-  if [[ "$owner_type" == "organization" ]]; then
-    first_request_class_name="Issue Type"
-  elif [[ "$owner_type" == "user" ]]; then
-    first_request_class_name="Class"
-  else
-    first_request_class_name="Issue Type or Class"
-  fi
 }
 
 save_onboarding_files() {
@@ -746,13 +758,10 @@ print_first_request() {
 Use the same first request in a chat interface or an execution-capable agent:
 
   Start from AGENTS.md. Resolve $first_request_project_context and inspect its
-  current issues and GitHub Project. Propose how you would confirm the pending
-  Priority location and complete one-to-one mapping from the existing field
-  without adding, removing or renaming options; set up or refine
-  $first_request_class_name from the issue evidence; preserve useful existing
-  definitions while choosing sensible colours; and organise the issues using
-  Project fields and useful native parent/sub-issue relationships. Treat the
-  Project itself as the container rather than creating a generic root issue;
+  current issues and GitHub Project. Propose how you would organise the issues
+  using the standard Project fields and useful native parent/sub-issue
+  relationships. Treat the Project itself as the container rather than creating
+  a generic root issue;
   prefer independently meaningful top-level outcomes, propose retiring generic
   category or standing wrappers where appropriate, and use body checkboxes for
   small local steps versus sub-issues for independently trackable work. Suggest
@@ -824,7 +833,10 @@ if [[ -e "$contract_file" ]]; then
   existing_mode="$(contract_table_value "$contract_file" "Mode")"
   if [[ "$existing_mode" != "dispatcher" ]]; then
     success "The existing repository setup was not replaced."
+    project_number="$(contract_table_value "$contract_file" "Project number")"
+    [[ "$project_number" =~ ^[1-9][0-9]*$ ]] || die "the existing contract has no valid Project number"
     save_onboarding_files
+    setup_standard_project "$project_number"
     echo
     note "For usage and update instructions, read .agents/skills/github-projects/README.md."
     exit 0
@@ -851,7 +863,6 @@ if [[ -e "$contract_file" ]]; then
   fi
   echo
   success "Repository onboarding is complete."
-  echo "The initializer did not change any live GitHub issue or Project value."
   exit 0
 fi
 
@@ -861,7 +872,8 @@ I will ask a few questions to configure $repository so that ChatGPT and coding
 agents can understand its GitHub Project and work with it safely. GitHub will
 supply facts it already knows; the questions are only about local choices.
 
-No live issue or Project value will be changed during this setup.
+The initializer also applies the shared Project fields and Backlog view when the
+projects CLI can do so without organisation-wide schema changes.
 EOF
 echo
 
@@ -898,7 +910,6 @@ if ! ask_yes_no "Does this repository use one GitHub Project?" yes; then
   fi
   echo
   success "Repository onboarding is complete."
-  echo "The initializer did not change any live GitHub issue or Project value."
   exit 0
 fi
 
@@ -930,6 +941,7 @@ append_agents_pointer
 success "Added .projects/project.md and the AGENTS.md starting point."
 
 save_onboarding_files
+setup_standard_project "$project_number"
 print_provider_intro
 print_chatgpt_setup
 print_codex_setup
@@ -937,4 +949,3 @@ print_first_request
 
 echo
 success "Repository onboarding is complete."
-echo "The initializer did not change any live GitHub issue or Project value."

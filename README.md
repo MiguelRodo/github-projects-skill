@@ -83,7 +83,9 @@ For one Project, it creates `.projects/project.md` and adds a small starting sec
 
 For several Projects, it creates a validated dispatcher first. It then offers to add one Project, discovers the live Project, asks for the routing identity, creates its child contract and asks whether to add another. If you stop before adding one, the empty dispatcher is saved safely but cannot yet resolve ordinary Project requests. Rerun the initializer to continue.
 
-The initializer never changes live issues, fields or Project options. In particular, it leaves Priority exactly as it is. The initial contract marks its location and meaning as pending until an agent inspects the existing field and records a complete mapping. It will not add P3 or any other option during onboarding.
+The initializer writes only topology, routing, governance and field locations into the repository contract. Shared Class / Issue Type, Priority and Status semantics stay in the skill rather than being copied into every contract.
+
+When the `projects` CLI is available, onboarding also reconciles the standard field profile and the `Backlog` view, with independent readback. Organisation-wide Issue Type or Priority changes are planned and reported but are never applied without a separate explicit `--allow-organization-schema` action. If `projects` is not installed, repository onboarding still completes and reports that the live profile remains pending.
 
 Finally, it asks whether it may stage, commit and push only these onboarding files. If committing or pushing fails, the local work is kept and the initializer prints the command to continue. Saying no simply leaves the files for you to review. Commit and push the installed skill and configuration before expecting a remote chat or agent to retrieve them.
 
@@ -128,7 +130,7 @@ Environment variables remain available while the agent works, whereas setup-only
 
 After the chat interface or execution-capable agent is ready, the initializer gives you one proposal-only request tailored to a resolved Project.
 
-The request asks the surface to inspect existing issues, confirm the pending Priority location and mapping without changing the live field, propose useful Issue Type or Class values, preserve useful definitions and colours, organise the issues, build useful native parent/sub-issue relationships, repair generic root or category-wrapper issues, choose checkboxes versus sub-issues based on whether work needs independent planning state, and suggest optional sub-project labels only where they add value. It explicitly forbids live changes until you approve the proposal.
+The request asks the surface to inspect existing issues, propose how to organise them using the standard Project fields and useful native parent/sub-issue relationships, repair generic root or category-wrapper issues, choose checkboxes versus sub-issues based on whether work needs independent planning state, and suggest optional sub-project labels only where they add value. It explicitly forbids live changes until you approve the proposal.
 
 After approval, an execution-capable agent can apply and verify the proposal.
 A chat that cannot complete a change uses the configured local queue when
@@ -146,7 +148,8 @@ bash .agents/skills/github-projects/scripts/init-project.sh
 It preserves existing routes and child contracts, discovers the additional
 Project and asks for its key and routing label. Validate the result, review the
 diff and commit and push the configuration through the repository's normal
-workflow. Confirm the new Project's pending Priority mapping before using it.
+workflow; the initializer then applies or reports the same standard live setup
+for that route.
 
 For a single-Project contract, rerunning the initializer preserves that setup
 and exits. Ask the agent to propose a conversion to a dispatcher that keeps the

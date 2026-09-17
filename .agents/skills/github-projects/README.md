@@ -44,6 +44,8 @@ projects issue create --title "Issue title" --apply
 projects issue edit --issue 42 --add-label bug --apply
 projects project item-add --issue 42 --apply
 projects project item-edit --issue 42 --priority P1 --status "In progress" --apply
+projects project setup-fields --apply
+projects project setup-backlog-view --apply
 ```
 
 It is optional. The scripts below and direct GitHub operations remain supported.
@@ -80,7 +82,9 @@ For one Project, it creates `.projects/project.md` and adds a small section to `
 
 For several Projects, it creates a validated empty dispatcher and offers to add one Project at a time. It discovers the live Project, writes the matching child contract, validates the combined configuration and then asks whether to add another. Rerunning the initializer continues the same flow without replacing current routes.
 
-The initializer does not change live issues or Project fields. It leaves the existing Priority field and options alone, even if they do not include P3. Priority is marked as pending until an agent confirms its location, inspects the options and records a complete mapping.
+The initializer writes only topology, routing, governance and field locations into the repository contract. Shared Class / Issue Type, Priority and Status semantics stay in the skill rather than being copied into every contract.
+
+When the `projects` CLI is available, onboarding also reconciles the standard field profile and the `Backlog` view, with independent readback. Organisation-wide Issue Type or Priority changes are planned and reported but are never applied without a separate explicit `--allow-organization-schema` action. If `projects` is not installed, repository onboarding still completes and reports that the live profile remains pending.
 
 It then asks whether it may stage, commit and push only the onboarding files. A failed commit or push leaves the work in a recoverable local state and prints the next command. Commit and push those files before using a remote chat or agent.
 
@@ -123,9 +127,7 @@ See the [official Codex environment guide](https://developers.openai.com/codex/e
 
 The initializer offers one shared, proposal-only first request after the chat and execution-capable agent instructions. For a resolved Project, the request can:
 
-- confirm the local Priority location and mapping from the existing live field without changing it;
-- set up or refine Issue Type or Class, with sensible colours;
-- organise existing issues and useful native parent/sub-issue relationships;
+- organise existing issues using the standard Project fields and useful native parent/sub-issue relationships;
 - repair generic project-root, category-wrapper or standing issues where the existing structure obscures real outcomes;
 - use body checkboxes for small local steps and sub-issues when work needs independent planning state;
 - suggest optional sub-project labels only where they add value.
@@ -139,8 +141,8 @@ a change uses the configured queue, or minimal commands with readback.
 For an existing dispatcher, rerun
 `bash .agents/skills/github-projects/scripts/init-project.sh` from the
 repository root. It preserves existing routes and child contracts while
-adding the new Project. Validate, review, commit and push the configuration,
-then confirm the new Project's pending Priority mapping before using it.
+adding the new Project. Validate, review, commit and push the configuration;
+the initializer then applies or reports the same standard live setup for that route.
 
 For a single-Project contract, the initializer preserves the setup and exits.
 Ask the agent to propose a conversion to a dispatcher while preserving the
@@ -197,13 +199,13 @@ Class or Issue Type says what kind of work item this is. A useful starter set is
 
 | Class / Issue Type | Preferred colour |
 | --- | --- |
-| Task | YELLOW |
+| Task | GRAY |
 | Bug | RED |
 | Enhancement | GREEN |
 | Data | PINK |
 | Analysis | PURPLE |
 | Deliverable | ORANGE |
-| Documentation | GRAY |
+| Documentation | YELLOW |
 | Epic | BLUE |
 
 `Task` is the ordinary fallback when no more informative type adds useful meaning. `Data` covers source-data acquisition and stewardship as well as transformation, validation and production of derived analysis-ready data. `Deliverable` supersedes `Report`: use it for one bounded formal output or event that is handed over, submitted, presented, released, assessed or otherwise consumed as an output, including reports, manuscripts, presentations, posters, grant applications, protocols, handovers and software releases.

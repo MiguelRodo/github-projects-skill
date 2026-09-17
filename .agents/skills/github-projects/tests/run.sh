@@ -170,6 +170,27 @@ case "${1:-}" in
 esac
 EOF
 chmod 0755 "$test_tmp_dir/bin/gh"
+cat >"$test_tmp_dir/bin/projects" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ -n "${PROJECTS_LOG:-}" ]]; then
+  printf '%s\n' "$*" >>"$PROJECTS_LOG"
+fi
+if [[ "$*" == *"project setup-fields"* && "$*" == *"--json"* ]]; then
+  if [[ "${PROJECTS_NEEDS_ORG_SCHEMA:-false}" == "true" ]]; then
+    echo '{"requiresOrganizationSchema":true,"changes":[{"scope":"organization","action":"reconcile","name":"Priority"}]}'
+  else
+    echo '{"requiresOrganizationSchema":false,"changes":[]}'
+  fi
+elif [[ "$*" == *"project setup-fields"* ]]; then
+  echo 'Standard Project field setup plan: no changes required.'
+elif [[ "$*" == *"project setup-backlog-view"* ]]; then
+  echo 'Verified standard Backlog view.'
+else
+  exit 2
+fi
+EOF
+chmod 0755 "$test_tmp_dir/bin/projects"
 
 secret_value="test-token-must-not-appear"
 PATH="$test_tmp_dir/bin:$PATH" GH_TOKEN="$secret_value" \
@@ -284,9 +305,11 @@ grep -Fq 'Repository override setup completed.' "$test_tmp_dir/legacy-override-o
 mkdir -p "$test_tmp_dir/init-single"
 git -C "$test_tmp_dir/init-single" init -q
 printf '# Existing repository guidance\n\nKeep this text.\n' >"$test_tmp_dir/init-single/AGENTS.md"
+: >"$test_tmp_dir/init-projects.log"
 (
   cd "$test_tmp_dir/init-single"
-  printf '\n\n\n\n12\n\n\n' | PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
+  printf '\n\n\n\n12\n\n\n' | PATH="$test_tmp_dir/bin:$PATH" \
+    PROJECTS_LOG="$test_tmp_dir/init-projects.log" bash "$initializer" \
     >"$test_tmp_dir/init-output.log" 2>&1
 )
 bash "$validator" "$test_tmp_dir/init-single"
@@ -295,23 +318,24 @@ grep -Fq '<!-- github-projects:start -->' "$test_tmp_dir/init-single/AGENTS.md"
 grep -Fq '| Issue repository | octo-org/example |' "$test_tmp_dir/init-single/.projects/project.md"
 grep -Fq '| Project title | Example planning |' "$test_tmp_dir/init-single/.projects/project.md"
 grep -Fq '| Class | organization issue type | Issue Type |' "$test_tmp_dir/init-single/.projects/project.md"
-grep -Fq '| Priority | pending live inspection | Priority |' "$test_tmp_dir/init-single/.projects/project.md"
+grep -Fq '| Priority | organization issue field | Priority |' "$test_tmp_dir/init-single/.projects/project.md"
 grep -Fq '| Routing | Project membership; no routing label |' "$test_tmp_dir/init-single/.projects/project.md"
-grep -Fq '| Issue write-up style | tidy |' "$test_tmp_dir/init-single/.projects/project.md"
-grep -Fq '| Issue prose style | natural-direct |' "$test_tmp_dir/init-single/.projects/project.md"
-grep -Fxq 'Priority mapping status: pending' "$test_tmp_dir/init-single/.projects/project.md"
+if grep -Eq 'Issue write-up style|Issue prose style|Priority mapping status|## Class / Issue Type' \
+  "$test_tmp_dir/init-single/.projects/project.md"; then
+  echo "ERROR: initializer repeated shared defaults in the single-Project contract" >&2
+  exit 1
+fi
 grep -Fq 'This is a personal Project.' "$test_tmp_dir/init-single/.projects/project.md"
 if grep -Fq '| Workstream |' "$test_tmp_dir/init-single/.projects/project.md"; then
   echo "ERROR: initializer generated a standard Workstream dimension" >&2
   exit 1
 fi
 grep -Fq 'I will ask a few questions to configure' "$test_tmp_dir/init-output.log"
-awk '
-  previous == "No live issue or Project value will be changed during this setup." &&
-    $0 == "" { found = 1 }
-  { previous = $0 }
-  END { exit(found ? 0 : 1) }
-' "$test_tmp_dir/init-output.log"
+grep -Fq 'applies the shared Project fields and Backlog view' "$test_tmp_dir/init-output.log"
+grep -Fq 'Verified the standard Project fields and Backlog view.' "$test_tmp_dir/init-output.log"
+grep -Fq 'project setup-fields --root' "$test_tmp_dir/init-projects.log"
+grep -Fq -- '--apply' "$test_tmp_dir/init-projects.log"
+grep -Fq 'project setup-backlog-view --root' "$test_tmp_dir/init-projects.log"
 grep -Fq 'after /projects/ in its web address' "$test_tmp_dir/init-output.log"
 grep -Fq 'GitHub user or organisation that owns the Project' "$initializer"
 grep -Fq '1. Check GitHub' "$test_tmp_dir/init-output.log"
@@ -320,7 +344,7 @@ grep -Fq 'I will now show two ways to use the repository' "$test_tmp_dir/init-ou
 grep -Fq 'Use the repository with a chat interface' "$test_tmp_dir/init-output.log"
 grep -Fq 'Use the repository with an execution-capable agent' "$test_tmp_dir/init-output.log"
 grep -Fq 'https://chatgpt.com/codex/settings/environments' "$test_tmp_dir/init-output.log"
-grep -Fq 'Issue Type from the issue evidence' "$test_tmp_dir/init-output.log"
+grep -Fq 'organise the issues' "$test_tmp_dir/init-output.log"
 grep -Fq 'do not change' "$test_tmp_dir/init-output.log"
 grep -Fq 'until I approve them' "$test_tmp_dir/init-output.log"
 grep -Fq 'committed and pushed' "$test_tmp_dir/init-output.log"
@@ -346,6 +370,24 @@ grep -Fq 'existing repository setup was not replaced' "$test_tmp_dir/init-rerun.
 [[ "$(sha256sum "$test_tmp_dir/init-single/.projects/project.md" | awk '{print $1}')" == "$init_contract_sha" ]]
 [[ "$(sha256sum "$test_tmp_dir/init-single/AGENTS.md" | awk '{print $1}')" == "$init_agents_sha" ]]
 
+: >"$test_tmp_dir/org-schema-projects.log"
+(
+  cd "$test_tmp_dir/init-single"
+  printf '\n' | PATH="$test_tmp_dir/bin:$PATH" \
+    PROJECTS_NEEDS_ORG_SCHEMA=true PROJECTS_LOG="$test_tmp_dir/org-schema-projects.log" \
+    bash "$initializer" >"$test_tmp_dir/org-schema-output.log" 2>&1
+)
+grep -Fq 'needs organisation-wide Issue Type or Priority changes' "$test_tmp_dir/org-schema-output.log"
+grep -Fq -- '--allow-organization-schema' "$test_tmp_dir/org-schema-output.log"
+if grep -Fq -- '--apply' "$test_tmp_dir/org-schema-projects.log"; then
+  echo "ERROR: initializer silently applied an organisation-wide schema change" >&2
+  exit 1
+fi
+if grep -Fq 'setup-backlog-view' "$test_tmp_dir/org-schema-projects.log"; then
+  echo "ERROR: initializer attempted Backlog setup before required organisation schema approval" >&2
+  exit 1
+fi
+
 mkdir -p "$test_tmp_dir/init-multiple"
 git -C "$test_tmp_dir/init-multiple" init -q
 (
@@ -370,10 +412,11 @@ grep -Fq '| Owner type | organization |' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
 grep -Fq '| Routing | label:project:example-planning |' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
-grep -Fq '| Issue write-up style | tidy |' \
-  "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
-grep -Fq '| Issue prose style | natural-direct |' \
-  "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
+if grep -Eq 'Issue write-up style|Issue prose style|Priority mapping status|## Class / Issue Type' \
+  "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"; then
+  echo "ERROR: initializer repeated shared defaults in a dispatcher child contract" >&2
+  exit 1
+fi
 if grep -Fq '| Issue prose style |' "$test_tmp_dir/init-multiple/.projects/project.md"; then
   echo "ERROR: dispatcher root unexpectedly received an Issue prose style" >&2
   exit 1
@@ -607,6 +650,30 @@ fi
 grep -Fq 'could not find or access issue repository: missing/repo' \
   "$test_tmp_dir/init-invalid-issue-repo.log"
 test ! -e "$test_tmp_dir/init-invalid-issue-repo/.projects/project.md"
+
+mkdir -p "$test_tmp_dir/init-user"
+git -C "$test_tmp_dir/init-user" init -q
+: >"$test_tmp_dir/init-user-projects.log"
+(
+  cd "$test_tmp_dir/init-user"
+  printf '%s\n' '' '' y 'octo-user' 12 n n | \
+    PATH="$test_tmp_dir/bin:$PATH" PROJECTS_LOG="$test_tmp_dir/init-user-projects.log" \
+    bash "$initializer" >"$test_tmp_dir/init-user.log" 2>&1
+)
+bash "$validator" "$test_tmp_dir/init-user"
+grep -Fq '| Project owner | octo-user |' "$test_tmp_dir/init-user/.projects/project.md"
+grep -Fq '| Class | project field | Class |' "$test_tmp_dir/init-user/.projects/project.md"
+grep -Fq '| Priority | project field | Priority |' "$test_tmp_dir/init-user/.projects/project.md"
+grep -Fq 'applies the shared Project fields and Backlog view' "$test_tmp_dir/init-user.log"
+grep -Fq 'Verified the standard Project fields and Backlog view.' "$test_tmp_dir/init-user.log"
+grep -Fq 'project setup-fields --root' "$test_tmp_dir/init-user-projects.log"
+grep -Fq -- '--apply' "$test_tmp_dir/init-user-projects.log"
+grep -Fq 'project setup-backlog-view --root' "$test_tmp_dir/init-user-projects.log"
+if grep -Eq 'Issue write-up style|Issue prose style|Priority mapping status|## Class / Issue Type' \
+  "$test_tmp_dir/init-user/.projects/project.md"; then
+  echo "ERROR: initializer repeated shared defaults in the user-owned single-Project contract" >&2
+  exit 1
+fi
 
 bash "$test_dir/queue-preflight.sh"
 bash "$test_dir/queue-classify.sh"
