@@ -50,7 +50,7 @@ Do not add default rows merely to make the contract self-contained. In particula
 
 An optional `Owner type` row may assert `user` or GitHub's provider spelling `organization`; setup fails if that assertion disagrees with the live owner.
 
-A resolved contract must state its collaboration mode explicitly, for example `Collaboration mode: collaborative administration in a shared repository.` or `Collaboration mode: solo administration in a private repository.` A dispatcher may instead carry `Governance | personal` or `Governance | collaborative`; `shared` is a legacy spelling of `collaborative`.
+A resolved contract must state its collaboration mode explicitly, for example `Collaboration mode: collaborative administration in a shared repository.` or `Collaboration mode: solo administration in a private repository.` A dispatcher may instead carry `Governance | personal` or `Governance | collaborative`; `shared` is a legacy spelling of `collaborative`. Missing, generic, contradictory or unrecognised governance is treated as collaborative.
 
 ## Shared semantic defaults
 
