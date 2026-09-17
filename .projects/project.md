@@ -28,21 +28,12 @@
 
 This Project uses the common names directly.
 
-| Common value | Provider value |
-| --- | --- |
-| P0 | P0 |
-| P1 | P1 |
-| P2 | P2 |
-| P3 | P3 |
-
-## Priority values
-
-| Option | Colour |
-| --- | --- |
-| P0 | RED |
-| P1 | ORANGE |
-| P2 | YELLOW |
-| P3 | PURPLE |
+| Common value | Provider value | Colour |
+| --- | --- | --- |
+| P0 | P0 | RED |
+| P1 | P1 | ORANGE |
+| P2 | P2 | YELLOW |
+| P3 | P3 | PURPLE |
 
 ## Class values
 
