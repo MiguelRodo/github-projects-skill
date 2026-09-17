@@ -12,8 +12,8 @@ The default vocabulary is deliberately rich enough to distinguish common kinds o
 | Data | PINK | Acquisition, intake, stewardship, transformation or validation of source or derived data, including production of analysis-ready data. |
 | Analysis | PURPLE | Work whose main output is a quantitative or analytical result, inference, evaluation or reproducible computation. |
 | Deliverable | ORANGE | One bounded formal output or event that is handed over, submitted, presented, released, assessed or otherwise consumed as an output. |
-| Documentation | BLUE | Durable guidance, records or reference material rather than a substantive project output. |
-| Epic | YELLOW | A broad coordination outcome that remains useful as a planning object while several independently meaningful pieces of work are tracked separately. |
+| Documentation | YELLOW | Durable guidance, records or reference material rather than a substantive project output. |
+| Epic | BLUE | A broad coordination outcome that remains useful as a planning object while several independently meaningful pieces of work are tracked separately. |
 
 `Task` is intentionally the fallback category. The more specific types are specialisations of ordinary work, not philosophically disjoint categories. Use a specific type only when it makes the issue easier to understand, filter or manage.
 
