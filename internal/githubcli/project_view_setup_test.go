@@ -117,8 +117,80 @@ func TestBuildBacklogViewSpecUsesNativeIssueTypeForOrganization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := spec.Visible[len(spec.Visible)-1].Name; got != "Type" {
-		t.Fatalf("last visible field = %q, want native issue-type field Type", got)
+	// The native Issue Type must exist for the organisation Project, but GitHub
+	// cannot make it a visible view column, so it is not part of the view spec.
+	for _, field := range spec.Visible {
+		if field.Name == "Type" {
+			t.Fatalf("visible = %#v, want the native issue-type field excluded", spec.Visible)
+		}
+	}
+	if len(spec.Visible) != 3 {
+		t.Fatalf("visible = %#v, want only the three view-visible standard fields", spec.Visible)
+	}
+}
+
+func TestBuildBacklogViewSpecRequiresNativeIssueTypeForOrganization(t *testing.T) {
+	project := contract.Project{Owner: "octo-org", Number: 12, Title: "Planning"}
+	fields := []restProjectField{
+		{ID: 1, NodeID: "node-title", Name: "Title", DataType: "title"},
+		{ID: 2, NodeID: "node-status", Name: "Status", DataType: "single_select"},
+		{ID: 3, NodeID: "node-priority", Name: "Priority", DataType: "single_select"},
+	}
+	if _, err := buildBacklogViewSpec(project, "organization", fields); err == nil {
+		t.Fatal("syntax: organisation Project without a native Issue Type must fail inspection")
+	}
+}
+
+func TestBacklogViewMatchesIgnoresVisibleFieldOrder(t *testing.T) {
+	view := standardBacklogTestView("v1", 1)
+	view.Configuration.VisibleFields.Nodes = []projectViewFieldRef{
+		{ID: "priority", Name: "Priority"},
+		{ID: "class", Name: "Class"},
+		{ID: "title", Name: "Title"},
+		{ID: "status", Name: "Status"},
+	}
+	if !backlogViewMatches(view, backlogTestSpec()) {
+		t.Fatal("a standard view with provider-ordered visible fields must match")
+	}
+}
+
+type captureArgsRunner struct {
+	args [][]string
+}
+
+func (r *captureArgsRunner) Run(_ context.Context, args ...string) ([]byte, error) {
+	r.args = append(r.args, args)
+	return []byte(`{"node_id":"view-node-id"}`), nil
+}
+
+func (r *captureArgsRunner) RunInput(_ context.Context, input []byte, args ...string) ([]byte, error) {
+	r.args = append(r.args, args)
+	_ = input
+	return []byte(`{"node_id":"view-node-id"}`), nil
+}
+
+func TestCreateBacklogViewUsesAccountLoginForUserProjects(t *testing.T) {
+	state := backlogViewState{ownerType: "user", spec: backlogTestSpec()}
+	for _, tc := range []struct {
+		ownerType string
+		owner     string
+		wantPath  string
+	}{
+		{ownerType: "user", owner: "octo-user", wantPath: "users/octo-user/projectsV2/4/views"},
+		{ownerType: "organization", owner: "octo-org", wantPath: "orgs/octo-org/projectsV2/4/views"},
+	} {
+		runner := &captureArgsRunner{}
+		state.ownerType = tc.ownerType
+		if _, err := createBacklogView(context.Background(), runner, contract.Project{Owner: tc.owner, Number: 4}, state); err != nil {
+			t.Fatal(err)
+		}
+		joined := strings.Join(runner.args[len(runner.args)-1], " ")
+		if !strings.Contains(joined, tc.wantPath) {
+			t.Fatalf("create args = %s, want path %s", joined, tc.wantPath)
+		}
+		if strings.Contains(joined, "users/4/") {
+			t.Fatalf("create args = %s, want the account login rather than a database ID", joined)
+		}
 	}
 }
 
