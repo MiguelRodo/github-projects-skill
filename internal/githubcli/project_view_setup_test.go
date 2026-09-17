@@ -1,6 +1,7 @@
 package githubcli
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -74,27 +75,10 @@ func TestPlanBacklogViewReplacesWhenGroupOrSortDiffers(t *testing.T) {
 	}
 }
 
-func TestPlanBacklogViewRecoversDuplicateAroundOneExactView(t *testing.T) {
-	exact := standardBacklogTestView("v2", 2)
-	old := standardBacklogTestView("v1", 1)
-	old.GroupByFields.Nodes = nil
-	changes, err := planBacklogViewChanges([]projectViewNode{old, exact}, backlogTestSpec())
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []StandardBacklogViewChange{{Action: "delete_duplicate_view", ViewID: "v1", Detail: "keep standard Backlog view #2"}}
-	if !reflect.DeepEqual(changes, want) {
-		t.Fatalf("changes = %#v, want %#v", changes, want)
-	}
-}
-
-func TestPlanBacklogViewRejectsAmbiguousDuplicates(t *testing.T) {
-	first := standardBacklogTestView("v1", 1)
-	first.GroupByFields.Nodes = nil
-	second := standardBacklogTestView("v2", 2)
-	second.SortByFields.Nodes = nil
-	if _, err := planBacklogViewChanges([]projectViewNode{first, second}, backlogTestSpec()); err == nil || !strings.Contains(err.Error(), "ambiguous replacement") {
-		t.Fatalf("error = %v, want ambiguous replacement", err)
+func TestPlanBacklogViewRejectsDuplicateBacklogs(t *testing.T) {
+	views := []projectViewNode{standardBacklogTestView("v1", 1), standardBacklogTestView("v2", 2)}
+	if _, err := planBacklogViewChanges(views, backlogTestSpec()); err == nil || !strings.Contains(err.Error(), "ambiguous reconciliation") {
+		t.Fatalf("error = %v, want ambiguous reconciliation", err)
 	}
 }
 
@@ -121,7 +105,7 @@ func TestBuildBacklogViewSpecUsesStandardOrderAndSkipsUnavailableOptionalFields(
 	}
 }
 
-func TestBuildBacklogViewSpecUsesIssueTypeForOrganization(t *testing.T) {
+func TestBuildBacklogViewSpecUsesNativeIssueTypeForOrganization(t *testing.T) {
 	project := contract.Project{Owner: "octo-org", Number: 12, Title: "Planning"}
 	fields := []restProjectField{
 		{ID: 1, NodeID: "node-title", Name: "Title", DataType: "title"},
@@ -134,6 +118,30 @@ func TestBuildBacklogViewSpecUsesIssueTypeForOrganization(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := spec.Visible[len(spec.Visible)-1].Name; got != "Type" {
-		t.Fatalf("last visible field = %q, want Type", got)
+		t.Fatalf("last visible field = %q, want native issue-type field Type", got)
+	}
+}
+
+type captureInputRunner struct {
+	input []byte
+}
+
+func (r *captureInputRunner) Run(context.Context, ...string) ([]byte, error) {
+	return nil, nil
+}
+
+func (r *captureInputRunner) RunInput(_ context.Context, input []byte, _ ...string) ([]byte, error) {
+	r.input = append([]byte(nil), input...)
+	return []byte(`{}`), nil
+}
+
+func TestDeleteProjectViewUsesDeleteMutationReturnField(t *testing.T) {
+	runner := &captureInputRunner{}
+	if err := deleteProjectView(context.Background(), runner, "view-1"); err != nil {
+		t.Fatal(err)
+	}
+	payload := string(runner.input)
+	if !strings.Contains(payload, "projectV2View") || strings.Contains(payload, "projectV2 {") {
+		t.Fatalf("delete mutation payload = %s", payload)
 	}
 }
