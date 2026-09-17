@@ -15,6 +15,18 @@ from queue_common import flatten_pages, gh_json, run, table_value
 
 MARKER = "PJ implementation authority:"
 VERSION = "github-projects/queue-authority/v1"
+DEFAULT_CLASSES = {
+    "Task",
+    "Bug",
+    "Enhancement",
+    "Data",
+    "Analysis",
+    "Deliverable",
+    "Documentation",
+    "Epic",
+}
+DEFAULT_PRIORITIES = {"P0", "P1", "P2", "P3"}
+DEFAULT_STATUSES = {"Todo", "In progress", "Done"}
 SUPPORTED_ACTIONS = {
     "project.membership.add",
     "dimension.value.set",
@@ -294,9 +306,12 @@ def main() -> int:
         emit("blocked", "queue.blocked.project_mismatch")
         return 0
 
-    classes = section_first_column(contract, "Class values")
-    priorities = section_first_column(contract, "Priority mapping")
-    statuses = section_first_column(contract, "Status mapping")
+    classes = section_first_column(contract, "Class values") or set(DEFAULT_CLASSES)
+    priorities = section_first_column(contract, "Priority mapping") or set(DEFAULT_PRIORITIES)
+    statuses = section_first_column(contract, "Status mapping") or set(DEFAULT_STATUSES)
+    if "Priority mapping status: pending" in contract:
+        priorities = set()
+
     for action in spec["actions"]:
         outcome, reason = classify_action(
             action, args.repository, args.issue, classes, priorities, statuses

@@ -52,7 +52,7 @@ test -f "$skill_dir/README.md"
 test -f "$skill_dir/references/issue-types.md"
 grep -Fq 'Set example#313 to P2.' "$test_dir/short-requests.md"
 grep -Fq '## Issue creation styles' "$test_dir/short-requests.md"
-grep -Fq 'P3 | Low' "$skill_dir/SKILL.md"
+grep -Fq '| P3 | P3 | PURPLE |' "$skill_dir/SKILL.md"
 grep -Fq 'Priority mapping status: pending' "$skill_dir/SKILL.md"
 grep -Fq 'Deliverable' "$skill_dir/references/issue-types.md"
 grep -Fq 'Treat the GitHub Project as the container.' "$skill_dir/references/issue-types.md"
@@ -63,7 +63,10 @@ grep -Fq '| Data | PINK |' "$skill_dir/references/issue-types.md"
 grep -Fq '`direct`: do only the structural work needed to create the issue' "$skill_dir/SKILL.md"
 grep -Fq '`tidy`: the default. Reword and organise the supplied material' "$skill_dir/SKILL.md"
 grep -Fq '`natural-direct`' "$skill_dir/SKILL.md"
-grep -Fq 'Workstream is not a standard semantic dimension' "$skill_dir/SKILL.md"
+if grep -Fq 'Workstream is not a standard semantic dimension' "$skill_dir/SKILL.md"; then
+  echo "ERROR: active skill still carries the retired Workstream design" >&2
+  exit 1
+fi
 grep -Fq 'gh auth login --web --scopes "project,read:org"' "$skill_dir/README.md"
 grep -Fq 'https://chatgpt.com/codex/settings/environments' "$skill_dir/README.md"
 if grep -Eq '\$\{[^}]+(,,|\^\^)\}|(^|[^[:alnum:]_])(mapfile|readarray)([^[:alnum:]_]|$)|declare[[:space:]]+-A' \
