@@ -19,7 +19,7 @@ func runProjectSetupFields(ctx context.Context, args []string, stdout, stderr io
 	projectKey := flags.String("project-key", "", "exact dispatcher Project key")
 	routingLabel := flags.String("routing-label", "", "exact dispatcher routing label")
 	projectNumber := flags.Int("project-number", 0, "exact declared Project number")
-	apply := flags.Bool("apply", false, "apply the standard Project field setup (default plans only)")
+	apply := flags.Bool("apply", false, "apply and verify the standard Project field setup (default plans only)")
 	allowOrganizationSchema := flags.Bool("allow-organization-schema", false, "explicitly allow organization-wide Issue Type and Priority schema changes")
 	jsonOutput := flags.Bool("json", false, "write plan/result as JSON")
 	quiet := flags.Bool("quiet", false, "hide progress messages")
