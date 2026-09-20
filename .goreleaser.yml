@@ -1,6 +1,5 @@
-# MiguelRodo/actions/go-version-release@v2 currently invokes the GoReleaser
-# 1.x action. Keep this schema at v1 until that shared action moves to v2.
-version: 1
+# MiguelRodo/actions/go-version-release@v3 uses GoReleaser v2.
+version: 2
 
 project_name: projects
 
@@ -56,10 +55,12 @@ builds:
 
 archives:
   - id: release-archives
-    format: tar.gz
+    formats:
+      - tar.gz
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
 
 nfpms:
   - id: projects
