@@ -82,6 +82,26 @@ func (p Project) ValidateClass(class string) (string, error) {
 	return "", fmt.Errorf("invalid class %q; supported options in %s: %s", class, p.ContractPath, strings.Join(values, ", "))
 }
 
+// normaliseStatusText folds case, hyphens, underscores and whitespace.
+func normaliseStatusText(value string) string {
+	normalized := strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(value))
+	return strings.Join(strings.Fields(normalized), " ")
+}
+
+// canonicalStatus additionally folds the built-in lifecycle synonyms.
+func canonicalStatus(value string) string {
+	normalized := normaliseStatusText(value)
+	switch normalized {
+	case "todo", "to do":
+		return "todo"
+	case "in progress", "inprogress":
+		return "in progress"
+	case "done", "complete", "completed":
+		return "done"
+	}
+	return normalized
+}
+
 func (p Project) ResolveStatus(status string) (string, error) {
 	trimmed := strings.TrimSpace(status)
 	if trimmed == "" {
@@ -89,24 +109,51 @@ func (p Project) ResolveStatus(status string) (string, error) {
 	}
 	if len(p.StatusValues) > 0 {
 		commonValues := make([]string, 0, len(p.StatusValues))
-		for common, provider := range p.StatusValues {
+		for common := range p.StatusValues {
 			commonValues = append(commonValues, common)
-			if strings.EqualFold(common, trimmed) || strings.EqualFold(provider, trimmed) {
-				return provider, nil
-			}
 		}
 		sort.Strings(commonValues)
+		// Match in a fixed order: exact normalised common values, then
+		// provider values, then the same with lifecycle synonyms folded.
+		tiers := []struct {
+			fold     func(string) string
+			provider bool
+		}{
+			{normaliseStatusText, false},
+			{normaliseStatusText, true},
+			{canonicalStatus, false},
+			{canonicalStatus, true},
+		}
+		for _, tier := range tiers {
+			wanted := tier.fold(trimmed)
+			match := ""
+			for _, common := range commonValues {
+				provider := p.StatusValues[common]
+				candidate := common
+				if tier.provider {
+					candidate = provider
+				}
+				if tier.fold(candidate) != wanted {
+					continue
+				}
+				if match != "" && match != provider {
+					return "", fmt.Errorf("status %q is ambiguous in %s: it matches both %q and %q", status, p.ContractPath, match, provider)
+				}
+				match = provider
+			}
+			if match != "" {
+				return match, nil
+			}
+		}
 		return "", fmt.Errorf("unknown status %q; declared common values in %s: %s", status, p.ContractPath, strings.Join(commonValues, ", "))
 	}
 
-	normalized := strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(trimmed))
-	normalized = strings.Join(strings.Fields(normalized), " ")
-	switch normalized {
-	case "todo", "to do":
+	switch canonicalStatus(trimmed) {
+	case "todo":
 		return "Todo", nil
-	case "in progress", "inprogress":
+	case "in progress":
 		return "In progress", nil
-	case "done", "complete", "completed":
+	case "done":
 		return "Done", nil
 	default:
 		return trimmed, nil
@@ -208,8 +255,32 @@ type document struct {
 	path     string
 	text     string
 	metadata map[string][]string
-	sections map[string][][]string
+	sections map[string]*section
+	// markers records non-fenced prose lines equal to the pending Priority
+	// marker, keyed by the section that contains them ("" for the preamble).
+	markers []marker
 }
+
+// section holds one "## " section. A section is recorded as soon as its
+// heading is seen, even when it contains no table.
+type section struct {
+	tables []table
+}
+
+// table is one GitHub-flavoured Markdown table: a header row, a delimiter row
+// and the data rows that follow until a blank or non-table line.
+type table struct {
+	line   int
+	header []string
+	rows   [][]string
+}
+
+type marker struct {
+	section string
+	line    int
+}
+
+const pendingPriorityLine = "Priority mapping status: pending"
 
 func parseDocument(path string) (*document, error) {
 	file, err := os.Open(path)
@@ -220,37 +291,165 @@ func parseDocument(path string) (*document, error) {
 		return nil, fmt.Errorf("read Project contract %s: %w", path, err)
 	}
 	defer file.Close()
-	doc := &document{path: path, metadata: make(map[string][]string), sections: make(map[string][][]string)}
+	var lines []string
 	var text strings.Builder
-	section := ""
-	inMetadata := true
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSuffix(scanner.Text(), "\r")
+		lines = append(lines, line)
 		text.WriteString(line)
 		text.WriteByte('\n')
-		if strings.HasPrefix(line, "## ") {
-			section = strings.TrimSpace(strings.TrimPrefix(line, "## "))
-			inMetadata = false
-			continue
-		}
-		cells, ok := markdownRow(line)
-		if !ok || separatorRow(cells) {
-			continue
-		}
-		if inMetadata && len(cells) >= 2 && cells[0] != "Key" {
-			doc.metadata[cells[0]] = append(doc.metadata[cells[0]], cells[1])
-		}
-		if section != "" {
-			doc.sections[section] = append(doc.sections[section], cells)
-		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read Project contract %s: %w", path, err)
 	}
-	doc.text = text.String()
+	doc := &document{path: path, text: text.String(), metadata: make(map[string][]string), sections: make(map[string]*section)}
+	if err := doc.parse(lines); err != nil {
+		return nil, err
+	}
 	return doc, nil
+}
+
+func (doc *document) parse(lines []string) error {
+	sectionName := ""
+	var preamble []table
+	var current *table
+	closeTable := func() {
+		if current == nil {
+			return
+		}
+		if sectionName == "" {
+			preamble = append(preamble, *current)
+		} else {
+			doc.sections[sectionName].tables = append(doc.sections[sectionName].tables, *current)
+		}
+		current = nil
+	}
+	fenceChar, fenceLen := byte(0), 0
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		lineNumber := i + 1
+		if char, length, rest, ok := fenceDelimiter(line); ok {
+			if fenceLen == 0 {
+				closeTable()
+				fenceChar, fenceLen = char, length
+				continue
+			}
+			if char == fenceChar && length >= fenceLen && strings.TrimSpace(rest) == "" {
+				fenceChar, fenceLen = 0, 0
+				continue
+			}
+		}
+		if fenceLen > 0 {
+			continue
+		}
+		if strings.HasPrefix(line, "## ") {
+			closeTable()
+			sectionName = strings.TrimSpace(strings.TrimPrefix(line, "## "))
+			if doc.sections[sectionName] == nil {
+				doc.sections[sectionName] = &section{}
+			}
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if current != nil {
+			if trimmed == "" || !strings.Contains(trimmed, "|") {
+				closeTable()
+			} else {
+				cells, ok := markdownRow(line)
+				if !ok {
+					return malformedRow(doc.path, lineNumber)
+				}
+				current.rows = append(current.rows, cells)
+				continue
+			}
+		}
+		if strings.Contains(trimmed, "|") && i+1 < len(lines) && delimiterLike(lines[i+1]) && len(looseCells(line)) == len(looseCells(lines[i+1])) {
+			header, ok := markdownRow(line)
+			if !ok {
+				return malformedRow(doc.path, lineNumber)
+			}
+			if _, ok := markdownRow(lines[i+1]); !ok {
+				return malformedRow(doc.path, lineNumber+1)
+			}
+			current = &table{line: lineNumber, header: header}
+			i++
+			continue
+		}
+		if strings.HasPrefix(trimmed, "|") {
+			return fmt.Errorf("%s has a malformed table row at line %d: a table row must follow a header row and a delimiter row", doc.path, lineNumber)
+		}
+		if trimmed == pendingPriorityLine {
+			doc.markers = append(doc.markers, marker{section: sectionName, line: lineNumber})
+		}
+	}
+	closeTable()
+	for _, t := range preamble {
+		for _, row := range t.rows {
+			if len(row) >= 2 {
+				doc.metadata[row[0]] = append(doc.metadata[row[0]], row[1])
+			}
+		}
+	}
+	return nil
+}
+
+func malformedRow(path string, line int) error {
+	return fmt.Errorf("%s has a malformed table row at line %d: contract tables must use leading and trailing pipes on every row", path, line)
+}
+
+// fenceDelimiter reports whether line opens or closes a fenced code block
+// (``` or ~~~, indented by at most three spaces).
+func fenceDelimiter(line string) (byte, int, string, bool) {
+	indent := len(line) - len(strings.TrimLeft(line, " "))
+	if indent > 3 {
+		return 0, 0, "", false
+	}
+	rest := line[indent:]
+	if len(rest) < 3 || (rest[0] != '`' && rest[0] != '~') {
+		return 0, 0, "", false
+	}
+	char := rest[0]
+	length := 0
+	for length < len(rest) && rest[length] == char {
+		length++
+	}
+	if length < 3 {
+		return 0, 0, "", false
+	}
+	if char == '`' && strings.Contains(rest[length:], "`") {
+		return 0, 0, "", false
+	}
+	return char, length, rest[length:], true
+}
+
+// delimiterLike reports whether line is a GFM table delimiter row, with or
+// without outer pipes.
+func delimiterLike(line string) bool {
+	if !strings.Contains(line, "|") || !strings.Contains(line, "-") {
+		return false
+	}
+	for _, cell := range looseCells(line) {
+		cell = strings.Trim(cell, ":")
+		if cell == "" || strings.Trim(cell, "-") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// looseCells splits a GFM table line into trimmed cells, treating outer
+// pipes as optional.
+func looseCells(line string) []string {
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.TrimPrefix(trimmed, "|")
+	trimmed = strings.TrimSuffix(trimmed, "|")
+	parts := strings.Split(trimmed, "|")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
 }
 
 func markdownRow(line string) ([]string, bool) {
@@ -269,13 +468,28 @@ func markdownRow(line string) ([]string, bool) {
 	return cells, true
 }
 
-func separatorRow(cells []string) bool {
-	if len(cells) == 0 {
+// tableRows returns the data rows of every table in the named section whose
+// header starts with the given cells.
+func (doc *document) tableRows(name string, header ...string) [][]string {
+	sec := doc.sections[name]
+	if sec == nil {
+		return nil
+	}
+	var rows [][]string
+	for _, t := range sec.tables {
+		if hasHeader(t, header...) {
+			rows = append(rows, t.rows...)
+		}
+	}
+	return rows
+}
+
+func hasHeader(t table, header ...string) bool {
+	if len(t.header) < len(header) {
 		return false
 	}
-	for _, cell := range cells {
-		trimmed := strings.Trim(cell, ":")
-		if len(trimmed) < 3 || strings.Trim(trimmed, "-") != "" {
+	for i, cell := range header {
+		if t.header[i] != cell {
 			return false
 		}
 	}
@@ -370,7 +584,8 @@ func validateProjectDocument(doc *document, expectedMode string) (Project, error
 	if _, ok := doc.sections["Field locations"]; !ok {
 		return Project{}, fmt.Errorf("%s is missing Field locations", doc.path)
 	}
-	if !sectionHasFirstCell(doc.sections["Field locations"], "Priority") {
+	fieldRows := doc.tableRows("Field locations", "Common dimension")
+	if !sectionHasFirstCell(fieldRows, "Priority") {
 		return Project{}, fmt.Errorf("%s does not declare the Priority field location", doc.path)
 	}
 	project.Priority, project.Pending, err = validatePriority(doc)
@@ -387,24 +602,22 @@ func validateProjectDocument(doc *document, expectedMode string) (Project, error
 		return Project{}, err
 	}
 	project.FieldLocations = make(map[string]FieldLocation)
-	for _, row := range doc.sections["Field locations"] {
-		if len(row) >= 3 && row[0] != "Common dimension" {
+	for _, row := range fieldRows {
+		if len(row) >= 3 {
 			project.FieldLocations[row[0]] = FieldLocation{Location: row[1], Field: row[2]}
 		}
 	}
-	if rows, ok := doc.sections["Class values"]; ok {
-		for _, row := range rows {
-			if len(row) >= 1 && row[0] != "Option" && row[0] != "" {
-				project.ClassValues = append(project.ClassValues, row[0])
-			}
+	seenClass := map[string]bool{}
+	for _, row := range doc.tableRows("Class values", "Option") {
+		if len(row) >= 1 && row[0] != "" && !seenClass[row[0]] {
+			seenClass[row[0]] = true
+			project.ClassValues = append(project.ClassValues, row[0])
 		}
 	}
-	if rows, ok := doc.sections["Status mapping"]; ok {
-		project.StatusValues = make(map[string]string)
-		for _, row := range rows {
-			if len(row) >= 2 && row[0] != "Common value" && row[0] != "" {
-				project.StatusValues[row[0]] = row[1]
-			}
+	if _, ok := doc.sections["Status mapping"]; ok {
+		project.StatusValues, err = validateStatusMapping(doc)
+		if err != nil {
+			return Project{}, err
 		}
 	}
 	if credentialPattern.MatchString(doc.text) {
@@ -414,21 +627,21 @@ func validateProjectDocument(doc *document, expectedMode string) (Project, error
 }
 
 func validatePriority(doc *document) (map[string]string, bool, error) {
-	rows, ok := doc.sections["Priority mapping"]
-	if !ok {
+	pendingCount := 0
+	for _, m := range doc.markers {
+		if m.section != "Priority mapping" {
+			return nil, false, fmt.Errorf("%s declares %q at line %d outside the Priority mapping section", doc.path, pendingPriorityLine, m.line)
+		}
+		pendingCount++
+	}
+	if _, ok := doc.sections["Priority mapping"]; !ok {
 		return nil, false, nil
 	}
-	pendingLine := "Priority mapping status: pending"
-	pendingCount := 0
-	for _, line := range strings.Split(doc.text, "\n") {
-		if strings.TrimSpace(line) == pendingLine {
-			pendingCount++
-		}
-	}
+	rows := doc.tableRows("Priority mapping", "Common value")
 	mapping := map[string]string{}
 	counts := map[string]int{}
 	for _, row := range rows {
-		if len(row) < 2 || row[0] == "Common value" {
+		if len(row) < 2 {
 			continue
 		}
 		switch row[0] {
@@ -441,9 +654,10 @@ func validatePriority(doc *document) (map[string]string, bool, error) {
 		if pendingCount != 1 {
 			return nil, false, fmt.Errorf("%s must declare the pending Priority status exactly once", doc.path)
 		}
-		for _, common := range []string{"P0", "P1", "P2", "P3"} {
-			if counts[common] > 0 {
-				return nil, false, fmt.Errorf("%s mixes a pending Priority status with a %s mapping", doc.path, common)
+		// Any P0-P3 row in any table of the section conflicts with pending.
+		for _, row := range doc.tableRows("Priority mapping") {
+			if len(row) >= 2 && defaultPriority[row[0]] != "" {
+				return nil, false, fmt.Errorf("%s mixes a pending Priority status with a %s mapping", doc.path, row[0])
 			}
 		}
 		return nil, true, nil
@@ -469,28 +683,53 @@ func validateColourTables(doc *document) error {
 	}
 	sort.Strings(sectionNames)
 	for _, name := range sectionNames {
-		rows := doc.sections[name]
-		inColours := false
-		for _, row := range rows {
-			if len(row) < 2 {
+		for _, t := range doc.sections[name].tables {
+			if !hasHeader(t, "Option", "Colour") {
 				continue
 			}
-			if row[0] == "Option" && row[1] == "Colour" {
-				inColours = true
-				continue
-			}
-			if !inColours {
-				continue
-			}
-			if row[0] == "" {
-				return fmt.Errorf("%s has an empty option in a colour table", doc.path)
-			}
-			if !allowed[row[1]] {
-				return fmt.Errorf("%s has unsupported colour %q for option %q", doc.path, row[1], row[0])
+			for _, row := range t.rows {
+				if len(row) < 2 {
+					continue
+				}
+				if row[0] == "" {
+					return fmt.Errorf("%s has an empty option in a colour table", doc.path)
+				}
+				if !allowed[row[1]] {
+					return fmt.Errorf("%s has unsupported colour %q for option %q", doc.path, row[1], row[0])
+				}
 			}
 		}
 	}
 	return nil
+}
+
+// validateStatusMapping reads the Status mapping tables and rejects mappings
+// whose lookup would be ambiguous: a repeated common value, or a common value
+// that equals another row's provider value.
+func validateStatusMapping(doc *document) (map[string]string, error) {
+	mapping := make(map[string]string)
+	commons := map[string]string{}
+	for _, row := range doc.tableRows("Status mapping", "Common value") {
+		if len(row) < 2 || row[0] == "" {
+			continue
+		}
+		if row[1] == "" {
+			return nil, fmt.Errorf("%s Status mapping has an empty provider value for %q", doc.path, row[0])
+		}
+		key := normaliseStatusText(row[0])
+		if previous, ok := commons[key]; ok {
+			return nil, fmt.Errorf("%s Status mapping declares common value %q more than once (also %q)", doc.path, row[0], previous)
+		}
+		commons[key] = row[0]
+		mapping[row[0]] = row[1]
+	}
+	for common, provider := range mapping {
+		other, ok := commons[normaliseStatusText(provider)]
+		if ok && other != common {
+			return nil, fmt.Errorf("%s Status mapping is ambiguous: provider value %q for %q equals common value %q", doc.path, provider, common, other)
+		}
+	}
+	return mapping, nil
 }
 
 func validateStyle(doc *document, key string, allowed map[string]bool) error {
@@ -535,16 +774,16 @@ func validateDispatcher(root string, doc *document) (*Configuration, error) {
 	if credentialPattern.MatchString(doc.text) {
 		return nil, fmt.Errorf("%s appears to contain a credential", doc.path)
 	}
-	rows, ok := doc.sections["Routes"]
-	if !ok {
+	if _, ok := doc.sections["Routes"]; !ok {
 		return nil, fmt.Errorf("%s is missing Routes", doc.path)
 	}
+	rows := doc.tableRows("Routes", "Project key")
 	configuration := &Configuration{Root: root, Path: doc.path, Mode: "dispatcher", Repository: repository}
 	keys := map[string]bool{}
 	labels := map[string]bool{}
 	numbers := map[int]bool{}
 	for _, row := range rows {
-		if len(row) < 4 || row[0] == "Project key" {
+		if len(row) < 4 {
 			continue
 		}
 		key, label, numberText, childRelative := row[0], row[1], row[2], row[3]
