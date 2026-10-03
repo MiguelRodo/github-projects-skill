@@ -61,7 +61,10 @@ grep -Fq '| P3 | P3 | PURPLE |' "$skill_dir/SKILL.md"
 grep -Fq 'Priority mapping status: pending' "$skill_dir/SKILL.md"
 grep -Fq 'Deliverable' "$skill_dir/references/issue-types.md"
 grep -Fq 'Treat the GitHub Project as the container.' "$skill_dir/references/issue-types.md"
-grep -Fq 'use body checkboxes for' "$initializer"
+if grep -Fq 'use body checkboxes for' "$initializer"; then
+  echo "ERROR: initializer still carries the removed first-request prompt" >&2
+  exit 1
+fi
 grep -Fq '`Task`, `Bug`, `Enhancement`, `Data`, `Analysis`, `Deliverable`, `Documentation` and `Epic`' \
   "$skill_dir/SKILL.md"
 grep -Fq '| Data | PINK |' "$skill_dir/references/issue-types.md"
@@ -349,9 +352,13 @@ grep -Fq 'I will now show two ways to use the repository' "$test_tmp_dir/init-ou
 grep -Fq 'Use the repository with a chat interface' "$test_tmp_dir/init-output.log"
 grep -Fq 'Use the repository with an execution-capable agent' "$test_tmp_dir/init-output.log"
 grep -Fq 'https://chatgpt.com/codex/settings/environments' "$test_tmp_dir/init-output.log"
-grep -Fq 'organise the issues' "$test_tmp_dir/init-output.log"
-grep -Fq 'do not change' "$test_tmp_dir/init-output.log"
-grep -Fq 'until I approve them' "$test_tmp_dir/init-output.log"
+if grep -Fq 'Would you like a proposal for organising the existing' \
+  "$test_tmp_dir/init-output.log"; then
+  echo "ERROR: initializer still offered the removed first-request proposal" >&2
+  exit 1
+fi
+grep -Fq 'Setup is complete. You can now make ordinary requests when you need them.' \
+  "$test_tmp_dir/init-output.log"
 grep -Fq 'committed and pushed' "$test_tmp_dir/init-output.log"
 grep -Fq 'The files were left uncommitted.' "$test_tmp_dir/init-output.log"
 if grep -Eq 'Current Project fields|following repository contract|Choose the provider.s Priority values|Does Project membership alone|How should the agent proceed|Do this now' \
@@ -474,9 +481,17 @@ grep -Fq 'Added Project octo-org/12 as route example-planning.' \
 grep -Fq '  .projects/projects/.gitkeep' "$test_tmp_dir/init-multiple.log"
 grep -Fq '  .projects/projects/example-planning.md' \
   "$test_tmp_dir/init-multiple.log"
-grep -Fq 'Use the same first request in a chat interface or an execution-capable agent' \
-  "$test_tmp_dir/init-multiple.log"
-grep -Fq 'optional sub-project labels only where they are genuinely useful.' \
+if grep -Fq 'Would you like a proposal for organising the existing' \
+  "$test_tmp_dir/init-multiple.log"; then
+  echo "ERROR: initializer still offered the removed first-request proposal" >&2
+  exit 1
+fi
+if grep -Fq 'Use the same first' \
+  "$test_tmp_dir/init-multiple.log"; then
+  echo "ERROR: initializer still printed the removed first-request prompt" >&2
+  exit 1
+fi
+grep -Fq 'Setup is complete. You can now make ordinary requests when you need them.' \
   "$test_tmp_dir/init-multiple.log"
 if grep -Fq 'Finish the multi-Project routing' "$test_tmp_dir/init-multiple.log"; then
   echo "ERROR: multi-Project onboarding printed the removed handoff" >&2
