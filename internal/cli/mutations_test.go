@@ -365,3 +365,101 @@ func TestProjectItemAddApplyUnarchivesArchivedMember(t *testing.T) {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
 }
+
+const cliIssueViewJSONFields = "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"
+
+func TestIssueCreatePlanResolvesSelfAssignee(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	fake := &runner{t: t, responses: []response{
+		{args: exactTitleScanArgs("octo-org/example", "Mine"), output: ``},
+		{args: []string{"api", "user", "--jq", ".login"}, output: "octocat\n"},
+	}}
+	exitCode := Run(
+		context.Background(),
+		[]string{"issue", "create", "--root", fixture(t, "single"), "--title", "Mine", "--assignee", "@me", "--json"},
+		&stdout,
+		&stderr,
+		fake,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"octocat"`) || strings.Contains(stdout.String(), "@me") {
+		t.Fatalf("stdout = %s, want @me resolved to octocat", stdout.String())
+	}
+}
+
+func TestIssueEditApplyResolvesSelfAssignee(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	view := []string{"issue", "view", "55", "--repo", "octo-org/example", "--json", cliIssueViewJSONFields}
+	fake := &runner{t: t, responses: []response{
+		{args: []string{"api", "user", "--jq", ".login"}, output: "octocat\n"},
+		{args: view, output: `{"number":55,"title":"T","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55","assignees":[]}`},
+		{args: []string{"issue", "edit", "55", "--repo", "octo-org/example", "--add-assignee", "octocat"}, output: "https://github.com/octo-org/example/issues/55\n"},
+		{args: view, output: `{"number":55,"title":"T","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55","assignees":[{"login":"octocat"}]}`},
+	}}
+	exitCode := Run(
+		context.Background(),
+		[]string{"issue", "edit", "--root", fixture(t, "single"), "--issue", "55", "--add-assignee", "@me", "--apply", "--json"},
+		&stdout,
+		&stderr,
+		fake,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if fake.index != len(fake.responses) {
+		t.Fatalf("gh calls = %d, want %d", fake.index, len(fake.responses))
+	}
+}
+
+func TestIssueEditTrimsTitle(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	view := []string{"issue", "view", "55", "--repo", "octo-org/example", "--json", cliIssueViewJSONFields}
+	fake := &runner{t: t, responses: []response{
+		{args: view, output: `{"number":55,"title":"Old","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`},
+		{args: []string{"issue", "edit", "55", "--repo", "octo-org/example", "--title", "New Title"}, output: "https://github.com/octo-org/example/issues/55\n"},
+		{args: view, output: `{"number":55,"title":"New Title","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`},
+	}}
+	exitCode := Run(
+		context.Background(),
+		[]string{"issue", "edit", "--root", fixture(t, "single"), "--issue", "55", "--title", "  New Title  ", "--apply", "--json"},
+		&stdout,
+		&stderr,
+		fake,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+}
+
+func TestIssueEditRejectsBlankTitle(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := Run(
+		context.Background(),
+		[]string{"issue", "edit", "--root", fixture(t, "single"), "--issue", "55", "--title", "   "},
+		&stdout,
+		&stderr,
+		&runner{t: t},
+	)
+	if exitCode != 2 || !strings.Contains(stderr.String(), "--title must not be empty") {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+}
+
+func TestMutationsRejectNegativeProjectNumber(t *testing.T) {
+	for _, args := range [][]string{
+		{"issue", "create", "--title", "T", "--project-number", "-1"},
+		{"project", "item-add", "--issue", "55", "--project-number", "-1"},
+		{"project", "item-edit", "--issue", "55", "--status", "Todo", "--project-number", "-1"},
+	} {
+		t.Run(args[1], func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			full := append(append([]string{}, args...), "--root", fixture(t, "single"))
+			exitCode := Run(context.Background(), full, &stdout, &stderr, &runner{t: t})
+			if exitCode != 2 || !strings.Contains(stderr.String(), "--project-number must be a positive integer") {
+				t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+			}
+		})
+	}
+}

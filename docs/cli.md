@@ -166,6 +166,11 @@ projects issue create \
   --apply
 ```
 
+`@me` in `--assignee`, `--add-assignee` or `--remove-assignee` is resolved
+once to the authenticated login before planning, so plans and readback show
+the real login. If anything fails after GitHub has created the issue, the
+error names the created issue's URL and says not to retry creation.
+
 Edit an existing issue:
 
 ```bash

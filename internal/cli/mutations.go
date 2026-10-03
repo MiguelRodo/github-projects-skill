@@ -119,6 +119,9 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		return usageError(stderr, "--title is required")
 	}
 	*title = strings.TrimSpace(*title)
+	if *projectNumber < 0 {
+		return usageError(stderr, "--project-number must be a positive integer")
+	}
 	if *body != "" && *bodyFile != "" {
 		return usageError(stderr, "--body and --body-file are mutually exclusive")
 	}
@@ -207,6 +210,9 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 			locations = append(locations, match.URL)
 		}
 		return operationError(stderr, "inspect equivalent issues", fmt.Errorf("exact-title issue already exists: %s; edit that issue or pass --allow-duplicate deliberately", strings.Join(locations, ", ")))
+	}
+	if err := githubcli.ResolveSelfAssignees(ctx, runner, (*[]string)(&assignees)); err != nil {
+		return operationError(stderr, "resolve assignees", err)
 	}
 
 	if !*apply {
@@ -414,6 +420,12 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	hasState := isFlagSet(flags, "state")
 	hasLabels := len(addLabels) > 0 || len(removeLabels) > 0
 	hasAssignees := len(addAssignees) > 0 || len(removeAssignees) > 0
+	if hasTitle {
+		*title = strings.TrimSpace(*title)
+		if *title == "" {
+			return usageError(stderr, "--title must not be empty")
+		}
+	}
 
 	if !hasTitle && !hasBody && !hasMilestone && !hasState && !hasLabels && !hasAssignees {
 		return usageError(stderr, "no issue edits specified; supply at least one edit flag")
@@ -444,6 +456,10 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	targetRepo, err := resolveContractRepository(configuration, *repo)
 	if err != nil {
 		return usageError(stderr, err.Error())
+	}
+
+	if err := githubcli.ResolveSelfAssignees(ctx, runner, (*[]string)(&addAssignees), (*[]string)(&removeAssignees)); err != nil {
+		return operationError(stderr, "resolve assignees", err)
 	}
 
 	var newBody *string
@@ -610,6 +626,9 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 	if *issueNumber < 0 {
 		return usageError(stderr, "--issue must be a positive integer")
 	}
+	if *projectNumber < 0 {
+		return usageError(stderr, "--project-number must be a positive integer")
+	}
 	if *url != "" && *issueNumber != 0 {
 		return usageError(stderr, "--issue and --url are mutually exclusive")
 	}
@@ -753,6 +772,9 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 	}
 	if *issueNumber < 0 {
 		return usageError(stderr, "--issue must be a positive integer")
+	}
+	if *projectNumber < 0 {
+		return usageError(stderr, "--project-number must be a positive integer")
 	}
 	if *url != "" && *issueNumber != 0 {
 		return usageError(stderr, "--issue and --url are mutually exclusive")
