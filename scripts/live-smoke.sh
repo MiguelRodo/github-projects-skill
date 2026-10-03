@@ -540,6 +540,7 @@ s_item_add_new() {
   expect_rc 0 || return 1
   assert_eq "JSON alreadyMember" "$(j .alreadyMember)" false || return 1
   assert_eq "JSON applied" "$(j .applied)" true || return 1
+  assert_eq "JSON changed" "$(j .changed)" true || return 1
   local item
   item=$(gh_item "$ISSUE_A")
   [[ "$item" != null ]] || fail "gh: #$ISSUE_A is not in the Project" || return 1
@@ -552,7 +553,8 @@ s_item_add_idempotent() {
   cli project item-add --issue "$ISSUE_A" --apply --json
   expect_rc 0 || return 1
   assert_eq "JSON alreadyMember (#$ISSUE_A)" "$(j .alreadyMember)" true || return 1
-  assert_eq "JSON applied (#$ISSUE_A)" "$(j .applied)" false || return 1
+  assert_eq "JSON applied (#$ISSUE_A)" "$(j .applied)" true || return 1
+  assert_eq "JSON changed (#$ISSUE_A)" "$(j .changed)" false || return 1
   assert_eq "JSON itemId (#$ISSUE_A)" "$(j .itemId)" "$ITEM_A" || return 1
   cli project item-add --issue "$ISSUE_C" --apply --json
   expect_rc 0 || return 1
@@ -563,9 +565,9 @@ s_item_edit_set() {
   need ITEM_A || return
   cli project item-edit --issue "$ISSUE_A" --priority P0 --status "done" --target-date 2030-01-31 --apply --json
   expect_rc 0 || return 1
-  assert_eq "JSON Priority" "$(j .fields.Priority)" P0 || return 1
-  assert_eq "JSON Status" "$(j .fields.Status)" Done || return 1
-  note "automationSideEffects: $(j '.automationSideEffects // [] | join("; ")')"
+  assert_eq "JSON Priority" "$(j .projectItem.fields.Priority)" P0 || return 1
+  assert_eq "JSON Status" "$(j .projectItem.fields.Status)" Done || return 1
+  note "automationSideEffects: $(j '.projectItem.automationSideEffects // [] | join("; ")')"
   # GitHub's built-in "Auto-close issue" workflow may close the issue when
   # Status becomes Done; that is an issue change, recorded but not asserted.
   note "issue state afterwards: $(gh issue view "$ISSUE_A" -R "$REPO" --json state,stateReason --jq '"\(.state) \(.stateReason)"')"
@@ -580,7 +582,7 @@ s_item_edit_clear() {
   need ITEM_A || return
   cli project item-edit --issue "$ISSUE_A" --priority P3 --status "$REQ_IN_PROGRESS" --clear "Target date" --apply --json
   expect_rc 0 || return 1
-  assert_eq "JSON Priority" "$(j .fields.Priority)" P3 || return 1
+  assert_eq "JSON Priority" "$(j .projectItem.fields.Priority)" P3 || return 1
   local item
   item=$(gh_item "$ISSUE_A")
   assert_eq "gh Priority" "$(jq -r .fields.Priority <<<"$item")" P3 || return 1

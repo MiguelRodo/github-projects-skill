@@ -1150,6 +1150,10 @@ type MutateProjectItemResult struct {
 	ItemID  string          `json:"itemId"`
 	URL     string          `json:"url"`
 	Added   bool            `json:"added"`
+	// Changed reports whether this run modified GitHub state: it added the
+	// item, unarchived it, wrote Project fields, wrote organization issue
+	// fields or set an issue type.
+	Changed bool `json:"changed"`
 	// Unarchived reports that an archived member was restored because the
 	// caller asked for membership (AddIfMissing).
 	Unarchived bool `json:"unarchived,omitempty"`
@@ -1320,23 +1324,26 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, client C
 		}
 	}
 
-	if _, err := setOrganizationIssueFields(ctx, client, target, organizationChanges); err != nil {
+	organizationChanged, err := setOrganizationIssueFields(ctx, client, target, organizationChanges)
+	if err != nil {
 		return MutateProjectItemResult{}, partialProjectMutationError("organization issue fields", err)
 	}
 
+	issueTypeChanged := false
 	if issueType != "" {
 		if target.Kind != "issues" {
 			return MutateProjectItemResult{}, errors.New("organization issue types can only be set on issues, not pull requests")
 		}
-		if _, err := EditIssue(ctx, client, EditIssueInput{
+		edited, err := EditIssue(ctx, client, EditIssueInput{
 			Repo:      target.Repository,
 			Number:    target.Number,
 			IssueType: &issueType,
-		}); err != nil {
+		})
+		if err != nil {
 			return MutateProjectItemResult{}, partialProjectMutationError("Class", err)
 		}
+		issueTypeChanged = edited.Changed
 	}
-
 	finalItem := current
 	var sideEffects []string
 	contentKind := "pull request"
@@ -1425,6 +1432,7 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, client C
 		ItemID:     finalItem.ItemID,
 		URL:        target.URL,
 		Added:      added,
+		Changed:    added || unarchived || projectMutationApplied || organizationChanged || issueTypeChanged,
 		Unarchived: unarchived,
 		Archived:   finalItem.Archived,
 		Fields:     resultFields,

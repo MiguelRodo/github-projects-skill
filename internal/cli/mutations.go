@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/MiguelRodo/github-projects-skill/internal/contract"
 	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
@@ -72,6 +73,332 @@ func sortedFieldNames(fields map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// planLine is one line of a plan's text output and whether it represents an
+// actual change rather than a no-op.
+type planLine struct {
+	text   string
+	change bool
+}
+
+// planChangeTexts returns the trimmed text of every plan line that would
+// change something, for the plan JSON "changes" array.
+func planChangeTexts(lines []planLine) []string {
+	changes := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line.change {
+			changes = append(changes, strings.TrimSpace(line.text))
+		}
+	}
+	return changes
+}
+
+// writePlanLines prints the plan lines and reports whether any would change
+// something.
+func writePlanLines(stdout io.Writer, lines []planLine) bool {
+	changed := false
+	for _, line := range lines {
+		fmt.Fprintln(stdout, line.text)
+		if line.change {
+			changed = true
+		}
+	}
+	return changed
+}
+
+// planColumn pads a plan label to the shared value column, keeping at least
+// one separating space.
+func planColumn(label string) string {
+	width := 12
+	if len(label)+1 > width {
+		width = len(label) + 1
+	}
+	return "  " + label + strings.Repeat(" ", width-len(label))
+}
+
+// padName pads a name to width with trailing spaces.
+func padName(name string, width int) string {
+	if len(name) >= width {
+		return name
+	}
+	return name + strings.Repeat(" ", width-len(name))
+}
+
+// renderTransition renders "current → new", or "new (already set)" when the
+// requested value is already in place.
+func renderTransition(current, next string) (string, bool) {
+	if current == next {
+		return next + " (already set)", false
+	}
+	return current + " → " + next, true
+}
+
+func quoteName(value string) string {
+	return `"` + value + `"`
+}
+
+// containsNameFold reports whether names contains want, ignoring case.
+func containsNameFold(names []string, want string) bool {
+	for _, name := range names {
+		if strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(want)) {
+			return true
+		}
+	}
+	return false
+}
+
+// partitionAdditions splits requested names into real additions (absent from
+// current) and no-ops already present, matching case-insensitively.
+func partitionAdditions(requested, current []string) (added, alreadyPresent []string) {
+	for _, name := range requested {
+		if containsNameFold(current, name) {
+			alreadyPresent = append(alreadyPresent, name)
+			continue
+		}
+		added = append(added, name)
+	}
+	return added, alreadyPresent
+}
+
+// partitionRemovals splits requested names into real removals (present in
+// current) and no-ops already absent, matching case-insensitively.
+func partitionRemovals(requested, current []string) (removed, alreadyAbsent []string) {
+	for _, name := range requested {
+		if containsNameFold(current, name) {
+			removed = append(removed, name)
+			continue
+		}
+		alreadyAbsent = append(alreadyAbsent, name)
+	}
+	return removed, alreadyAbsent
+}
+
+// nameChangeLines renders the add/remove/unchanged lines for one collection of
+// names (labels or assignees).
+func nameChangeLines(noun string, added, removed, unchangedPresent, unchangedAbsent []string) []planLine {
+	addLabel := "Add " + noun + ":"
+	removeLabel := "Remove " + noun + ":"
+	width := len(removeLabel) + 1
+	var lines []planLine
+	if len(added) > 0 {
+		lines = append(lines, planLine{text: "  " + padName(addLabel, width) + strings.Join(added, ", "), change: true})
+	}
+	if len(removed) > 0 {
+		lines = append(lines, planLine{text: "  " + padName(removeLabel, width) + strings.Join(removed, ", "), change: true})
+	}
+	var unchanged []string
+	for _, name := range unchangedPresent {
+		unchanged = append(unchanged, name+" (already present)")
+	}
+	for _, name := range unchangedAbsent {
+		unchanged = append(unchanged, name+" (already absent)")
+	}
+	if len(unchanged) > 0 {
+		lines = append(lines, planLine{text: "  " + padName("Unchanged:", width) + strings.Join(unchanged, ", ")})
+	}
+	return lines
+}
+
+func milestoneDisplay(name string) string {
+	if name == "" {
+		return "(none)"
+	}
+	return name
+}
+
+// milestonePlanLine renders a milestone transition, marking a no-op as
+// "(already set)" or "(already none)".
+func milestonePlanLine(current, next string) planLine {
+	switch {
+	case current == next && next == "":
+		return planLine{text: planColumn("Milestone:") + "(already none)"}
+	case current == next:
+		return planLine{text: planColumn("Milestone:") + next + " (already set)"}
+	default:
+		return planLine{text: planColumn("Milestone:") + milestoneDisplay(current) + " → " + milestoneDisplay(next), change: true}
+	}
+}
+
+// normalizeIssueCloseReason folds an issue close reason to its canonical
+// completed/not_planned form.
+func normalizeIssueCloseReason(reason string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(reason)), " ", "_")
+}
+
+func issueLabelNames(labels []githubcli.IssueLabel) []string {
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		names = append(names, label.Name)
+	}
+	return names
+}
+
+func issueAssigneeNames(assignees []githubcli.IssueAssignee) []string {
+	names := make([]string, 0, len(assignees))
+	for _, assignee := range assignees {
+		names = append(names, assignee.Login)
+	}
+	return names
+}
+
+// statePlanLine renders an issue state transition, marking a no-op as
+// "(already set)".
+func statePlanLine(current githubcli.IssueView, desired, closeReason string) planLine {
+	currentState := strings.ToUpper(strings.TrimSpace(current.State))
+	currentDisplay := currentState
+	if currentState == "CLOSED" && current.StateReason != "" {
+		currentDisplay = "CLOSED (" + strings.ToUpper(current.StateReason) + ")"
+	}
+	if strings.EqualFold(strings.TrimSpace(desired), "open") {
+		if currentState == "OPEN" {
+			return planLine{text: planColumn("State:") + "open (already set)"}
+		}
+		return planLine{text: planColumn("State:") + currentDisplay + " → open", change: true}
+	}
+	reason := normalizeIssueCloseReason(closeReason)
+	if reason == "" && currentState == "OPEN" {
+		reason = "completed"
+	}
+	next := "closed"
+	if reason != "" {
+		next = "closed (" + reason + ")"
+	}
+	if currentState == "OPEN" || (reason != "" && !strings.EqualFold(current.StateReason, reason)) {
+		return planLine{text: planColumn("State:") + currentDisplay + " → " + next, change: true}
+	}
+	return planLine{text: planColumn("State:") + next + " (already set)"}
+}
+
+// issueEditPlan captures the requested issue edits for plan rendering.
+type issueEditPlan struct {
+	Title           *string
+	Body            *string
+	Milestone       *string
+	AddLabels       []string
+	RemoveLabels    []string
+	AddAssignees    []string
+	RemoveAssignees []string
+	State           *string
+	CloseReason     string
+}
+
+// issueEditPlanLines renders the text plan for an issue edit as current → new
+// transitions, marking no-ops explicitly.
+func issueEditPlanLines(current githubcli.IssueView, plan issueEditPlan) []planLine {
+	var lines []planLine
+	if plan.Title != nil {
+		text, change := renderTransition(quoteName(current.Title), quoteName(*plan.Title))
+		lines = append(lines, planLine{text: planColumn("Title:") + text, change: change})
+	}
+	if plan.Body != nil {
+		if *plan.Body == current.Body {
+			lines = append(lines, planLine{text: fmt.Sprintf("%s%d bytes (already set)", planColumn("Body:"), len(*plan.Body))})
+		} else {
+			lines = append(lines, planLine{text: fmt.Sprintf("%s%d bytes (use --json to inspect exact text)", planColumn("Body:"), len(*plan.Body)), change: true})
+		}
+	}
+	if plan.Milestone != nil {
+		currentName := ""
+		if current.Milestone != nil {
+			currentName = current.Milestone.Title
+		}
+		lines = append(lines, milestonePlanLine(currentName, *plan.Milestone))
+	}
+	currentLabels := issueLabelNames(current.Labels)
+	added, present := partitionAdditions(plan.AddLabels, currentLabels)
+	removed, absent := partitionRemovals(plan.RemoveLabels, currentLabels)
+	lines = append(lines, nameChangeLines("labels", added, removed, present, absent)...)
+
+	currentAssignees := issueAssigneeNames(current.Assignees)
+	added, present = partitionAdditions(plan.AddAssignees, currentAssignees)
+	removed, absent = partitionRemovals(plan.RemoveAssignees, currentAssignees)
+	lines = append(lines, nameChangeLines("assignees", added, removed, present, absent)...)
+
+	if plan.State != nil {
+		lines = append(lines, statePlanLine(current, *plan.State, plan.CloseReason))
+	}
+	return lines
+}
+
+// projectItemFieldValue returns the current value of a Project field, matching
+// the provider field name case-insensitively.
+func projectItemFieldValue(current *githubcli.ProjectItemState, fieldName string) (string, bool) {
+	for key, value := range current.Fields {
+		if strings.EqualFold(key, fieldName) {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+// clearProviderField resolves the provider field name a --clear value names.
+func clearProviderField(project contract.Project, name string) string {
+	for _, location := range project.FieldLocations {
+		if strings.EqualFold(location.Field, name) {
+			return location.Field
+		}
+	}
+	return name
+}
+
+// projectFieldPlanLine renders one Project field update as "current → new",
+// reading the current value from the provider field named fieldName.
+func projectFieldPlanLine(label, fieldName string, current *githubcli.ProjectItemState, next string, fold bool) planLine {
+	value, present := projectItemFieldValue(current, fieldName)
+	trimmed := strings.TrimSpace(value)
+	if present && trimmed != "" {
+		same := trimmed == strings.TrimSpace(next)
+		if fold {
+			same = strings.EqualFold(trimmed, strings.TrimSpace(next))
+		}
+		if same {
+			return planLine{text: planColumn(label) + next + " (already set)"}
+		}
+	}
+	display := "(unset)"
+	if present && trimmed != "" {
+		display = value
+	}
+	return planLine{text: planColumn(label) + display + " → " + next, change: true}
+}
+
+// projectItemEditPlan captures the requested Project field updates for plan
+// rendering. Priority, Class and Status hold resolved provider values.
+type projectItemEditPlan struct {
+	Priority   string
+	Class      string
+	Status     string
+	TargetDate string
+	Clear      []string
+}
+
+// projectItemEditPlanLines renders the text plan for a Project item edit as
+// current → new transitions, marking no-ops explicitly.
+func projectItemEditPlanLines(project contract.Project, current *githubcli.ProjectItemState, plan projectItemEditPlan) []planLine {
+	var lines []planLine
+	if plan.Priority != "" {
+		lines = append(lines, projectFieldPlanLine("Priority:", project.FieldLocations["Priority"].Field, current, plan.Priority, false))
+	}
+	if plan.Class != "" {
+		lines = append(lines, projectFieldPlanLine("Class:", project.FieldLocations["Class"].Field, current, plan.Class, false))
+	}
+	if plan.Status != "" {
+		lines = append(lines, projectFieldPlanLine("Status:", project.FieldLocations["Status"].Field, current, plan.Status, true))
+	}
+	if plan.TargetDate != "" {
+		lines = append(lines, projectFieldPlanLine("TargetDate:", project.FieldLocations["Due date"].Field, current, plan.TargetDate, false))
+	}
+	for _, name := range plan.Clear {
+		fieldName := clearProviderField(project, name)
+		value, present := projectItemFieldValue(current, fieldName)
+		if !present || strings.TrimSpace(value) == "" {
+			lines = append(lines, planLine{text: planColumn(fieldName+":") + "(already clear)"})
+			continue
+		}
+		lines = append(lines, planLine{text: planColumn(fieldName+":") + value + " → (cleared)", change: true})
+	}
+	return lines
 }
 
 func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer, client githubcli.Client) int {
@@ -188,23 +515,71 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 	}
 
+	var projectMutationInput githubcli.MutateProjectItemInput
+	if hasProject {
+		projectMutationInput = githubcli.MutateProjectItemInput{
+			Project:      resolvedProject,
+			Repo:         targetRepo,
+			Priority:     *priority,
+			Class:        *class,
+			Status:       *status,
+			TargetDate:   *targetDate,
+			AddIfMissing: true,
+		}
+	}
+
 	stageCount := 2
 	if *apply && hasProject {
 		stageCount = 4
 	} else if *apply {
 		stageCount = 3
 	}
+
+	switch {
+	case *allowDuplicate:
+		progress(stderr, *quiet, "[1/%d] Skipping duplicate inspection by explicit request", stageCount)
+	case hasProject:
+		progress(stderr, *quiet, "[1/%d] Inspecting duplicates and Project configuration", stageCount)
+	default:
+		progress(stderr, *quiet, "[1/%d] Inspecting %s for exact-title duplicates", stageCount, targetRepo)
+	}
+
+	var (
+		duplicateCheckResult githubcli.ExactTitleCheck
+		duplicateErr         error
+		selfErr              error
+		preparedProject      *githubcli.PreparedProjectItemMutation
+		preflightErr         error
+	)
+	var reads sync.WaitGroup
+	if !*allowDuplicate {
+		reads.Add(1)
+		go func() {
+			defer reads.Done()
+			duplicateCheckResult, duplicateErr = githubcli.FindIssuesByExactTitle(ctx, client, targetRepo, *title)
+		}()
+	}
+	reads.Add(1)
+	go func() {
+		defer reads.Done()
+		selfErr = githubcli.ResolveSelfAssignees(ctx, client, (*[]string)(&assignees))
+	}()
+	if hasProject {
+		reads.Add(1)
+		go func() {
+			defer reads.Done()
+			preparedProject, preflightErr = githubcli.PrepareProjectItemMutation(ctx, client, projectMutationInput)
+		}()
+	}
+	reads.Wait()
+
 	var exactTitleMatches []githubcli.IssueSummary
 	var duplicateCheck *githubcli.ExactTitleCheck
-	if *allowDuplicate {
-		progress(stderr, *quiet, "[1/%d] Skipping duplicate inspection by explicit request", stageCount)
-	} else {
-		progress(stderr, *quiet, "[1/%d] Inspecting %s for exact-title duplicates", stageCount, targetRepo)
-		check, err := githubcli.FindIssuesByExactTitle(ctx, client, targetRepo, *title)
-		if err != nil {
-			return operationError(stderr, "inspect equivalent issues", err)
-		}
-		exactTitleMatches, duplicateCheck = check.Matches, &check
+	if duplicateErr != nil {
+		return operationError(stderr, "inspect equivalent issues", duplicateErr)
+	}
+	if !*allowDuplicate {
+		exactTitleMatches, duplicateCheck = duplicateCheckResult.Matches, &duplicateCheckResult
 	}
 	if len(exactTitleMatches) > 0 {
 		locations := make([]string, 0, len(exactTitleMatches))
@@ -213,15 +588,18 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 		return operationError(stderr, "inspect equivalent issues", fmt.Errorf("exact-title issue already exists: %s; edit that issue or pass --allow-duplicate deliberately", strings.Join(locations, ", ")))
 	}
-	if err := githubcli.ResolveSelfAssignees(ctx, client, (*[]string)(&assignees)); err != nil {
-		return operationError(stderr, "resolve assignees", err)
+	if selfErr != nil {
+		return operationError(stderr, "resolve assignees", selfErr)
+	}
+	if preflightErr != nil {
+		return operationError(stderr, "preflight Project configuration", preflightErr)
 	}
 
 	if !*apply {
-		progress(stderr, *quiet, "[2/2] Planning issue creation for %s", targetRepo)
+		progress(stderr, *quiet, "[%d/%d] Planning issue creation for %s", stageCount, stageCount, targetRepo)
 		plan := map[string]any{
 			"action":         "create_issue",
-			"apply":          false,
+			"applied":        false,
 			"repository":     targetRepo,
 			"title":          *title,
 			"allowDuplicate": *allowDuplicate,
@@ -306,21 +684,6 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		return 0
 	}
 
-	var preparedProject *githubcli.PreparedProjectItemMutation
-	if hasProject {
-		preparedProject, err = githubcli.PrepareProjectItemMutation(ctx, client, githubcli.MutateProjectItemInput{
-			Project:      resolvedProject,
-			Repo:         targetRepo,
-			Priority:     *priority,
-			Class:        *class,
-			Status:       *status,
-			TargetDate:   *targetDate,
-			AddIfMissing: true,
-		})
-		if err != nil {
-			return operationError(stderr, "preflight Project configuration", err)
-		}
-	}
 	progress(stderr, *quiet, "[2/%d] Creating issue in %s", stageCount, targetRepo)
 	created, err := githubcli.CreateIssue(ctx, client, githubcli.CreateIssueInput{
 		Repo:      targetRepo,
@@ -349,6 +712,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		result := map[string]any{
 			"action":  "create_issue",
 			"applied": true,
+			"changed": true,
 			"issue":   created,
 		}
 		if projectResult != nil {
@@ -514,7 +878,7 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 
 		plan := map[string]any{
 			"action":      "edit_issue",
-			"apply":       false,
+			"applied":     false,
 			"repository":  targetRepo,
 			"issueNumber": *issueNumber,
 			"current":     current,
@@ -532,6 +896,18 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		if *closeReason != "" {
 			plan["delta"].(map[string]any)["closeReason"] = *closeReason
 		}
+		lines := issueEditPlanLines(current, issueEditPlan{
+			Title:           newTitle,
+			Body:            newBody,
+			Milestone:       newMilestone,
+			AddLabels:       addLabels,
+			RemoveLabels:    removeLabels,
+			AddAssignees:    addAssignees,
+			RemoveAssignees: removeAssignees,
+			State:           newState,
+			CloseReason:     *closeReason,
+		})
+		plan["changes"] = planChangeTexts(lines)
 		if *jsonOutput {
 			if err := writeJSON(stdout, plan); err != nil {
 				return operationError(stderr, "write plan JSON", err)
@@ -540,30 +916,8 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		}
 
 		fmt.Fprintf(stdout, "Planned issue edit for %s#%d:\n", targetRepo, *issueNumber)
-		fmt.Fprintf(stdout, "  Current Title: %s\n", current.Title)
-		if newTitle != nil {
-			fmt.Fprintf(stdout, "  New Title:     %s\n", *newTitle)
-		}
-		if newBody != nil {
-			fmt.Fprintf(stdout, "  New Body:      %d bytes (use --json to inspect exact text)\n", len(*newBody))
-		}
-		if len(addLabels) > 0 {
-			fmt.Fprintf(stdout, "  Add Labels:    %s\n", addLabels.String())
-		}
-		if len(removeLabels) > 0 {
-			fmt.Fprintf(stdout, "  Remove Labels: %s\n", removeLabels.String())
-		}
-		if len(addAssignees) > 0 {
-			fmt.Fprintf(stdout, "  Add Assignees: %s\n", addAssignees.String())
-		}
-		if len(removeAssignees) > 0 {
-			fmt.Fprintf(stdout, "  Rem Assignees: %s\n", removeAssignees.String())
-		}
-		if newState != nil {
-			fmt.Fprintf(stdout, "  Target State:  %s\n", *newState)
-		}
-		if *closeReason != "" {
-			fmt.Fprintf(stdout, "  Close Reason:  %s\n", *closeReason)
+		if !writePlanLines(stdout, lines) {
+			fmt.Fprintln(stdout, "No change needed.")
 		}
 		fmt.Fprintln(stdout, "\nPlan only. Supply --apply to apply edits on GitHub.")
 		return 0
@@ -593,6 +947,7 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		result := map[string]any{
 			"action":  "edit_issue",
 			"applied": true,
+			"changed": edited.Changed,
 			"issue":   edited,
 		}
 		if err := writeJSON(stdout, result); err != nil {
@@ -601,7 +956,11 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		return 0
 	}
 
-	fmt.Fprintf(stdout, "Updated issue %s#%d: %s\n", targetRepo, edited.Number, edited.URL)
+	if !edited.Changed {
+		fmt.Fprintf(stdout, "No change needed for issue %s#%d: %s\n", targetRepo, edited.Number, edited.URL)
+	} else {
+		fmt.Fprintf(stdout, "Updated issue %s#%d: %s\n", targetRepo, edited.Number, edited.URL)
+	}
 	fmt.Fprintf(stdout, "Title: %s\nState: %s\n", edited.Title, edited.State)
 	if edited.StateReason != "" {
 		fmt.Fprintf(stdout, "State reason: %s\n", edited.StateReason)
@@ -686,11 +1045,12 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 		progress(stderr, *quiet, "[2/2] Planning item addition to Project %s/%d (%s)", project.Owner, project.Number, project.Title)
 		plan := map[string]any{
 			"action":        "project_item_add",
-			"apply":         false,
+			"applied":       false,
 			"project":       compactProject(project),
 			"url":           target.URL,
 			"alreadyMember": current != nil,
 			"wouldAdd":      current == nil,
+			"changed":       current == nil || current.Archived,
 		}
 		if current != nil {
 			plan["current"] = current
@@ -727,7 +1087,8 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 	if *jsonOutput {
 		result := map[string]any{
 			"action":        "project_item_add",
-			"applied":       added || membership.Unarchived,
+			"applied":       true,
+			"changed":       added || membership.Unarchived,
 			"alreadyMember": !added,
 			"unarchived":    membership.Unarchived,
 			"itemId":        item.ItemID,
@@ -868,7 +1229,7 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 		progress(stderr, *quiet, "[2/2] Planning field updates on Project %s/%d (%s)", project.Owner, project.Number, project.Title)
 		plan := map[string]any{
 			"action":  "project_item_edit",
-			"apply":   false,
+			"applied": false,
 			"project": compactProject(project),
 			"url":     target.URL,
 			"current": current,
@@ -893,6 +1254,17 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 			delta["clear"] = []string(clearFields)
 		}
 
+		priorityProvider, _ := project.ResolvePriority(*priority)
+		classProvider, _ := project.ValidateClass(*class)
+		lines := projectItemEditPlanLines(project, current, projectItemEditPlan{
+			Priority:   priorityProvider,
+			Class:      classProvider,
+			Status:     resolvedStatus,
+			TargetDate: *targetDate,
+			Clear:      clearFields,
+		})
+		plan["changes"] = planChangeTexts(lines)
+
 		if *jsonOutput {
 			if err := writeJSON(stdout, plan); err != nil {
 				return operationError(stderr, "write plan JSON", err)
@@ -901,22 +1273,8 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 		}
 
 		fmt.Fprintf(stdout, "Planned Project field updates for %s on Project %s/%d:\n", target.URL, project.Owner, project.Number)
-		if *priority != "" {
-			prov, _ := project.ResolvePriority(*priority)
-			fmt.Fprintf(stdout, "  Priority:   %s (%s)\n", *priority, prov)
-		}
-		if *class != "" {
-			cls, _ := project.ValidateClass(*class)
-			fmt.Fprintf(stdout, "  Class:      %s\n", cls)
-		}
-		if *status != "" {
-			fmt.Fprintf(stdout, "  Status:     %s\n", resolvedStatus)
-		}
-		if *targetDate != "" {
-			fmt.Fprintf(stdout, "  TargetDate: %s\n", *targetDate)
-		}
-		if len(clearFields) > 0 {
-			fmt.Fprintf(stdout, "  Clear:      %s\n", clearFields.String())
+		if !writePlanLines(stdout, lines) {
+			fmt.Fprintln(stdout, "No change needed.")
 		}
 		fmt.Fprintln(stdout, "\nPlan only. Supply --apply to update Project fields on GitHub.")
 		return 0
@@ -941,13 +1299,23 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 	progress(stderr, *quiet, "[3/3] Independently verified requested values and other scalar Project fields")
 
 	if *jsonOutput {
-		if err := writeJSON(stdout, result); err != nil {
+		wrapped := map[string]any{
+			"action":      "project_item_edit",
+			"applied":     true,
+			"changed":     result.Changed,
+			"projectItem": result,
+		}
+		if err := writeJSON(stdout, wrapped); err != nil {
 			return operationError(stderr, "write result JSON", err)
 		}
 		return 0
 	}
 
-	fmt.Fprintf(stdout, "Updated Project item %s on Project %s/%d:\n", result.ItemID, project.Owner, project.Number)
+	if result.Changed {
+		fmt.Fprintf(stdout, "Updated Project item %s on Project %s/%d:\n", result.ItemID, project.Owner, project.Number)
+	} else {
+		fmt.Fprintf(stdout, "No change needed for Project item %s on Project %s/%d:\n", result.ItemID, project.Owner, project.Number)
+	}
 	if result.Archived {
 		fmt.Fprintln(stdout, "  Note: this item is archived and hidden from Project views; run project item-add to restore it")
 	}

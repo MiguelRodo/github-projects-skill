@@ -29,6 +29,9 @@ type IssueView struct {
 	// AutomationSideEffects is never read from GitHub. EditIssue fills it with
 	// Project Status changes made by built-in workflows on close or reopen.
 	AutomationSideEffects []string `json:"automationSideEffects,omitempty"`
+	// Changed is never read from GitHub. EditIssue reports whether it actually
+	// modified the issue; a verified no-op leaves it false.
+	Changed bool `json:"-"`
 }
 
 // IssueLabel is an issue label name.
@@ -674,6 +677,7 @@ func EditIssue(ctx context.Context, client Client, input EditIssueInput) (IssueV
 		if err := verifyEditedIssue(before, before, input); err != nil {
 			return IssueView{}, err
 		}
+		before.Changed = false
 		return before, nil
 	}
 
@@ -686,6 +690,7 @@ func EditIssue(ctx context.Context, client Client, input EditIssueInput) (IssueV
 		return IssueView{}, err
 	}
 	after.AutomationSideEffects = projectStatusAutomation(before.ProjectItems, after.ProjectItems)
+	after.Changed = true
 	return after, nil
 }
 
