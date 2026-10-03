@@ -204,12 +204,6 @@ func queryDetailedProjectSchema(ctx context.Context, client Client, project cont
 	return schema, ownerType, nil
 }
 
-type organizationIssueTypeListRecord struct {
-	NodeID      string `json:"node_id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
 type organizationIssueTypeDefinition struct {
 	NodeID      string
 	Name        string
@@ -218,18 +212,26 @@ type organizationIssueTypeDefinition struct {
 	Enabled     bool
 }
 
+type organizationIssueTypeNode struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Color       string `json:"color"`
+	IsEnabled   bool   `json:"isEnabled"`
+}
+
 type organizationIssueTypeGraphQLResponse struct {
 	Data struct {
 		Organization *struct {
-			ID string `json:"id"`
+			ID         string `json:"id"`
+			IssueTypes struct {
+				Nodes    []organizationIssueTypeNode `json:"nodes"`
+				PageInfo struct {
+					HasNextPage bool   `json:"hasNextPage"`
+					EndCursor   string `json:"endCursor"`
+				} `json:"pageInfo"`
+			} `json:"issueTypes"`
 		} `json:"organization"`
-		Nodes []struct {
-			ID          string `json:"id"`
-			Name        string `json:"name"`
-			Description string `json:"description"`
-			Color       string `json:"color"`
-			IsEnabled   bool   `json:"isEnabled"`
-		} `json:"nodes"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
@@ -254,66 +256,63 @@ type organizationIssueFieldDefinition struct {
 }
 
 func queryOrganizationIssueTypes(ctx context.Context, client Client, project contract.Project) (string, []organizationIssueTypeDefinition, error) {
-	out, err := restPageBytes(ctx, client, "/"+"orgs/"+project.Owner+"/issue-types?per_page=100")
-	if err != nil {
-		return "", nil, fmt.Errorf("list organization issue types for %s: %w", project.Owner, err)
-	}
-	var pages [][]organizationIssueTypeListRecord
-	if err := json.Unmarshal(out, &pages); err != nil {
-		return "", nil, fmt.Errorf("decode organization issue types: %w", err)
-	}
-	var records []organizationIssueTypeListRecord
-	for _, page := range pages {
-		records = append(records, page...)
-	}
-	ids := make([]string, 0, len(records))
-	for _, record := range records {
-		if record.NodeID == "" {
-			return "", nil, fmt.Errorf("organization issue type %q has no node id", record.Name)
-		}
-		ids = append(ids, record.NodeID)
-	}
-
-	query := `query($login: String!, $ids: [ID!]!) {
-  organization(login: $login) { id }
-  nodes(ids: $ids) {
-    ... on IssueType { id name description color isEnabled }
+	const query = `query($login: String!, $after: String) {
+  organization(login: $login) {
+    id
+    issueTypes(first: 100, after: $after) {
+      nodes { id name description color isEnabled }
+      pageInfo { hasNextPage endCursor }
+    }
   }
 }`
-	body := map[string]any{"query": query, "variables": map[string]any{"login": project.Owner, "ids": ids}}
-	graphOut, err := graphQLInput(ctx, client, body)
-	if err != nil {
-		return "", nil, fmt.Errorf("read organization issue type definitions: %w", err)
-	}
-	var resp organizationIssueTypeGraphQLResponse
-	if err := json.Unmarshal(graphOut, &resp); err != nil {
-		return "", nil, fmt.Errorf("decode organization issue type definitions: %w", err)
-	}
-	if len(resp.Errors) > 0 {
-		return "", nil, fmt.Errorf("GraphQL error querying organization issue types: %s", resp.Errors[0].Message)
-	}
-	if resp.Data.Organization == nil || resp.Data.Organization.ID == "" {
-		return "", nil, fmt.Errorf("organization %s was not returned by GraphQL", project.Owner)
-	}
-	if len(resp.Data.Nodes) != len(records) {
-		return "", nil, fmt.Errorf("organization issue type readback returned %d nodes for %d listed types", len(resp.Data.Nodes), len(records))
-	}
-	definitions := make([]organizationIssueTypeDefinition, 0, len(resp.Data.Nodes))
+	var organizationID string
+	definitions := []organizationIssueTypeDefinition{}
 	seen := make(map[string]bool)
-	for _, node := range resp.Data.Nodes {
-		if node.ID == "" || node.Name == "" {
-			return "", nil, errors.New("organization issue type GraphQL read returned an incomplete node")
+	var after string
+	for page := 0; ; page++ {
+		if page >= 10 {
+			return "", nil, errors.New("more than 1000 issue types; refusing an incomplete read")
 		}
-		if seen[node.ID] {
-			return "", nil, fmt.Errorf("organization issue type node %s appeared more than once", node.ID)
+		variables := map[string]any{"login": project.Owner}
+		if page > 0 {
+			variables["after"] = after
 		}
-		seen[node.ID] = true
-		definitions = append(definitions, organizationIssueTypeDefinition{
-			NodeID: node.ID, Name: node.Name, Description: node.Description,
-			Color: strings.ToUpper(node.Color), Enabled: node.IsEnabled,
-		})
+		graphOut, err := graphQLBytes(ctx, client, query, variables)
+		if err != nil {
+			return "", nil, fmt.Errorf("read organization issue type definitions: %w", err)
+		}
+		var resp organizationIssueTypeGraphQLResponse
+		if err := json.Unmarshal(graphOut, &resp); err != nil {
+			return "", nil, fmt.Errorf("decode organization issue type definitions: %w", err)
+		}
+		if len(resp.Errors) > 0 {
+			return "", nil, fmt.Errorf("GraphQL error querying organization issue types: %s", resp.Errors[0].Message)
+		}
+		if resp.Data.Organization == nil || resp.Data.Organization.ID == "" {
+			return "", nil, fmt.Errorf("organization %s was not returned by GraphQL", project.Owner)
+		}
+		if organizationID == "" {
+			organizationID = resp.Data.Organization.ID
+		}
+		for _, node := range resp.Data.Organization.IssueTypes.Nodes {
+			if node.ID == "" || node.Name == "" {
+				return "", nil, errors.New("organization issue type GraphQL read returned an incomplete node")
+			}
+			if seen[node.ID] {
+				return "", nil, fmt.Errorf("organization issue type node %s appeared more than once", node.ID)
+			}
+			seen[node.ID] = true
+			definitions = append(definitions, organizationIssueTypeDefinition{
+				NodeID: node.ID, Name: node.Name, Description: node.Description,
+				Color: strings.ToUpper(node.Color), Enabled: node.IsEnabled,
+			})
+		}
+		if !resp.Data.Organization.IssueTypes.PageInfo.HasNextPage {
+			break
+		}
+		after = resp.Data.Organization.IssueTypes.PageInfo.EndCursor
 	}
-	return resp.Data.Organization.ID, definitions, nil
+	return organizationID, definitions, nil
 }
 
 func queryOrganizationIssueFieldDefinitions(ctx context.Context, client Client, owner string) ([]organizationIssueFieldDefinition, error) {

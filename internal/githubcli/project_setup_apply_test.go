@@ -196,21 +196,28 @@ func orgSetupProject() contract.Project {
 	return contract.Project{Owner: "octo-org", Number: 12, Title: "Planning"}
 }
 
+func orgIssueTypeNodes() []map[string]any {
+	nodes := make([]map[string]any, 0, len(standardClassOptions))
+	for index, option := range standardClassOptions {
+		nodes = append(nodes, map[string]any{"id": fmt.Sprintf("it%d", index), "name": option.Name, "color": option.Color, "isEnabled": true})
+	}
+	return nodes
+}
+
+func orgIssueTypesPageJSON(nodes []map[string]any, hasNextPage bool, endCursor string) string {
+	encoded, _ := json.Marshal(map[string]any{"data": map[string]any{"organization": map[string]any{
+		"id": "org-node",
+		"issueTypes": map[string]any{
+			"nodes":    nodes,
+			"pageInfo": map[string]any{"hasNextPage": hasNextPage, "endCursor": endCursor},
+		},
+	}}})
+	return string(encoded)
+}
+
 func orgIssueTypeSteps(t *testing.T) []seqStep {
 	t.Helper()
-	var list []map[string]string
-	var nodes []map[string]any
-	for index, option := range standardClassOptions {
-		id := fmt.Sprintf("it%d", index)
-		list = append(list, map[string]string{"node_id": id, "name": option.Name})
-		nodes = append(nodes, map[string]any{"id": id, "name": option.Name, "color": option.Color, "isEnabled": true})
-	}
-	listJSON, _ := json.Marshal(list)
-	nodesJSON, _ := json.Marshal(map[string]any{"data": map[string]any{"organization": map[string]any{"id": "org-node"}, "nodes": nodes}})
-	return []seqStep{
-		{request: request{method: "GET", path: "/orgs/octo-org/issue-types?per_page=100"}, out: string(listJSON)},
-		{request: issueTypesRequest(), out: string(nodesJSON)},
-	}
+	return []seqStep{{request: issueTypesRequest(), out: orgIssueTypesPageJSON(orgIssueTypeNodes(), false, "")}}
 }
 
 func orgPriorityFieldsJSON(ids []int, names []string) string {
@@ -380,6 +387,64 @@ func TestEmptySetupAndViewListsEncodeAsArrays(t *testing.T) {
 	}
 }
 
+func TestQueryOrganizationIssueTypesFollowsPagination(t *testing.T) {
+	first := []map[string]any{{"id": "it0", "name": "Task", "description": "", "color": "gray", "isEnabled": true}}
+	second := []map[string]any{{"id": "it1", "name": "Bug", "description": "defect", "color": "red", "isEnabled": false}}
+	runner := &seqClient{t: t, steps: []seqStep{
+		{request: issueTypesPageRequest(""), out: orgIssueTypesPageJSON(first, true, "cursor-1")},
+		{request: issueTypesPageRequest("cursor-1"), out: orgIssueTypesPageJSON(second, false, "")},
+	}}
+	organizationID, definitions, err := queryOrganizationIssueTypes(context.Background(), runner, orgSetupProject())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.done()
+	if organizationID != "org-node" {
+		t.Fatalf("organizationID = %q, want org-node", organizationID)
+	}
+	if len(definitions) != 2 {
+		t.Fatalf("definitions = %#v, want 2", definitions)
+	}
+	if definitions[0].NodeID != "it0" || definitions[0].Color != "GRAY" || !definitions[0].Enabled {
+		t.Fatalf("first definition = %#v", definitions[0])
+	}
+	if definitions[1].NodeID != "it1" || definitions[1].Color != "RED" || definitions[1].Enabled || definitions[1].Description != "defect" {
+		t.Fatalf("second definition = %#v", definitions[1])
+	}
+}
+
+func TestQueryOrganizationIssueTypesRejectsDuplicateNodeID(t *testing.T) {
+	nodes := []map[string]any{
+		{"id": "dup", "name": "Task", "color": "gray", "isEnabled": true},
+		{"id": "dup", "name": "Bug", "color": "red", "isEnabled": true},
+	}
+	runner := &seqClient{t: t, steps: []seqStep{
+		{request: issueTypesPageRequest(""), out: orgIssueTypesPageJSON(nodes, false, "")},
+	}}
+	_, _, err := queryOrganizationIssueTypes(context.Background(), runner, orgSetupProject())
+	if err == nil || !strings.Contains(err.Error(), "appeared more than once") {
+		t.Fatalf("error = %v, want a duplicate node id error", err)
+	}
+	runner.done()
+}
+
+func TestQueryOrganizationIssueTypesRejectsMoreThanTenPages(t *testing.T) {
+	steps := make([]seqStep, 0, 10)
+	after := ""
+	for page := 0; page < 10; page++ {
+		nodes := []map[string]any{{"id": fmt.Sprintf("it%d", page), "name": fmt.Sprintf("Type %d", page), "color": "gray", "isEnabled": true}}
+		cursor := fmt.Sprintf("cursor-%d", page)
+		steps = append(steps, seqStep{request: issueTypesPageRequest(after), out: orgIssueTypesPageJSON(nodes, true, cursor)})
+		after = cursor
+	}
+	runner := &seqClient{t: t, steps: steps}
+	_, _, err := queryOrganizationIssueTypes(context.Background(), runner, orgSetupProject())
+	if err == nil || !strings.Contains(err.Error(), "more than 1000 issue types; refusing an incomplete read") {
+		t.Fatalf("error = %v, want the page-limit error", err)
+	}
+	runner.done()
+}
+
 func detailedSchemaRequest(root string) request {
 	login, number := "octo-user", 40
 	if root == "organization" {
@@ -462,17 +527,26 @@ func createDateRequest(name string) request {
   }
 }`, variables: map[string]any{"projectId": "project-node", "name": name, "dataType": "DATE"}}
 }
-func issueTypesRequest() request {
-	ids := []string{}
-	for i := range standardClassOptions {
-		ids = append(ids, fmt.Sprintf("it%d", i))
-	}
-	return request{query: `query($login: String!, $ids: [ID!]!) {
-  organization(login: $login) { id }
-  nodes(ids: $ids) {
-    ... on IssueType { id name description color isEnabled }
+
+const organizationIssueTypesQuery = `query($login: String!, $after: String) {
+  organization(login: $login) {
+    id
+    issueTypes(first: 100, after: $after) {
+      nodes { id name description color isEnabled }
+      pageInfo { hasNextPage endCursor }
+    }
   }
-}`, variables: map[string]any{"login": "octo-org", "ids": ids}}
+}`
+
+func issueTypesRequest() request {
+	return issueTypesPageRequest("")
+}
+func issueTypesPageRequest(after string) request {
+	variables := map[string]any{"login": "octo-org"}
+	if after != "" {
+		variables["after"] = after
+	}
+	return request{query: organizationIssueTypesQuery, variables: variables}
 }
 func organizationPriorityRequest() request {
 	options := []map[string]any{}
