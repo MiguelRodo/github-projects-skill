@@ -40,11 +40,11 @@ func runProjectSetupBacklogView(ctx context.Context, args []string, stdout, stde
 	}
 
 	progress(stderr, *quiet, "[1/3] Validating and resolving the repository contract")
-	configuration, err := contract.Load(*root)
+	configuration, err := loadContract(flags, *root)
 	if err != nil {
 		return operationError(stderr, "validate contract", err)
 	}
-	project, err := configuration.Resolve(contract.Selector{
+	project, err := resolveProject(configuration, contract.Selector{
 		Key:          *projectKey,
 		RoutingLabel: *routingLabel,
 		Number:       *projectNumber,

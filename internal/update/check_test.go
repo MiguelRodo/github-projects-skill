@@ -15,7 +15,7 @@ type fakeRunner struct {
 
 func (f fakeRunner) Run(_ context.Context, args ...string) ([]byte, error) {
 	f.t.Helper()
-	want := []string{"api", "repos/MiguelRodo/github-projects-skill/releases/latest", "--jq", ".tag_name"}
+	want := []string{"api", "--hostname", "github.com", "repos/MiguelRodo/github-projects-skill/releases/latest", "--jq", ".tag_name"}
 	if !reflect.DeepEqual(args, want) {
 		f.t.Fatalf("args = %v, want %v", args, want)
 	}
@@ -46,6 +46,18 @@ func TestCheck(t *testing.T) {
 			installed: "dev",
 			latest:    "v1.0.0\n",
 			want:      Result{Installed: "dev", Latest: "1.0.0", Development: true},
+		},
+		{
+			name:      "go install pseudo-version",
+			installed: "v0.0.0-20260102030405-abcdef123456",
+			latest:    "v1.0.0\n",
+			want:      Result{Installed: "0.0.0-20260102030405-abcdef123456", Latest: "1.0.0", Development: true},
+		},
+		{
+			name:      "go install tagged module",
+			installed: "v0.9.0",
+			latest:    "v1.0.0\n",
+			want:      Result{Installed: "0.9.0", Latest: "1.0.0", UpdateAvailable: true},
 		},
 	}
 	for _, test := range tests {

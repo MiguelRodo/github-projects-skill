@@ -17,86 +17,43 @@ import (
 	updatecheck "github.com/MiguelRodo/github-projects-skill/internal/update"
 )
 
-const usageText = `projects is an optional, deterministic backend for GitHub Project administration.
-
-Usage:
-  projects contract validate [flags]
-  projects issue create [flags]
-  projects issue edit [flags]
-  projects project item-list [flags]
-  projects project item-add [flags]
-  projects project item-edit [flags]
-  projects project setup-fields [flags]
-  projects project setup-backlog-view [flags]
-  projects update check [flags]
-  projects version [--json]
-
-Commands:
-  contract validate             Validate the complete .projects contract without GitHub access.
-  issue create                  Plan or create an issue on GitHub with verified readback.
-  issue edit                    Plan or edit an issue on GitHub with verified readback.
-  project item-list             Resolve one declared Project and read every item with a count check.
-  project item-add              Plan or add an issue to a declared Project.
-  project item-edit             Plan or edit field values on a Project item with verified readback.
-  project setup-fields          Plan or apply the shared one-time Project field profile.
-  project setup-backlog-view    Plan or apply the shared Backlog table view.
-  update check                  Check the latest GitHub release without installing anything.
-  version                       Show the installed build version.
-
-Run "projects <command> --help" for command flags.
-`
-
 // Run executes the CLI and returns a process exit code.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer, runner githubcli.Runner) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usageText)
+		fmt.Fprint(stderr, usageText())
 		return 2
 	}
 	switch args[0] {
-	case "help", "--help", "-h":
-		fmt.Fprint(stdout, usageText)
+	case "help", "--help", "-h", "-help":
+		if args[0] == "help" && len(args) > 1 {
+			return runHelpTopic(ctx, args[1:], stdout, stderr)
+		}
+		fmt.Fprint(stdout, usageText())
 		return 0
-	case "version":
+	case "version", "--version", "-v":
 		return runVersion(args[1:], stdout, stderr)
-	case "contract":
-		if len(args) >= 2 && args[1] == "validate" {
-			return runContractValidate(args[2:], stdout, stderr)
-		}
-		return usageError(stderr, "contract requires the validate subcommand")
-	case "issue":
-		if len(args) >= 2 {
-			switch args[1] {
-			case "create":
-				return runIssueCreate(ctx, args[2:], stdout, stderr, runner)
-			case "edit":
-				return runIssueEdit(ctx, args[2:], stdout, stderr, runner)
-			}
-		}
-		return usageError(stderr, "issue requires the create or edit subcommand")
-	case "project":
-		if len(args) >= 2 {
-			switch args[1] {
-			case "item-list", "items":
-				return runProjectItemList(ctx, args[2:], stdout, stderr, runner)
-			case "item-add":
-				return runProjectItemAdd(ctx, args[2:], stdout, stderr, runner)
-			case "item-edit":
-				return runProjectItemEdit(ctx, args[2:], stdout, stderr, runner)
-			case "setup-fields":
-				return runProjectSetupFields(ctx, args[2:], stdout, stderr, runner)
-			case "setup-backlog-view":
-				return runProjectSetupBacklogView(ctx, args[2:], stdout, stderr, runner)
-			}
-		}
-		return usageError(stderr, "project requires the item-list, item-add, item-edit, setup-fields, or setup-backlog-view subcommand")
-	case "update":
-		if len(args) >= 2 && args[1] == "check" {
-			return runUpdateCheck(ctx, args[2:], stdout, stderr, runner)
-		}
-		return usageError(stderr, "update requires the check subcommand")
-	default:
+	}
+	group := findGroup(args[0])
+	if group == nil {
 		return usageError(stderr, fmt.Sprintf("unknown command %q", args[0]))
 	}
+	if len(args) < 2 {
+		return groupUsageError(stderr, group, fmt.Sprintf("%s requires a subcommand", group.name))
+	}
+	if isHelpFlag(args[1]) || args[1] == "help" {
+		fmt.Fprint(stdout, group.usage())
+		return 0
+	}
+	command := group.find(args[1])
+	if command == nil {
+		return groupUsageError(stderr, group, fmt.Sprintf("unknown %s subcommand %q", group.name, args[1]))
+	}
+	rest := args[2:]
+	if helpRequested(rest) {
+		// Requested help is command output: send it to stdout and succeed.
+		return command.run(ctx, rest, stdout, stdout, runner)
+	}
+	return command.run(ctx, rest, stdout, &commandOutput{Writer: stderr, command: command}, runner)
 }
 
 func runVersion(args []string, stdout, stderr io.Writer) int {
@@ -146,8 +103,12 @@ func runContractValidate(args []string, stdout, stderr io.Writer) int {
 	if flags.NArg() != 0 {
 		return usageError(stderr, "contract validate does not take positional arguments")
 	}
-	progress(stderr, *quiet, "[1/1] Validating %s/.projects/project.md", strings.TrimRight(*root, "/"))
-	configuration, err := contract.Load(*root)
+	resolvedRoot, err := contractRoot(flags, *root)
+	if err != nil {
+		return operationError(stderr, "validate contract", err)
+	}
+	progress(stderr, *quiet, "[1/1] Validating %s/.projects/project.md", strings.TrimRight(resolvedRoot, "/"))
+	configuration, err := contract.Load(resolvedRoot)
 	if err != nil {
 		return operationError(stderr, "validate contract", err)
 	}
@@ -203,19 +164,16 @@ func runProjectItemList(ctx context.Context, args []string, stdout, stderr io.Wr
 	}
 
 	progress(stderr, *quiet, "[1/3] Validating and resolving the repository contract")
-	configuration, err := contract.Load(*root)
+	configuration, err := loadContract(flags, *root)
 	if err != nil {
 		return operationError(stderr, "validate contract", err)
 	}
-	project, err := configuration.Resolve(contract.Selector{
+	project, err := resolveProject(configuration, contract.Selector{
 		Key:          *projectKey,
 		RoutingLabel: *routingLabel,
 		Number:       *projectNumber,
 	})
 	if err != nil {
-		if choices := configuration.RouteChoices(); len(choices) > 0 {
-			err = fmt.Errorf("%w; configured routes: %s", err, strings.Join(choices, ", "))
-		}
 		return operationError(stderr, "resolve Project", err)
 	}
 
@@ -360,13 +318,36 @@ func progress(writer io.Writer, quiet bool, format string, args ...any) {
 	fmt.Fprintf(writer, format+"\n", args...)
 }
 
+// operationError reports a failed stage. Failures caused by the supplied
+// Project selector are usage errors: they exit 2 and list the configured routes.
 func operationError(stderr io.Writer, stage string, err error) int {
+	var selector *selectorError
+	if errors.As(err, &selector) {
+		message := err.Error()
+		if len(selector.routes) > 0 && !strings.Contains(message, "configured routes:") {
+			message += "; configured routes: " + strings.Join(selector.routes, ", ")
+		}
+		fmt.Fprintf(stderr, "projects: %s: %s\n", stage, message)
+		return 2
+	}
 	fmt.Fprintf(stderr, "projects: %s: %v\n", stage, err)
 	return 1
 }
 
+// usageError reports a mistake in the supplied arguments and exits 2. Inside a
+// subcommand it repeats that subcommand's usage rather than the global list.
 func usageError(stderr io.Writer, message string) int {
-	fmt.Fprintf(stderr, "projects: %s\n\n%s", message, usageText)
+	fmt.Fprintf(stderr, "projects: %s\n\n", message)
+	if output, ok := stderr.(*commandOutput); ok {
+		output.command.printUsage(output.Writer)
+		return 2
+	}
+	fmt.Fprint(stderr, usageText())
+	return 2
+}
+
+func groupUsageError(stderr io.Writer, group *commandGroup, message string) int {
+	fmt.Fprintf(stderr, "projects: %s\n\n%s", message, group.usage())
 	return 2
 }
 

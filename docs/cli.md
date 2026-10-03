@@ -50,9 +50,31 @@ go install github.com/MiguelRodo/github-projects-skill/cmd/projects@latest
 Maintainer setup and version-bump commands are in the
 [`projects` release guide](releasing.md).
 
+## Help
+
+```bash
+projects --help
+projects project --help        # or: projects help project
+projects project item-edit --help
+```
+
+Requested help is written to stdout and exits 0. A usage error repeats the
+usage of the command or group that was being run.
+
+## Choose the repository
+
+Every command that reads the contract accepts `--root DIRECTORY`. Without it,
+`projects` starts in the current directory and walks up to the nearest
+directory containing `.projects/project.md`, so it works from any subdirectory
+of a repository. The walk stops at the first directory containing `.git`: a
+repository without its own contract never borrows the contract of an enclosing
+workspace or parent repository. Outside any Git repository the walk can reach
+the filesystem root. When nothing is found, the command fails and asks you to
+run it from the repository or pass `--root`.
+
 ## Validate a repository contract
 
-Run the command in the repository root:
+Run the command anywhere inside the repository:
 
 ```bash
 projects contract validate
@@ -83,8 +105,8 @@ For a single-Project repository:
 projects project item-list --format json
 ```
 
-The shorter `--json` flag is equivalent. Human-readable table output is the
-default:
+The shorter `--json` flag is equivalent, and `projects project items` is an
+alias for `item-list`. Human-readable table output is the default:
 
 ```bash
 projects project item-list
@@ -233,17 +255,31 @@ replacement. GitHub does not make those operations atomic; if a later field
 fails, the command says that an earlier narrow change may have applied and
 requires inspection before retrying.
 
+## Set up Project fields and the Backlog view
+
+These one-time commands also plan by default and need `--apply`. A dispatcher
+needs the same exact selector as the other Project commands.
+
+| Command | Purpose | Details |
+| --- | --- | --- |
+| `projects project setup-fields` | Create or reconcile the shared Class, Priority and date fields. Organisation-wide Issue Type or Priority schema changes also need `--allow-organization-schema` with `--apply`. | [Standard Project fields](standard-project-fields.md) |
+| `projects project setup-backlog-view` | Create or reconcile the shared `Backlog` table view after the fields exist. | [Standard Backlog view](standard-backlog-view.md) |
+
 ## Version and update checks
 
 ```bash
 projects version
+projects --version             # or -v
 projects version --json
 projects update check
 projects update check --json
 ```
 
-`projects update check` only reads the latest GitHub Release. It does not run a
-package manager, install a binary or require `sudo`.
+`projects update check` only reads the latest github.com Release, whatever
+`GH_HOST` says. It does not run a package manager, install a binary or require
+`sudo`. Release packages carry their version. A `go install ...@vX.Y.Z` build
+reports that module version; a local or pseudo-version build reports itself as
+a development build and is not compared.
 
 ## Output and failures
 
@@ -255,9 +291,13 @@ JSON safe to pipe into another tool:
 projects project item-list --json >project-items.json
 ```
 
-Usage errors exit with status 2. Validation, GitHub and completeness failures
-exit with status 1. A failed command names the stage that failed and includes
-the underlying `gh` error when one exists.
+Usage errors exit with status 2. These include a Project selector that names
+no configured route, a selector used with a single-Project contract, and a
+dispatcher command without a selector; such failures list the configured
+routes. Validation, GitHub and completeness failures exit with status 1. A
+failed command names the stage that failed and starts with the underlying `gh`
+error when one exists, followed by an abbreviated command: GraphQL documents,
+issue bodies and other long arguments are summarised rather than repeated.
 
 An error during readback does not mean the preceding write failed. For example,
 a GitHub Project workflow can move an item to Done when its issue closes. The

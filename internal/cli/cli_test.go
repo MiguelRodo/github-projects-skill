@@ -135,7 +135,7 @@ func TestUpdateCheckIsReadOnlyAndReportsDevelopmentBuild(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	fake := &runner{t: t, responses: []response{
 		{
-			args:   []string{"api", "repos/MiguelRodo/github-projects-skill/releases/latest", "--jq", ".tag_name"},
+			args:   []string{"api", "--hostname", "github.com", "repos/MiguelRodo/github-projects-skill/releases/latest", "--jq", ".tag_name"},
 			output: "v0.1.0\n",
 		},
 	}}
@@ -165,7 +165,7 @@ func TestSubcommandHelpSucceeds(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "Usage: projects project item-list") {
-		t.Fatalf("stderr = %s", stderr.String())
+	if !strings.Contains(stdout.String(), "Usage: projects project item-list") || stderr.Len() != 0 {
+		t.Fatalf("stdout = %s, stderr = %s", stdout.String(), stderr.String())
 	}
 }

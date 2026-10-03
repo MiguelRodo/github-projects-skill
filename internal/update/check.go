@@ -5,11 +5,19 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
 )
 
 const repository = "MiguelRodo/github-projects-skill"
+
+// releaseHost pins the release lookup to github.com so a GH_HOST or enterprise
+// default cannot turn a published release into a false "not found".
+const releaseHost = "github.com"
+
+// checkTimeout bounds the read-only release lookup.
+const checkTimeout = 15 * time.Second
 
 // Result describes the installed and latest published versions. Check never
 // installs or upgrades anything.
@@ -24,12 +32,14 @@ type Result struct {
 // Check reads the latest GitHub Release through gh and compares strict release
 // versions. Release automation in this repository emits X.Y.Z versions only.
 func Check(ctx context.Context, runner githubcli.Runner, installed string) (Result, error) {
-	output, err := runner.Run(ctx, "api", "repos/"+repository+"/releases/latest", "--jq", ".tag_name")
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+	output, err := runner.Run(ctx, "api", "--hostname", releaseHost, "repos/"+repository+"/releases/latest", "--jq", ".tag_name")
 	if err != nil {
 		if strings.Contains(err.Error(), "HTTP 404") {
 			return Result{
 				Installed:          normalise(installed),
-				Development:        normalise(installed) == "dev",
+				Development:        isDevelopment(normalise(installed)),
 				NoPublishedRelease: true,
 			}, nil
 		}
@@ -40,7 +50,7 @@ func Check(ctx context.Context, runner githubcli.Runner, installed string) (Resu
 		return Result{}, fmt.Errorf("read latest projects release: GitHub returned an empty tag")
 	}
 	result := Result{Installed: normalise(installed), Latest: normalise(latest)}
-	if result.Installed == "dev" || result.Installed == "unknown" || result.Installed == "" {
+	if isDevelopment(result.Installed) {
 		result.Development = true
 		return result, nil
 	}
@@ -55,6 +65,14 @@ func Check(ctx context.Context, runner githubcli.Runner, installed string) (Resu
 	}
 	result.UpdateAvailable = compare(installedVersion, latestVersion) < 0
 	return result, nil
+}
+
+// isDevelopment reports builds that cannot be compared with a release: the
+// unstamped default, and Go pseudo-versions or locally modified builds such as
+// v0.0.0-20260102030405-abcdef123456 or v1.2.3+dirty.
+func isDevelopment(installed string) bool {
+	return installed == "dev" || installed == "unknown" || installed == "" ||
+		strings.ContainsAny(installed, "-+")
 }
 
 func normalise(value string) string {

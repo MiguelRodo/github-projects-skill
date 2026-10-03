@@ -48,8 +48,52 @@ func runGH(ctx context.Context, input []byte, args ...string) ([]byte, error) {
 	if errors.As(err, &exitError) {
 		message := strings.TrimSpace(string(exitError.Stderr))
 		if message != "" {
-			return nil, fmt.Errorf("gh %s: %s", strings.Join(args, " "), message)
+			return nil, fmt.Errorf("%s (command: gh %s)", message, summariseArgs(args))
 		}
 	}
-	return nil, fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
+	return nil, fmt.Errorf("%w (command: gh %s)", err, summariseArgs(args))
+}
+
+// maxArgDisplay bounds how much of one argument an error message repeats.
+const maxArgDisplay = 120
+
+// summariseArgs renders gh arguments for an error message. GraphQL documents
+// and issue bodies can be dozens of lines long and would otherwise bury gh's
+// own diagnosis, so they are replaced by a short description. Other long
+// arguments are truncated. The result is for people, not for re-execution.
+func summariseArgs(args []string) string {
+	parts := make([]string, 0, len(args))
+	for index, arg := range args {
+		previous := ""
+		if index > 0 {
+			previous = args[index-1]
+		}
+		parts = append(parts, summariseArg(previous, arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func summariseArg(previous, arg string) string {
+	switch {
+	case previous == "--body":
+		return fmt.Sprintf("<body %d bytes>", len(arg))
+	case previous == "--body-file" && arg != "-":
+		return truncateArg(arg)
+	case strings.HasPrefix(arg, "query="):
+		lines := strings.Count(strings.TrimSpace(strings.TrimPrefix(arg, "query=")), "\n") + 1
+		return fmt.Sprintf("query=<graphql %d lines>", lines)
+	case strings.HasPrefix(arg, "body="):
+		return fmt.Sprintf("body=<body %d bytes>", len(arg)-len("body="))
+	case strings.HasPrefix(arg, "--body="):
+		return fmt.Sprintf("--body=<body %d bytes>", len(arg)-len("--body="))
+	}
+	return truncateArg(arg)
+}
+
+func truncateArg(arg string) string {
+	arg = strings.ReplaceAll(arg, "\n", " ")
+	if len(arg) <= maxArgDisplay {
+		return arg
+	}
+	return fmt.Sprintf("%s...<%d bytes>", strings.ToValidUTF8(arg[:maxArgDisplay], ""), len(arg))
 }
