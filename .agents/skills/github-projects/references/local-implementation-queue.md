@@ -169,6 +169,18 @@ For every selector:
 
 When no selector is supplied, retain the ordinary cross-repository behaviour above.
 
+Semantic onboarding reconciles the central dispatcher and implementation context
+so `pj -i --project work --subproject tools` needs no repository selector.
+A contract marked `Queue source | mirror` does not discover a second queue.
+A central scope's `Implementation repository` metadata, or that column in its
+selected sub-project vocabulary, resolves the checked implementation checkout.
+Preflight validates that contract and refuses identity/routing disagreement before
+querying issues. Follow its AGENTS.md and contract for the bounded candidate.
+For unselected sub-projects in a broader Project queue, use the issue's exact
+sub-project labels and the central vocabulary to resolve implementation context;
+stop on missing or conflicting bindings rather than guessing.
+
+
 ### Deterministic preflight
 
 Before launching an agent for local queue processing, a caller may run

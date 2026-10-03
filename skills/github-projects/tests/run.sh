@@ -441,7 +441,7 @@ mkdir -p "$test_tmp_dir/init-multiple"
 git -C "$test_tmp_dir/init-multiple" init -q
 (
   cd "$test_tmp_dir/init-multiple"
-  printf '%s\n' '' '' n y '' 12 '' '' n n y | \
+  printf '%s\n' '' '' n y '' 12 '' n n y | \
     PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-multiple.log" 2>&1
 )
@@ -523,7 +523,7 @@ grep -Fq 'Project key example-planning is already configured' \
 
 (
   cd "$test_tmp_dir/init-multiple"
-  printf '%s\n' y '' 13 '' '' n n n | \
+  printf '%s\n' y '' 13 '' n n n | \
     PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-multiple-add.log" 2>&1
 )
@@ -656,42 +656,29 @@ grep -Fq 'git push -u origin main' "$test_tmp_dir/init-push-failure.log"
 [[ "$(git -C "$test_tmp_dir/init-push-failure" log -1 --format=%s)" == \
    "Configure GitHub Project administration" ]]
 
-mkdir -p "$test_tmp_dir/init-separate-single"
-git -C "$test_tmp_dir/init-separate-single" init -q
-printf '# Existing guidance\n' >"$test_tmp_dir/init-separate-single/AGENTS.md"
-(
-  cd "$test_tmp_dir/init-separate-single"
-  printf '%s\n' '' 'octo-user/issues' '' '' 12 n n | \
-    PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
-    >"$test_tmp_dir/init-separate-single.log" 2>&1
-)
-bash "$validator" "$test_tmp_dir/init-separate-single"
-grep -Fq '| Issue repository | octo-user/issues |' \
-  "$test_tmp_dir/init-separate-single/.projects/project.md"
-grep -Fq '<!-- github-projects:start -->' \
-  "$test_tmp_dir/init-separate-single/AGENTS.md"
-if grep -Fq 'octo-user/issues' "$test_tmp_dir/init-separate-single/AGENTS.md"; then
-  echo "ERROR: AGENTS.md leaked the separate issue repository destination" >&2
-  exit 1
-fi
-
-mkdir -p "$test_tmp_dir/init-separate-multiple"
-git -C "$test_tmp_dir/init-separate-multiple" init -q
-(
-  cd "$test_tmp_dir/init-separate-multiple"
-  printf '%s\n' '' 'octo-user/issues' n y '' 12 '' '' n n n | \
-    PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
-    >"$test_tmp_dir/init-separate-multiple.log" 2>&1
-)
-bash "$validator" "$test_tmp_dir/init-separate-multiple"
-grep -Fq '| Issue repository | octo-user/issues |' \
-  "$test_tmp_dir/init-separate-multiple/.projects/project.md"
-grep -Fq '| Issue repository | octo-user/issues |' \
-  "$test_tmp_dir/init-separate-multiple/.projects/projects/example-planning.md"
-if grep -Fq 'octo-user/issues' "$test_tmp_dir/init-separate-multiple/AGENTS.md"; then
-  echo "ERROR: AGENTS.md leaked the separate issue repository destination" >&2
-  exit 1
-fi
+# Guided separate-store onboarding must delegate the complete topology instead
+# of writing a one-sided local contract. The real helper is exercised below.
+mkdir -p "$test_tmp_dir/semantic-bin"
+cat >"$test_tmp_dir/semantic-bin/python3" <<'EOF'
+#!/usr/bin/env bash
+printf '<%s>' "$@" >"$SEMANTIC_ARGS"
+EOF
+chmod +x "$test_tmp_dir/semantic-bin/python3"
+for grouping in '' tools; do
+  target="$test_tmp_dir/init-separate-${grouping:-overall}"
+  mkdir -p "$target"
+  git -C "$target" init -q
+  (
+    cd "$target"
+    printf '%s\n' '' 'octo-user/issues' work '' 12 "$grouping" | \
+      PATH="$test_tmp_dir/semantic-bin:$test_tmp_dir/bin:$PATH" \
+      SEMANTIC_ARGS="$test_tmp_dir/semantic.args" bash "$initializer" \
+      >"$test_tmp_dir/init-separate.log" 2>&1
+  )
+  grep -Fq '<--project><work><--issue-store><octo-user/issues>' "$test_tmp_dir/semantic.args"
+  [[ -z "$grouping" ]] || grep -Fq '<--subproject><tools>' "$test_tmp_dir/semantic.args"
+  test ! -e "$target/.projects/project.md"
+done
 
 mkdir -p "$test_tmp_dir/init-invalid-issue-repo"
 git -C "$test_tmp_dir/init-invalid-issue-repo" init -q
@@ -736,5 +723,6 @@ bash "$test_dir/queue-preflight.sh"
 bash "$test_dir/queue-classify.sh"
 python3 "$test_dir/test-queue-execute.py"
 python3 "$test_dir/test-queue-review.py"
+python3 "$test_dir/test-onboarding.py"
 
 echo "github-projects tests passed"

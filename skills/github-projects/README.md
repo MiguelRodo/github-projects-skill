@@ -52,6 +52,27 @@ It is optional. The scripts below and direct GitHub operations remain supported.
 Installation, APT setup and update checks are documented in the
 [`projects` CLI guide](https://github.com/MiguelRodo/github-projects-skill/blob/main/docs/cli.md).
 
+## Start with Project intent
+
+From an implementation repository, choose a managed Project and optional
+sub-project. You do not need to edit routing contracts or invent labels:
+
+```bash
+pj --init --project work --project-owner example --project-number 40
+pj --init --project work --issue-store example/issues --subproject tools --project-owner example --project-number 40
+pj -i --project work --subproject tools
+```
+
+Without pj, run `bash .agents/skills/github-projects/scripts/init-project.sh`
+with the same setup flags. Central-store setup reconciles both local checkouts,
+previews material changes and requires confirmation or `--yes`. Changes stay
+on local branches for each repository's normal review and PR workflow.
+See [semantic onboarding](references/onboarding.md) for conflicts, prerequisites
+and standard field/Backlog setup.
+
+The following no-option guide also supports existing repository-backed single
+and multiple Projects. Selecting a separate store enters semantic reconciliation.
+
 ## 1. Create or find the GitHub Project
 
 Open the **Projects** tab on your GitHub profile or organisation. Create the Project if needed.
@@ -74,7 +95,7 @@ gh skill install MiguelRodo/github-projects-skill github-projects --agent univer
 bash .agents/skills/github-projects/scripts/init-project.sh
 ```
 
-The initializer first explains that it will configure the repository so chats and agents can understand the Project. It discovers GitHub facts and asks only about collaboration, where issues are tracked (defaulting to the current repository), whether the repository uses one or several Projects, and the owner, number and routing identity of each Project you add.
+The initializer first explains that it will configure the repository so chats and agents can understand the Project. It discovers GitHub facts and asks only about collaboration, where issues are tracked (defaulting to the current repository), whether the repository uses one or several Projects, and the owner, number and key of each Project you add. Routing labels are derived.
 
 This covers personal or collaborative repositories with one Project or several. Repository and Project privacy are discovered separately from GitHub.
 

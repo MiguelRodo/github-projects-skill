@@ -139,7 +139,10 @@ candidates="$tmp/candidates"
 
 add_scope() {
   local root="$1" contract="$2" route_label="$3"
-  local repository queue_label project_identity routing sub_row sub_key sub_label
+  local repository queue_label project_identity routing sub_row sub_key sub_label implementation target target_contract
+
+  # Semantic onboarding mirrors are context only; the central dispatcher owns discovery.
+  [ "$(table_value "$contract" "Queue source")" != "mirror" ] || return 0
 
   repository="$(table_value "$contract" "Issue repository")"
   [ -n "$repository" ] || die "$contract is missing Issue repository"
@@ -171,6 +174,48 @@ add_scope() {
     esac
   fi
   [ -n "$route_label" ] || route_label="-"
+
+  implementation="$(table_value "$contract" "Implementation repository")"
+  if [ -n "$subproject_selector" ]; then
+    target="$(awk -F'|' -v wanted="$sub_key" '
+      function trim(v) { sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); return v }
+      /^## / { active=($0 ~ /^## Sub-project vocabulary[[:space:]]*$/) }
+      active && /^\|/ {
+        for (i=2; i<NF; i++) if (trim($i)=="Implementation repository") column=i
+        if (column && tolower(trim($2))==tolower(wanted)) print trim($column)
+      }
+    ' "$contract")"
+    [ -z "$target" ] || implementation="$target"
+  elif grep -Eq '^## Sub-project vocabulary[[:space:]]*$' "$contract"; then
+    # A broader queue can contain several implementations. Keep the central
+    # vocabulary available so the agent resolves each issue's own labels.
+    implementation=""
+  fi
+  if [ -n "$implementation" ]; then
+    target=""
+    for local_root in "$workspace"/*; do
+      target_contract="$local_root/.projects/project.md"
+      [ -f "$target_contract" ] || continue
+      [ "$(table_value "$target_contract" "Implementation repository")" = "$implementation" ] || continue
+      [ -z "$target" ] || die "ambiguous implementation checkout for $implementation"
+      target="$local_root"
+    done
+    [ -n "$target" ] || die "missing managed implementation checkout for $implementation"
+    target_contract="$target/.projects/project.md"
+    if ! validation="$(bash "$validator" "$target" 2>&1)"; then
+      die "invalid implementation contract at $target: $validation"
+    fi
+    for identity_key in 'Issue repository' 'Project key' 'Project owner' 'Project number' 'Routing'; do
+      [ "$(table_value "$target_contract" "$identity_key")" = "$(table_value "$contract" "$identity_key")" ] ||
+        die "implementation contract disagrees on $identity_key: $target_contract"
+    done
+    if [ -n "$subproject_selector" ]; then
+      [ "$(subproject_label "$target_contract" "$sub_key")" = "$sub_key"$'\t'"$sub_label" ] ||
+        die "implementation contract disagrees on sub-project $sub_key"
+    fi
+    root="$target"
+    contract="$target_contract"
+  fi
 
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$repository" "$queue_label" "$route_label" "$sub_label" "$project_identity" "$sub_key" "$root" "$contract" >>"$scopes"

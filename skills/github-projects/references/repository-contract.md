@@ -198,3 +198,25 @@ By default the local script extends shared setup and runs after common GitHub ch
 ```
 
 For backward compatibility, `# github-project-admin: override` is also recognised. Keep local setup idempotent and never store credentials in it.
+
+## Semantic onboarding and implementation context
+
+Use [semantic onboarding](onboarding.md) to reconcile a Project and optional
+sub-project across a central issue store and its implementation checkout.
+`Implementation repository | OWNER/REPO` identifies an implementation contract.
+Its `Queue source | mirror` row delegates queue discovery to the store dispatcher.
+The central child may bind an overall Project with that metadata row, or bind
+sub-projects in its vocabulary:
+
+```markdown
+## Sub-project vocabulary
+
+| Key | Label | Implementation repository |
+| --- | --- | --- |
+| tools | subproject:tools | example/tools |
+```
+
+Queue selection uses these exact identities to find checked local contracts and
+refuses ambiguous, missing or inconsistent implementation context. Existing
+vocabulary tables without implementation bindings keep their established queue
+behaviour; an arbitrary provider label never creates a vocabulary entry.
