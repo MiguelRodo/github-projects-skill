@@ -142,6 +142,13 @@ contact GitHub to inspect exact-title collisions, live schema, membership and
 current values, but never write. Apply mode performs fresh inspection and
 independently verifies changes through separate readback.
 
+`issue edit` and `project item-edit` plans show each requested value as
+`current → new` (for example `Title: "Old" → "New"`), and mark a value that is
+already in the requested state as a no-op (`(already set)`, `(already present)`,
+`(already absent)`, `(already none)` or `(already clear)`). A plan in which
+nothing would change ends with `No change needed.`, and the same change lines
+appear in the plan's `changes` JSON array.
+
 Create an issue:
 
 ```bash

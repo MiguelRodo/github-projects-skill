@@ -360,6 +360,158 @@ func TestProjectItemEditPlan(t *testing.T) {
 	}
 }
 
+// issueEditPlanFixture is the current issue an issue edit plan inspects.
+func issueEditPlanFixture(extra string) []byte {
+	body := `{"number":55,"title":"Original Title","body":"Original Body","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"` + extra + `}`
+	return issueFixture([]byte(body))
+}
+
+func TestIssueEditPlanShowsCurrentAndNewValues(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	fake := &fakeClient{t: t, responses: []response{
+		{
+			request: request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}},
+			output:  string(issueEditPlanFixture(`,"labels":[{"name":"bug"}],"milestone":{"title":"v1.0"}`)),
+		},
+	}}
+	exitCode := Run(
+		context.Background(),
+		[]string{"issue", "edit", "--root", fixture(t, "single"), "--issue", "55", "--title", "New Title", "--add-label", "bug", "--milestone", ""},
+		&stdout,
+		&stderr,
+		fake,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	for _, want := range []string{
+		`Title:      "Original Title" → "New Title"`,
+		`Unchanged:     bug (already present)`,
+		`Milestone:  v1.0 → (none)`,
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %s, want %q", stdout.String(), want)
+		}
+	}
+	if strings.Contains(stdout.String(), "Add labels:") {
+		t.Fatalf("stdout lists an already-present label as an addition: %s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "No change needed.") {
+		t.Fatalf("stdout = %s, want changes", stdout.String())
+	}
+}
+
+func TestIssueEditPlanReportsNoChangeNeeded(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	fake := &fakeClient{t: t, responses: []response{
+		{
+			request: request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}},
+			output:  string(issueEditPlanFixture(`,"labels":[{"name":"bug"}],"assignees":[{"login":"octocat"}]`)),
+		},
+	}}
+	exitCode := Run(
+		context.Background(),
+		[]string{"issue", "edit", "--root", fixture(t, "single"), "--issue", "55", "--title", "Original Title", "--add-label", "bug", "--add-assignee", "octocat", "--state", "open"},
+		&stdout,
+		&stderr,
+		fake,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "No change needed.") {
+		t.Fatalf("stdout = %s, want No change needed.", stdout.String())
+	}
+	for _, want := range []string{
+		`Title:      "Original Title" (already set)`,
+		`Unchanged:     bug (already present)`,
+		`Unchanged:        octocat (already present)`,
+		`State:      open (already set)`,
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %s, want %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestProjectItemEditPlanShowsCurrentAndNewValues(t *testing.T) {
+	root := localFieldsFixture(t)
+	var stdout, stderr bytes.Buffer
+	fake := &fakeClient{t: t, responses: []response{
+		{request: request{query: githubcli.ProjectSchemaQuery(), variables: map[string]any{"login": "octo-org", "number": 12}}, output: localFieldsSchema()},
+		{request: cliProjectItemRequest(), output: localFieldsItem("Medium", "Task", "Todo")},
+	}}
+	exitCode := Run(
+		context.Background(),
+		[]string{"project", "item-edit", "--root", root, "--issue", "55", "--priority", "P1", "--status", "Todo"},
+		&stdout,
+		&stderr,
+		fake,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Priority:   Medium → High") {
+		t.Fatalf("stdout = %s, want priority transition", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Status:     Todo (already set)") {
+		t.Fatalf("stdout = %s, want already-set status", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "No change needed.") {
+		t.Fatalf("stdout = %s, want changes", stdout.String())
+	}
+}
+
+func TestProjectItemEditPlanClearReportsAlreadyClear(t *testing.T) {
+	root := localFieldsFixture(t)
+	var stdout, stderr bytes.Buffer
+	fake := &fakeClient{t: t, responses: []response{
+		{request: request{query: githubcli.ProjectSchemaQuery(), variables: map[string]any{"login": "octo-org", "number": 12}}, output: localFieldsSchema()},
+		{request: cliProjectItemRequest(), output: cliProjectItemQueryJSON("PVTI_ITEM_55")},
+	}}
+	exitCode := Run(
+		context.Background(),
+		[]string{"project", "item-edit", "--root", root, "--issue", "55", "--clear", "Priority"},
+		&stdout,
+		&stderr,
+		fake,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Priority:   (already clear)") {
+		t.Fatalf("stdout = %s, want already clear", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "No change needed.") {
+		t.Fatalf("stdout = %s, want No change needed.", stdout.String())
+	}
+}
+
+func TestIssueEditPlanJSONIncludesChanges(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	fake := &fakeClient{t: t, responses: []response{
+		{
+			request: request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}},
+			output:  string(issueEditPlanFixture("")),
+		},
+	}}
+	exitCode := Run(
+		context.Background(),
+		[]string{"issue", "edit", "--root", fixture(t, "single"), "--issue", "55", "--title", "New Title", "--json"},
+		&stdout,
+		&stderr,
+		fake,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"changes": [`) ||
+		!strings.Contains(stdout.String(), `Title:      \"Original Title\" → \"New Title\"`) ||
+		!strings.Contains(stdout.String(), `"action": "edit_issue"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
 func TestIssueCreateRejectsExactTitleDuplicate(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	fake := &fakeClient{t: t, responses: exactTitleCheck("octo-org/example", "Existing",
