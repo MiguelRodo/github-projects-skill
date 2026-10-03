@@ -649,6 +649,46 @@ func TestMutateProjectItemReportsStatusSetByItemAddedWorkflow(t *testing.T) {
 	}
 }
 
+// TestMutateProjectItemReportsStatusAlreadySetBeforeAddReadback covers the
+// item-added workflow racing ahead of the post-add read: Status is already
+// "Todo" at baseline, no Project field change is written, and the side effect
+// must still be reported without any extra request.
+func TestMutateProjectItemReportsStatusAlreadySetBeforeAddReadback(t *testing.T) {
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()},
+		{request: addItemRequest(), output: addItemOutput("PVTI_ITEM_42")},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+	}}
+	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, AddIfMissing: true})
+	if err != nil {
+		t.Fatalf("MutateProjectItem error = %v", err)
+	}
+	if len(result.AutomationSideEffects) != 1 || !strings.Contains(result.AutomationSideEffects[0], `"Todo"`) {
+		t.Fatalf("AutomationSideEffects = %v, want the workflow-set Status reported even though baseline already showed it", result.AutomationSideEffects)
+	}
+}
+
+// TestMutateProjectItemReportsStatusAlreadySetWhenWritingFields covers the same
+// race on the field-mutation path: Status is already "Todo" at baseline while an
+// unrequested Status is not part of the write, so it must still be reported.
+func TestMutateProjectItemReportsStatusAlreadySetWhenWritingFields(t *testing.T) {
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{query: ProjectSchemaQuery(), variables: map[string]any{"login": "octo-user", "number": 40}}, output: projectSchemaJSON()},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()},
+		{request: addItemRequest(), output: addItemOutput("PVTI_ITEM_42")},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+		{request: fieldWriteRequest(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P1", "Task")},
+	}}
+	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Priority: "P1", AddIfMissing: true})
+	if err != nil {
+		t.Fatalf("MutateProjectItem error = %v", err)
+	}
+	if len(result.AutomationSideEffects) != 1 || !strings.Contains(result.AutomationSideEffects[0], `"Todo"`) {
+		t.Fatalf("AutomationSideEffects = %v, want the workflow-set Status reported even though baseline already showed it", result.AutomationSideEffects)
+	}
+}
+
 func TestMutateProjectItemStillRejectsStatusChangeOnExistingItem(t *testing.T) {
 	fake := &fakeClient{t: t, responses: []fakeResponse{
 		{request: request{query: ProjectSchemaQuery(), variables: map[string]any{"login": "octo-user", "number": 40}}, output: projectSchemaJSON()},

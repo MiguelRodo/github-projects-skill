@@ -1354,6 +1354,10 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, client C
 
 	finalItem := current
 	var sideEffects []string
+	changedFields := make([]string, 0, len(projectChanges))
+	for _, change := range projectChanges {
+		changedFields = append(changedFields, change.Field.Name)
+	}
 	if projectMutationApplied {
 		readBack := func() (*ProjectItemState, error) {
 			item, err := QueryProjectItem(ctx, client, input.Project, target)
@@ -1403,19 +1407,15 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, client C
 			got, _ := projectItemFieldValue(*finalItem, mismatches[0].Field.Name)
 			return MutateProjectItemResult{}, partialProjectMutationError(mismatches[0].Name, fmt.Errorf("readback disagrees: got %q, want %q", got, mismatches[0].Desired))
 		}
-		changedFields := make([]string, 0, len(projectChanges))
-		for _, change := range projectChanges {
-			changedFields = append(changedFields, change.Field.Name)
+	}
+	if added {
+		if effect, ok := addedItemStatusAutomation(input.Project, *finalItem, changedFields); ok {
+			sideEffects = append(sideEffects, effect)
+			changedFields = append(changedFields, input.Project.FieldLocations["Status"].Field)
 		}
-		if added {
-			if effect, ok := addedItemStatusAutomation(input.Project, baseline, *finalItem, changedFields); ok {
-				sideEffects = append(sideEffects, effect)
-				changedFields = append(changedFields, input.Project.FieldLocations["Status"].Field)
-			}
-		}
-		if !projectItemPreserved(baseline, *finalItem, changedFields...) {
-			return MutateProjectItemResult{}, partialProjectMutationError("final Project readback", errors.New("an unrelated scalar Project item value changed"))
-		}
+	}
+	if projectMutationApplied && !projectItemPreserved(baseline, *finalItem, changedFields...) {
+		return MutateProjectItemResult{}, partialProjectMutationError("final Project readback", errors.New("an unrelated scalar Project item value changed"))
 	}
 
 	resultFields := projectFieldsForResult(*finalItem, schema)
@@ -1465,10 +1465,12 @@ func projectFieldMismatches(item ProjectItemState, changes []projectFieldChange)
 }
 
 // addedItemStatusAutomation recognises the built-in "Item added to project"
-// workflow: on an item this command has just added, an unrequested Status that
-// was unset at the post-add read and is now set is the Project's automation,
-// not collateral damage. Any other unrequested change still fails preservation.
-func addedItemStatusAutomation(project contract.Project, before, after ProjectItemState, changedFields []string) (string, bool) {
+// workflow: on an item this command has just added, any unrequested Status is
+// the Project's automation, not collateral damage. The workflow can set Status
+// before or after the post-add read, so the final value is reported whenever it
+// is non-empty rather than only when it appeared to be unset at baseline. Any
+// other unrequested change still fails preservation.
+func addedItemStatusAutomation(project contract.Project, after ProjectItemState, changedFields []string) (string, bool) {
 	location, ok := project.FieldLocations["Status"]
 	if !ok || location.Location != "project field" || location.Field == "" {
 		return "", false
@@ -1477,9 +1479,6 @@ func addedItemStatusAutomation(project contract.Project, before, after ProjectIt
 		if strings.EqualFold(name, location.Field) {
 			return "", false
 		}
-	}
-	if previous, present := projectItemFieldValue(before, location.Field); present && previous != "" {
-		return "", false
 	}
 	current, present := projectItemFieldValue(after, location.Field)
 	if !present || current == "" {
