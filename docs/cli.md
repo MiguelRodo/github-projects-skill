@@ -61,6 +61,23 @@ projects project item-edit --help
 Requested help is written to stdout and exits 0. A usage error repeats the
 usage of the command or group that was being run.
 
+## Onboard a managed Project
+
+Choose Project/sub-project intent before choosing an execution repository:
+
+```bash
+pj --init --project work --issue-store example/issues --subproject tools --project-owner example --project-number 40
+pj -i --project work --subproject tools
+```
+
+The canonical skill's initializer reconciles both local checkouts and derives
+their routing labels. Omit `--issue-store` for natural repository issues. The
+central checkout must already exist in the managed workspace. Cross-checkout
+changes require preview confirmation (or `--yes`) and remain local for normal
+branch/PR review. Read [semantic onboarding](../skills/github-projects/references/onboarding.md)
+for the standalone script, conflict rules and live Project setup. `projects`
+remains optional and does not own a second onboarding contract.
+
 ## Choose the repository
 
 Every command that reads the contract accepts `--root DIRECTORY`. Without it,

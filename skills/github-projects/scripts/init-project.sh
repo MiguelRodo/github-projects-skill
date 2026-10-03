@@ -8,6 +8,11 @@ set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 skill_dir="$(cd "$script_dir/.." && pwd)"
+
+# Semantic topology reconciliation belongs to the canonical skill.
+if [[ "$#" -gt 0 ]]; then
+  exec python3 "$script_dir/onboard-project.py" "$@"
+fi
 generated_contract=""
 transaction_dir=""
 changed_contract_paths=()
@@ -509,7 +514,7 @@ add_project_to_dispatcher() {
   dispatcher_has_value 2 "$project_key" &&
     die "Project key $project_key is already configured"
 
-  routing_label="$(ask_default "Routing label" "project:$project_key")"
+  routing_label="project:$project_key"
   [[ -n "$routing_label" && "$routing_label" != *"|"* &&
      "$routing_label" != *$'\n'* ]] ||
     die "routing label must be non-empty and contain no table separator"
@@ -789,6 +794,13 @@ if [[ -e "$contract_file" ]]; then
   section "Check the existing repository setup"
   note "A repository contract already exists at .projects/project.md."
   bash "$script_dir/validate-contract.sh" "$repository_root"
+  existing_issue_store="$(contract_table_value "$contract_file" "Issue repository")"
+  if [[ -n "$existing_issue_store" && "$existing_issue_store" != "$repository" ]]; then
+    existing_key="$(contract_table_value "$contract_file" "Project key")"
+    [[ -n "$existing_key" ]] || existing_key="$(slugify "$(contract_table_value "$contract_file" "Project title")")"
+    [[ -n "$existing_key" ]] || die "rerun with --project KEY to reconcile this separate issue store"
+    exec python3 "$script_dir/onboard-project.py" --project "$existing_key" --issue-store "$existing_issue_store"
+  fi
   append_agents_pointer
   existing_mode="$(contract_table_value "$contract_file" "Mode")"
   if [[ "$existing_mode" != "dispatcher" ]]; then
@@ -845,6 +857,18 @@ fi
 issue_repository="$(ask_default \
   "GitHub repository where issues are tracked" "$repository")"
 issue_repository="$(validate_issue_repository "$issue_repository")"
+
+if [[ "$issue_repository" != "$repository" ]]; then
+  echo "Choose the managed Project and optional sub-project; both checkouts will be reconciled."
+  semantic_key="$(require_text "Project key")"
+  semantic_owner="$(ask_default "Project owner" "$repository_owner")"
+  semantic_number="$(require_text "Project number")"
+  semantic_subproject="$(ask_default "Sub-project key (optional)" "")"
+  semantic_args=(--project "$semantic_key" --issue-store "$issue_repository"
+    --project-owner "$semantic_owner" --project-number "$semantic_number" --governance "$governance")
+  [[ -z "$semantic_subproject" ]] || semantic_args+=(--subproject "$semantic_subproject")
+  exec python3 "$script_dir/onboard-project.py" "${semantic_args[@]}"
+fi
 
 if ! ask_yes_no "Does this repository use one GitHub Project?" yes; then
   create_dispatcher_contract
