@@ -150,7 +150,22 @@ Edit an existing issue:
 projects issue edit --issue 42 --title "Updated title" --add-label enhancement
 projects issue edit --issue 42 --title "Updated title" --add-label enhancement --apply
 projects issue edit --issue 42 --state closed --close-reason completed --apply
+projects issue edit --issue 42 --state closed --close-reason not_planned --apply
 ```
+
+`--close-reason` accepts `completed` or `not_planned`. Closing an open issue
+without a reason closes it as completed. On an issue that is already closed, a
+different requested reason is applied and verified; without `--close-reason`
+the existing reason is kept.
+
+Requested single-select values, such as `--status "In progress"`, are matched
+case-insensitively and verified against the Project's exact option spelling.
+
+Project built-in workflows can change Status while a command runs, for example
+*Item added to project* setting `Todo` on a newly added item, or *Item closed*
+setting `Done` when an issue is closed. These changes are reported as
+`automationSideEffects` (or `Observed automation:` lines) rather than failing
+the command. Any other unrequested Project change still stops it.
 
 ## Manage Project items and fields
 

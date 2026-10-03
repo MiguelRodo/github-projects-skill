@@ -25,6 +25,9 @@ type IssueView struct {
 	Milestone    *IssueMilestone   `json:"milestone,omitempty"`
 	IssueType    *IssueType        `json:"issueType,omitempty"`
 	ProjectItems []json.RawMessage `json:"projectItems,omitempty"`
+	// AutomationSideEffects is never read from gh. EditIssue fills it with
+	// Project Status changes made by built-in workflows on close or reopen.
+	AutomationSideEffects []string `json:"automationSideEffects,omitempty"`
 }
 
 // IssueLabel is an issue label name.
@@ -78,7 +81,18 @@ type EditIssueInput struct {
 	Milestone       *string
 	IssueType       *string // empty removes the current issue type
 	State           *string // "open" or "closed"
-	CloseReason     string  // "completed" or "not_planned"
+	CloseReason     string  // "completed" or "not_planned"; empty defaults to completed when closing an open issue
+}
+
+// closeReasons maps the documented close reason to the gh issue close spelling
+// and the GraphQL/REST stateReason value.
+var closeReasons = map[string]struct{ gh, state string }{
+	"completed":   {gh: "completed", state: "COMPLETED"},
+	"not_planned": {gh: "not planned", state: "NOT_PLANNED"},
+}
+
+func normalizeCloseReason(reason string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(reason)), " ", "_")
 }
 
 // ViewIssue inspects an issue using gh issue view --json.
@@ -278,10 +292,25 @@ func EditIssue(ctx context.Context, runner Runner, input EditIssueInput) (IssueV
 		if targetState == "CLOSED" && strings.EqualFold(before.State, "OPEN") {
 			closeArgs := []string{"issue", "close", strconv.Itoa(input.Number), "--repo", input.Repo}
 			if input.CloseReason != "" {
-				closeArgs = append(closeArgs, "--reason", input.CloseReason)
+				closeArgs = append(closeArgs, "--reason", closeReasons[normalizeCloseReason(input.CloseReason)].gh)
 			}
 			if _, err := runner.Run(ctx, closeArgs...); err != nil {
 				return IssueView{}, fmt.Errorf("close issue %s#%d: %w", input.Repo, input.Number, err)
+			}
+			stateChanged = true
+		} else if targetState == "CLOSED" && input.CloseReason != "" &&
+			!strings.EqualFold(before.StateReason, closeReasons[normalizeCloseReason(input.CloseReason)].state) {
+			// gh issue close is a no-op on a closed issue, so change only the reason.
+			reasonArgs := []string{"api", "--method", "PATCH"}
+			reasonArgs = append(reasonArgs, apiHeaders()...)
+			reasonArgs = append(reasonArgs,
+				fmt.Sprintf("repos/%s/issues/%d", input.Repo, input.Number),
+				"-f", "state=closed",
+				"-f", "state_reason="+normalizeCloseReason(input.CloseReason),
+				"--jq", ".state_reason",
+			)
+			if _, err := runner.Run(ctx, reasonArgs...); err != nil {
+				return IssueView{}, fmt.Errorf("change close reason of %s#%d: %w", input.Repo, input.Number, err)
 			}
 			stateChanged = true
 		} else if targetState == "OPEN" && strings.EqualFold(before.State, "CLOSED") {
@@ -307,7 +336,7 @@ func EditIssue(ctx context.Context, runner Runner, input EditIssueInput) (IssueV
 	if err := verifyEditedIssue(before, after, input); err != nil {
 		return IssueView{}, err
 	}
-
+	after.AutomationSideEffects = projectStatusAutomation(before.ProjectItems, after.ProjectItems)
 	return after, nil
 }
 
@@ -359,10 +388,11 @@ func validateIssueEditInput(input EditIssueInput) error {
 		}
 	}
 	if input.CloseReason != "" {
-		switch strings.ToLower(strings.TrimSpace(input.CloseReason)) {
-		case "completed", "not_planned":
-		default:
+		if _, ok := closeReasons[normalizeCloseReason(input.CloseReason)]; !ok {
 			return fmt.Errorf("invalid close reason %q; expected completed or not_planned", input.CloseReason)
+		}
+		if input.State == nil || !strings.EqualFold(strings.TrimSpace(*input.State), "closed") {
+			return errors.New("a close reason requires the closed state")
 		}
 	}
 	return nil
@@ -437,9 +467,11 @@ func verifyEditedIssue(before, after IssueView, input EditIssueInput) error {
 	if input.State == nil && after.StateReason != before.StateReason {
 		return fmt.Errorf("unrequested state reason changed: got %q, want preserved %q", after.StateReason, before.StateReason)
 	}
-	if input.State != nil && strings.EqualFold(*input.State, "closed") && strings.EqualFold(before.State, "open") {
-		wantReason := strings.ToUpper(strings.TrimSpace(input.CloseReason))
-		if wantReason == "" {
+	if input.State != nil && strings.EqualFold(strings.TrimSpace(*input.State), "closed") {
+		wantReason := before.StateReason
+		if input.CloseReason != "" {
+			wantReason = closeReasons[normalizeCloseReason(input.CloseReason)].state
+		} else if strings.EqualFold(before.State, "open") {
 			wantReason = "COMPLETED"
 		}
 		if !strings.EqualFold(after.StateReason, wantReason) {
@@ -447,10 +479,63 @@ func verifyEditedIssue(before, after IssueView, input EditIssueInput) error {
 		}
 	}
 
-	if !reflect.DeepEqual(canonicalRawSet(before.ProjectItems), canonicalRawSet(after.ProjectItems)) {
+	// Built-in Project workflows (Item closed, Item reopened) may set Status
+	// when the issue state changes; any other Project change is collateral.
+	ignoreStatus := !strings.EqualFold(before.State, after.State)
+	if !reflect.DeepEqual(canonicalProjectItems(before.ProjectItems, ignoreStatus), canonicalProjectItems(after.ProjectItems, ignoreStatus)) {
 		return errors.New("unrequested Project membership or Project item summary changed during issue edit")
 	}
 	return nil
+}
+
+// canonicalProjectItems canonicalises gh's projectItems summaries, optionally
+// without their Status so workflow-driven Status changes can be tolerated.
+func canonicalProjectItems(values []json.RawMessage, ignoreStatus bool) []string {
+	if !ignoreStatus {
+		return canonicalRawSet(values)
+	}
+	stripped := make([]json.RawMessage, 0, len(values))
+	for _, raw := range values {
+		var decoded map[string]any
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			stripped = append(stripped, raw)
+			continue
+		}
+		delete(decoded, "status")
+		encoded, _ := json.Marshal(decoded)
+		stripped = append(stripped, encoded)
+	}
+	return canonicalRawSet(stripped)
+}
+
+// projectStatusAutomation describes Project Status changes between two
+// verified issue reads, keyed by the Project title gh reports.
+func projectStatusAutomation(before, after []json.RawMessage) []string {
+	type summary struct {
+		Title  string `json:"title"`
+		Status struct {
+			Name string `json:"name"`
+		} `json:"status"`
+	}
+	previous := make(map[string]string)
+	for _, raw := range before {
+		var item summary
+		if json.Unmarshal(raw, &item) == nil {
+			previous[item.Title] = item.Status.Name
+		}
+	}
+	var effects []string
+	for _, raw := range after {
+		var item summary
+		if json.Unmarshal(raw, &item) != nil {
+			continue
+		}
+		if old, ok := previous[item.Title]; ok && old != item.Status.Name {
+			effects = append(effects, fmt.Sprintf("Project %q automation changed Status from %q to %q", item.Title, old, item.Status.Name))
+		}
+	}
+	sort.Strings(effects)
+	return effects
 }
 
 func issueLabelNames(labels []IssueLabel) []string {
