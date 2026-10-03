@@ -18,6 +18,11 @@ bash "$validator" "$test_dir/fixtures/single-user"
 bash "$validator" "$test_dir/fixtures/dispatcher"
 bash "$validator" "$test_dir/fixtures/empty-dispatcher"
 bash "$validator" "$test_dir/fixtures/priority-values"
+bash "$validator" "$test_dir/fixtures/fenced-example"
+if bash "$validator" "$test_dir/fixtures/fenced-only-priority" >/dev/null 2>&1; then
+  echo "ERROR: fenced-only Priority mapping unexpectedly validated" >&2
+  exit 1
+fi
 if bash "$validator" "$test_dir/fixtures/duplicate-priority" >/dev/null 2>&1; then
   echo "ERROR: duplicate Priority mapping unexpectedly validated" >&2
   exit 1

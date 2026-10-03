@@ -242,7 +242,7 @@ When issue creation is verified but a later operation fails, the Issue remains s
 | `issue.dependency.add` | Add one exact task that blocks the selected task | `issue.dependency.add` |
 | `issue.dependency.remove` | Remove one exact blocking task | `issue.dependency.remove` |
 
-No action exists for arbitrary provider fields, comments, issue deletion, transfer, locking, pinning, Project item position, Project archiving, draft issues, iteration fields or organisation-wide definition changes.
+No action exists for arbitrary provider fields, comments, issue deletion, transfer, locking, pinning, Project item position, Project archiving, draft issues, iteration fields or organisation-wide definition changes. The one exception to Project archiving is restoration: adding an item whose existing Project item is archived unarchives it, because that restores the membership the caller explicitly requested. Archiving an item remains out of scope.
 
 ## Static request semantics
 
