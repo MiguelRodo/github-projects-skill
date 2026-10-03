@@ -132,7 +132,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		bodyContent = readContent
 	}
 
-	configuration, err := contract.Load(*root)
+	configuration, err := loadContract(flags, *root)
 	if err != nil {
 		return operationError(stderr, "validate contract", err)
 	}
@@ -149,7 +149,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 	resolvedStatus := ""
 	createLabels := append([]string(nil), labels...)
 	if hasProject {
-		p, err := configuration.Resolve(contract.Selector{
+		p, err := resolveProject(configuration, contract.Selector{
 			Key:          *projectKey,
 			RoutingLabel: *routingLabel,
 			Number:       *projectNumber,
@@ -436,7 +436,7 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		}
 	}
 
-	configuration, err := contract.Load(*root)
+	configuration, err := loadContract(flags, *root)
 	if err != nil {
 		return operationError(stderr, "validate contract", err)
 	}
@@ -617,11 +617,11 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 		return usageError(stderr, "either --issue or --url is required")
 	}
 
-	configuration, err := contract.Load(*root)
+	configuration, err := loadContract(flags, *root)
 	if err != nil {
 		return operationError(stderr, "validate contract", err)
 	}
-	project, err := configuration.Resolve(contract.Selector{
+	project, err := resolveProject(configuration, contract.Selector{
 		Key:          *projectKey,
 		RoutingLabel: *routingLabel,
 		Number:       *projectNumber,
@@ -764,11 +764,11 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 		return usageError(stderr, "at least one field change (--priority, --class, --status, --target-date, or --clear) is required")
 	}
 
-	configuration, err := contract.Load(*root)
+	configuration, err := loadContract(flags, *root)
 	if err != nil {
 		return operationError(stderr, "validate contract", err)
 	}
-	project, err := configuration.Resolve(contract.Selector{
+	project, err := resolveProject(configuration, contract.Selector{
 		Key:          *projectKey,
 		RoutingLabel: *routingLabel,
 		Number:       *projectNumber,
