@@ -13,7 +13,7 @@ import (
 func run(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	exitCode := Run(context.Background(), args, &stdout, &stderr, &runner{t: t})
+	exitCode := Run(context.Background(), args, &stdout, &stderr, &fakeClient{t: t})
 	return exitCode, stdout.String(), stderr.String()
 }
 

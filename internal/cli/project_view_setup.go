@@ -12,7 +12,7 @@ import (
 	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
 )
 
-func runProjectSetupBacklogView(ctx context.Context, args []string, stdout, stderr io.Writer, runner githubcli.Runner) int {
+func runProjectSetupBacklogView(ctx context.Context, args []string, stdout, stderr io.Writer, client githubcli.Client) int {
 	flags := flag.NewFlagSet("project setup-backlog-view", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "repository root containing .projects/project.md")
@@ -58,7 +58,7 @@ func runProjectSetupBacklogView(ctx context.Context, args []string, stdout, stde
 
 	progress(stderr, *quiet, "[2/3] Inspecting fields and views for Project %s/%d", project.Owner, project.Number)
 	if !*apply {
-		plan, err := githubcli.PlanStandardBacklogView(ctx, runner, project)
+		plan, err := githubcli.PlanStandardBacklogView(ctx, client, project)
 		if err != nil {
 			return operationError(stderr, "plan standard Backlog view", err)
 		}
@@ -87,7 +87,7 @@ func runProjectSetupBacklogView(ctx context.Context, args []string, stdout, stde
 	}
 
 	progress(stderr, *quiet, "[3/3] Applying and independently verifying the standard Backlog view")
-	result, err := githubcli.ApplyStandardBacklogView(ctx, runner, project)
+	result, err := githubcli.ApplyStandardBacklogView(ctx, client, project)
 	if err != nil {
 		return operationError(stderr, "apply standard Backlog view", err)
 	}

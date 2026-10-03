@@ -18,7 +18,7 @@ import (
 )
 
 // Run executes the CLI and returns a process exit code.
-func Run(ctx context.Context, args []string, stdout, stderr io.Writer, runner githubcli.Runner) int {
+func Run(ctx context.Context, args []string, stdout, stderr io.Writer, client githubcli.Client) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usageText())
 		return 2
@@ -51,9 +51,9 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, runner gi
 	rest := args[2:]
 	if helpRequested(rest) {
 		// Requested help is command output: send it to stdout and succeed.
-		return command.run(ctx, rest, stdout, stdout, runner)
+		return command.run(ctx, rest, stdout, stdout, client)
 	}
-	return command.run(ctx, rest, stdout, &commandOutput{Writer: stderr, command: command}, runner)
+	return command.run(ctx, rest, stdout, &commandOutput{Writer: stderr, command: command}, client)
 }
 
 func runVersion(args []string, stdout, stderr io.Writer) int {
@@ -130,7 +130,7 @@ func runContractValidate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func runProjectItemList(ctx context.Context, args []string, stdout, stderr io.Writer, runner githubcli.Runner) int {
+func runProjectItemList(ctx context.Context, args []string, stdout, stderr io.Writer, client githubcli.Client) int {
 	flags := flag.NewFlagSet("project item-list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "repository root containing .projects/project.md")
@@ -178,7 +178,7 @@ func runProjectItemList(ctx context.Context, args []string, stdout, stderr io.Wr
 	}
 
 	progress(stderr, *quiet, "[2/3] Reading every item from Project %s/%d (%s)", project.Owner, project.Number, project.Title)
-	snapshot, err := githubcli.ReadAllProjectItems(ctx, runner, project)
+	snapshot, err := githubcli.ReadAllProjectItems(ctx, client, project)
 	if err != nil {
 		return operationError(stderr, "read complete Project item set", err)
 	}
@@ -196,7 +196,7 @@ func runProjectItemList(ctx context.Context, args []string, stdout, stderr io.Wr
 	return 0
 }
 
-func runUpdateCheck(ctx context.Context, args []string, stdout, stderr io.Writer, runner githubcli.Runner) int {
+func runUpdateCheck(ctx context.Context, args []string, stdout, stderr io.Writer, client githubcli.Client) int {
 	flags := flag.NewFlagSet("update check", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	jsonOutput := flags.Bool("json", false, "write the update result as JSON")
@@ -215,7 +215,7 @@ func runUpdateCheck(ctx context.Context, args []string, stdout, stderr io.Writer
 		return usageError(stderr, "update check does not take positional arguments")
 	}
 	progress(stderr, *quiet, "[1/1] Checking the latest projects release")
-	result, err := updatecheck.Check(ctx, runner, buildinfo.Current().Version)
+	result, err := updatecheck.Check(ctx, client, buildinfo.Current().Version)
 	if err != nil {
 		return operationError(stderr, "check for updates", err)
 	}

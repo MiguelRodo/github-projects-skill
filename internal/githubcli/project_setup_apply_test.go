@@ -11,49 +11,47 @@ import (
 	"github.com/MiguelRodo/github-projects-skill/internal/contract"
 )
 
-// seqStep is one expected gh call. want must appear in the joined arguments
-// plus request body; the call returns out or err. Calls are strictly ordered,
-// so an unexpected extra call (for example owner rediscovery) fails the test.
+// seqClient asserts the complete query, typed variables or REST request in order.
 type seqStep struct {
-	want string
-	out  string
-	err  error
+	request request
+	out     string
+	err     error
 }
-
-type seqRunner struct {
+type seqClient struct {
 	t     *testing.T
 	steps []seqStep
 	calls int
 }
 
-func (r *seqRunner) Run(_ context.Context, args ...string) ([]byte, error) {
+func (r *seqClient) next(actual request) ([]byte, error) {
 	r.t.Helper()
-	return r.next(nil, args)
-}
-
-func (r *seqRunner) RunInput(_ context.Context, input []byte, args ...string) ([]byte, error) {
-	r.t.Helper()
-	return r.next(input, args)
-}
-
-func (r *seqRunner) next(input []byte, args []string) ([]byte, error) {
-	r.t.Helper()
-	joined := strings.Join(args, " ") + " " + string(input)
 	if r.calls >= len(r.steps) {
-		r.t.Fatalf("unexpected call %d: %s", r.calls+1, joined)
+		r.t.Fatalf("unexpected request: %s", canonicalRequest(actual))
 	}
 	step := r.steps[r.calls]
 	r.calls++
-	if !strings.Contains(joined, step.want) {
-		r.t.Fatalf("call %d = %s, want it to contain %q", r.calls, joined, step.want)
+	if canonicalRequest(actual) != canonicalRequest(step.request) {
+		r.t.Fatalf("request %d = %s, want %s", r.calls, canonicalRequest(actual), canonicalRequest(step.request))
 	}
 	return []byte(step.out), step.err
 }
-
-func (r *seqRunner) done() {
+func (r *seqClient) GraphQL(_ context.Context, query string, variables map[string]any) (GraphQLResponse, error) {
+	output, err := r.next(request{query: query, variables: variables})
+	if err != nil {
+		return GraphQLResponse{}, err
+	}
+	var response GraphQLResponse
+	err = json.Unmarshal(output, &response)
+	return response, err
+}
+func (r *seqClient) REST(_ context.Context, method, path string, body any) (RESTResponse, error) {
+	output, err := r.next(request{method: method, path: path, body: body})
+	return RESTResponse{Status: 200, Body: output}, err
+}
+func (r *seqClient) done() {
 	r.t.Helper()
 	if r.calls != len(r.steps) {
-		r.t.Fatalf("made %d calls, want %d", r.calls, len(r.steps))
+		r.t.Fatalf("made %d requests, want %d", r.calls, len(r.steps))
 	}
 }
 
@@ -125,10 +123,10 @@ var standardPriorityNames = []string{"P0", "P1", "P2", "P3"}
 var originalPriorityIDs = []string{"p0", "p1", "p2", "p3"}
 
 func TestApplyStandardProjectSetupVerifiesKeptOptionIDsAndDescribesRenames(t *testing.T) {
-	runner := &seqRunner{t: t, steps: []seqStep{
-		{want: "projectV2(number", out: userSchemaWithPriority(t, legacyPriorityNames, originalPriorityIDs)},
-		{want: `"id":"p1","name":"P1"`, out: `{}`},
-		{want: "projectV2(number", out: userSchemaWithPriority(t, standardPriorityNames, originalPriorityIDs)},
+	runner := &seqClient{t: t, steps: []seqStep{
+		{request: detailedSchemaRequest("user"), out: userSchemaWithPriority(t, legacyPriorityNames, originalPriorityIDs)},
+		{request: priorityOptionsRequest(), out: `{}`},
+		{request: detailedSchemaRequest("user"), out: userSchemaWithPriority(t, standardPriorityNames, originalPriorityIDs)},
 	}}
 	result, err := ApplyStandardProjectSetup(context.Background(), runner, userSetupProject(), false)
 	if err != nil {
@@ -144,10 +142,10 @@ func TestApplyStandardProjectSetupVerifiesKeptOptionIDsAndDescribesRenames(t *te
 }
 
 func TestApplyStandardProjectSetupFailsWhenOptionIDsAreRegenerated(t *testing.T) {
-	runner := &seqRunner{t: t, steps: []seqStep{
-		{want: "projectV2(number", out: userSchemaWithPriority(t, legacyPriorityNames, originalPriorityIDs)},
-		{want: "updateProjectV2Field", out: `{}`},
-		{want: "projectV2(number", out: userSchemaWithPriority(t, standardPriorityNames, []string{"n0", "n1", "n2", "n3"})},
+	runner := &seqClient{t: t, steps: []seqStep{
+		{request: detailedSchemaRequest("user"), out: userSchemaWithPriority(t, legacyPriorityNames, originalPriorityIDs)},
+		{request: priorityOptionsRequest(), out: `{}`},
+		{request: detailedSchemaRequest("user"), out: userSchemaWithPriority(t, standardPriorityNames, []string{"n0", "n1", "n2", "n3"})},
 	}}
 	_, err := ApplyStandardProjectSetup(context.Background(), runner, userSetupProject(), false)
 	if err == nil {
@@ -168,10 +166,10 @@ func TestApplyStandardProjectSetupReportsPartialFailure(t *testing.T) {
 		standardClassFixture(),
 		priorityFixture(standardPriorityNames, originalPriorityIDs),
 	)
-	runner := &seqRunner{t: t, steps: []seqStep{
-		{want: "projectV2(number", out: schema},
-		{want: `"name":"Due date"`, out: `{}`},
-		{want: `"name":"Target date"`, err: errors.New("HTTP 502")},
+	runner := &seqClient{t: t, steps: []seqStep{
+		{request: detailedSchemaRequest("user"), out: schema},
+		{request: createDateRequest("Due date"), out: `{}`},
+		{request: createDateRequest("Target date"), err: errors.New("HTTP 502")},
 	}}
 	result, err := ApplyStandardProjectSetup(context.Background(), runner, project, false)
 	if err == nil {
@@ -201,11 +199,11 @@ func orgIssueTypeSteps(t *testing.T) []seqStep {
 		list = append(list, map[string]string{"node_id": id, "name": option.Name})
 		nodes = append(nodes, map[string]any{"id": id, "name": option.Name, "color": option.Color, "isEnabled": true})
 	}
-	listJSON, _ := json.Marshal([][]map[string]string{list})
+	listJSON, _ := json.Marshal(list)
 	nodesJSON, _ := json.Marshal(map[string]any{"data": map[string]any{"organization": map[string]any{"id": "org-node"}, "nodes": nodes}})
 	return []seqStep{
-		{want: "orgs/octo-org/issue-types", out: string(listJSON)},
-		{want: "nodes(ids", out: string(nodesJSON)},
+		{request: request{method: "GET", path: "/orgs/octo-org/issue-types?per_page=100"}, out: string(listJSON)},
+		{request: issueTypesRequest(), out: string(nodesJSON)},
 	}
 }
 
@@ -214,7 +212,7 @@ func orgPriorityFieldsJSON(ids []int, names []string) string {
 	for index, id := range ids {
 		options = append(options, fmt.Sprintf(`{"id":%d,"name":%q,"color":%q,"priority":%d}`, id, names[index], strings.ToLower(standardPriorityOptions[index].Color), index+1))
 	}
-	return fmt.Sprintf(`[[{"id":7,"node_id":"IF_7","name":"Priority","data_type":"single_select","options":[%s]}]]`, strings.Join(options, ","))
+	return fmt.Sprintf(`[{"id":7,"node_id":"IF_7","name":"Priority","data_type":"single_select","options":[%s]}]`, strings.Join(options, ","))
 }
 
 func orgSchema(t *testing.T) string {
@@ -229,10 +227,10 @@ func orgSchema(t *testing.T) string {
 }
 
 func TestApplyStandardProjectSetupRefusalNamesOrganizationSchemaFlag(t *testing.T) {
-	steps := []seqStep{{want: "api users/octo-org", out: "Organization\n"}, {want: "organization(login", out: orgSchema(t)}}
+	steps := []seqStep{{request: request{method: "GET", path: "/users/octo-org"}, out: `{"type":"Organization"}`}, {request: detailedSchemaRequest("organization"), out: orgSchema(t)}}
 	steps = append(steps, orgIssueTypeSteps(t)...)
-	steps = append(steps, seqStep{want: "orgs/octo-org/issue-fields", out: orgPriorityFieldsJSON([]int{11, 12, 13, 14}, legacyPriorityNames)})
-	runner := &seqRunner{t: t, steps: steps}
+	steps = append(steps, seqStep{request: request{method: "GET", path: "/orgs/octo-org/issue-fields?per_page=100"}, out: orgPriorityFieldsJSON([]int{11, 12, 13, 14}, legacyPriorityNames)})
+	runner := &seqClient{t: t, steps: steps}
 	_, err := ApplyStandardProjectSetup(context.Background(), runner, orgSetupProject(), false)
 	if err == nil || !strings.Contains(err.Error(), "--allow-organization-schema") {
 		t.Fatalf("error = %v, want it to name --allow-organization-schema", err)
@@ -242,16 +240,16 @@ func TestApplyStandardProjectSetupRefusalNamesOrganizationSchemaFlag(t *testing.
 
 func TestApplyStandardProjectSetupFailsWhenOrganizationPriorityOptionIDsChange(t *testing.T) {
 	// Owner type is discovered once; the readback must reuse it.
-	steps := []seqStep{{want: "api users/octo-org", out: "Organization\n"}, {want: "organization(login", out: orgSchema(t)}}
+	steps := []seqStep{{request: request{method: "GET", path: "/users/octo-org"}, out: `{"type":"Organization"}`}, {request: detailedSchemaRequest("organization"), out: orgSchema(t)}}
 	steps = append(steps, orgIssueTypeSteps(t)...)
 	steps = append(steps,
-		seqStep{want: "orgs/octo-org/issue-fields?per_page", out: orgPriorityFieldsJSON([]int{11, 12, 13, 14}, legacyPriorityNames)},
-		seqStep{want: "--method PATCH", out: `{}`},
-		seqStep{want: "organization(login", out: orgSchema(t)},
+		seqStep{request: request{method: "GET", path: "/orgs/octo-org/issue-fields?per_page=100"}, out: orgPriorityFieldsJSON([]int{11, 12, 13, 14}, legacyPriorityNames)},
+		seqStep{request: organizationPriorityRequest(), out: `{}`},
+		seqStep{request: detailedSchemaRequest("organization"), out: orgSchema(t)},
 	)
 	steps = append(steps, orgIssueTypeSteps(t)...)
-	steps = append(steps, seqStep{want: "orgs/octo-org/issue-fields?per_page", out: orgPriorityFieldsJSON([]int{21, 22, 23, 24}, standardPriorityNames)})
-	runner := &seqRunner{t: t, steps: steps}
+	steps = append(steps, seqStep{request: request{method: "GET", path: "/orgs/octo-org/issue-fields?per_page=100"}, out: orgPriorityFieldsJSON([]int{21, 22, 23, 24}, standardPriorityNames)})
+	runner := &seqClient{t: t, steps: steps}
 	_, err := ApplyStandardProjectSetup(context.Background(), runner, orgSetupProject(), true)
 	if err == nil || !strings.Contains(err.Error(), "organization Priority issue field option IDs 11, 12, 13, 14 disappeared") {
 		t.Fatalf("error = %v, want organization option-ID loss", err)
@@ -346,4 +344,111 @@ func TestEmptySetupAndViewListsEncodeAsArrays(t *testing.T) {
 			t.Fatalf("encoded = %s, want empty arrays rather than null", encoded)
 		}
 	}
+}
+
+func detailedSchemaRequest(root string) request {
+	login, number := "octo-user", 40
+	if root == "organization" {
+		login, number = "octo-org", 12
+	}
+	return request{query: fmt.Sprintf(`query($login: String!, $number: Int!) {
+  %s(login: $login) {
+    projectV2(number: $number) {
+      id
+      number
+      title
+      fields(first: 100) {
+        nodes {
+          __typename
+          ... on ProjectV2FieldCommon { id name dataType isIssueField }
+          ... on ProjectV2SingleSelectField { options { id name color description } }
+        }
+        pageInfo { hasNextPage }
+      }
+    }
+  }
+}`, root), variables: map[string]any{"login": login, "number": number}}
+}
+func viewsRequest() request {
+	return request{query: fmt.Sprintf(`query($login: String!, $number: Int!) {
+  %s(login: $login) {
+    projectV2(number: $number) {
+      number title
+      views(first: 100) {
+        nodes {
+          id number name layout filter
+          configuration {
+            visibleFields(first: 100) {
+              nodes { ... on ProjectV2FieldCommon { id name } }
+              pageInfo { hasNextPage }
+            }
+          }
+          groupByFields(first: 10) {
+            nodes { ... on ProjectV2FieldCommon { id name } }
+            pageInfo { hasNextPage }
+          }
+          verticalGroupByFields(first: 10) {
+            nodes { ... on ProjectV2FieldCommon { id name } }
+            pageInfo { hasNextPage }
+          }
+          sortByFields(first: 10) {
+            nodes { direction field { ... on ProjectV2FieldCommon { id name } } }
+            pageInfo { hasNextPage }
+          }
+        }
+        pageInfo { hasNextPage }
+      }
+    }
+  }
+}`, "user"), variables: map[string]any{"login": "octo-user", "number": 40}}
+}
+func priorityOptionsRequest() request {
+	options := []map[string]any{}
+	for i, opt := range standardPriorityOptions {
+		options = append(options, map[string]any{"id": fmt.Sprintf("p%d", i), "name": opt.Name, "color": opt.Color, "description": ""})
+	}
+	return request{query: `mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  updateProjectV2Field(input: {fieldId: $fieldId, singleSelectOptions: $options}) {
+    projectV2Field { ... on ProjectV2SingleSelectField { id name options { id name color description } } }
+  }
+}`, variables: map[string]any{"fieldId": "priority-field", "options": options}}
+}
+func createDateRequest(name string) request {
+	return request{query: `mutation($projectId: ID!, $name: String!, $dataType: ProjectV2CustomFieldType!) {
+  createProjectV2Field(input: {projectId: $projectId, name: $name, dataType: $dataType}) {
+    projectV2Field { ... on ProjectV2FieldCommon { id name dataType } }
+  }
+}`, variables: map[string]any{"projectId": "project-node", "name": name, "dataType": "DATE"}}
+}
+func issueTypesRequest() request {
+	ids := []string{}
+	for i := range standardClassOptions {
+		ids = append(ids, fmt.Sprintf("it%d", i))
+	}
+	return request{query: `query($login: String!, $ids: [ID!]!) {
+  organization(login: $login) { id }
+  nodes(ids: $ids) {
+    ... on IssueType { id name description color isEnabled }
+  }
+}`, variables: map[string]any{"login": "octo-org", "ids": ids}}
+}
+func organizationPriorityRequest() request {
+	options := []map[string]any{}
+	for i, opt := range standardPriorityOptions {
+		options = append(options, map[string]any{"id": 11 + i, "name": opt.Name, "color": strings.ToLower(opt.Color), "description": "", "priority": i + 1})
+	}
+	return request{method: "PATCH", path: "/orgs/octo-org/issue-fields/7", body: map[string]any{"name": "Priority", "description": "", "options": options}}
+}
+func createViewRequest() request {
+	return request{method: "POST", path: "/users/octo-user/projectsV2/40/views", body: map[string]any{"name": "Backlog", "layout": "table", "filter": "", "visible_fields": []int{1, 2, 3, 4}, "sort_by": []any{[]any{3, "asc"}}, "group_by": []int{2}}}
+}
+func deleteViewRequest(id string) request {
+	return request{query: `mutation($viewId: ID!) {
+  deleteProjectV2View(input: {viewId: $viewId}) { projectV2View { id } }
+}`, variables: map[string]any{"viewId": id}}
+}
+func updateViewRequest() request {
+	return request{query: `mutation($input: UpdateProjectV2ViewInput!) {
+  updateProjectV2View(input: $input) { projectV2View { id name layout filter } }
+}`, variables: map[string]any{"input": map[string]any{"viewId": "v1", "name": "Backlog", "layout": "TABLE_LAYOUT", "filter": "", "configuration": map[string]any{"visibleFieldIds": []string{"title", "status", "priority", "class"}}}}}
 }

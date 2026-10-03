@@ -2,24 +2,29 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"reflect"
+	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
 	"testing"
 )
 
-type fakeRunner struct {
+type fakeClient struct {
 	t      *testing.T
 	output []byte
 	err    error
 }
 
-func (f fakeRunner) Run(_ context.Context, args ...string) ([]byte, error) {
+func (f fakeClient) REST(_ context.Context, method, path string, body any) (githubcli.RESTResponse, error) {
 	f.t.Helper()
-	want := []string{"api", "--hostname", "github.com", "repos/MiguelRodo/github-projects-skill/releases/latest", "--jq", ".tag_name"}
-	if !reflect.DeepEqual(args, want) {
-		f.t.Fatalf("args = %v, want %v", args, want)
+	if method != "GET" || path != "/repos/MiguelRodo/github-projects-skill/releases/latest" || body != nil {
+		f.t.Fatalf("unexpected request: %s %s %v", method, path, body)
 	}
-	return f.output, f.err
+	output, _ := json.Marshal(map[string]any{"tag_name": string(f.output)})
+	return githubcli.RESTResponse{Status: 200, Body: output}, f.err
+}
+func (f fakeClient) GraphQL(context.Context, string, map[string]any) (githubcli.GraphQLResponse, error) {
+	f.t.Fatal("unexpected GraphQL request")
+	return githubcli.GraphQLResponse{}, nil
 }
 
 func TestCheck(t *testing.T) {
@@ -64,7 +69,7 @@ func TestCheck(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			result, err := Check(context.Background(), fakeRunner{t: t, output: []byte(test.latest)}, test.installed)
+			result, err := Check(context.Background(), fakeClient{t: t, output: []byte(test.latest)}, test.installed)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,15 +80,15 @@ func TestCheck(t *testing.T) {
 	}
 }
 
-func TestCheckRunnerError(t *testing.T) {
-	_, err := Check(context.Background(), fakeRunner{t: t, err: errors.New("no release")}, "1.0.0")
+func TestCheckClientError(t *testing.T) {
+	_, err := Check(context.Background(), fakeClient{t: t, err: errors.New("no release")}, "1.0.0")
 	if err == nil {
 		t.Fatal("error = nil")
 	}
 }
 
 func TestCheckBeforeFirstRelease(t *testing.T) {
-	result, err := Check(context.Background(), fakeRunner{t: t, err: errors.New("gh: Not Found (HTTP 404)")}, "dev")
+	result, err := Check(context.Background(), fakeClient{t: t, err: &githubcli.HTTPError{Status: 404, Method: "GET", Path: "/repos/MiguelRodo/github-projects-skill/releases/latest", Message: "Not Found"}}, "dev")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,5 +102,12 @@ func TestParseVersionRejectsNonReleaseValues(t *testing.T) {
 		if _, err := parseVersion(value); err == nil {
 			t.Fatalf("parseVersion(%q) error = nil", value)
 		}
+	}
+}
+
+func TestCheckDoesNotTreat404TextAsAnHTTPStatus(t *testing.T) {
+	_, err := Check(context.Background(), fakeClient{t: t, err: errors.New("unrelated HTTP 404 text")}, "1.0.0")
+	if err == nil {
+		t.Fatal("untyped 404 text was treated as a missing release")
 	}
 }

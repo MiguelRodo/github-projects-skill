@@ -160,14 +160,8 @@ func verifyProjectOwner(project contract.Project, typename, login string) error 
 
 // QueryProjectSchema fetches the Project node ID, fields, and options via one
 // GraphQL request, without a separate owner-type lookup.
-func QueryProjectSchema(ctx context.Context, runner Runner, project contract.Project) (ProjectSchema, error) {
-	output, err := runner.Run(
-		ctx,
-		"api", "graphql",
-		"-f", "query="+ProjectSchemaQuery(),
-		"-f", "login="+project.Owner,
-		"-F", "number="+strconv.Itoa(project.Number),
-	)
+func QueryProjectSchema(ctx context.Context, client Client, project contract.Project) (ProjectSchema, error) {
+	output, err := graphQLBytes(ctx, client, ProjectSchemaQuery(), map[string]any{"login": project.Owner, "number": project.Number})
 	if err != nil {
 		return ProjectSchema{}, fmt.Errorf("query Project schema for %s/%d: %w", project.Owner, project.Number, err)
 	}
@@ -228,12 +222,18 @@ func QueryProjectSchema(ctx context.Context, runner Runner, project contract.Pro
 	return schema, nil
 }
 
-func discoverOwnerType(ctx context.Context, runner Runner, owner string) (string, error) {
-	output, err := runner.Run(ctx, "api", "users/"+owner, "--jq", ".type")
+func discoverOwnerType(ctx context.Context, client Client, owner string) (string, error) {
+	output, err := restBytes(ctx, client, "GET", "/users/"+url.PathEscape(owner), nil)
 	if err != nil {
 		return "", err
 	}
-	trimmed := strings.TrimSpace(string(output))
+	var result struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return "", fmt.Errorf("decode owner type: %w", err)
+	}
+	trimmed := result.Type
 	switch trimmed {
 	case "User":
 		return "user", nil
@@ -473,29 +473,20 @@ type projectItemLookup struct {
 // the target issue or pull request. The query is bounded to at most 100 Project
 // memberships and 100 set field values per membership, and refuses to treat a
 // truncated response as proof.
-func QueryProjectItem(ctx context.Context, runner Runner, project contract.Project, target GitHubItemTarget) (*ProjectItemState, error) {
-	lookup, err := lookupProjectItem(ctx, runner, project, target)
+func QueryProjectItem(ctx context.Context, client Client, project contract.Project, target GitHubItemTarget) (*ProjectItemState, error) {
+	lookup, err := lookupProjectItem(ctx, client, project, target)
 	if err != nil {
 		return nil, err
 	}
 	return lookup.Item, nil
 }
 
-func lookupProjectItem(ctx context.Context, runner Runner, project contract.Project, target GitHubItemTarget) (projectItemLookup, error) {
+func lookupProjectItem(ctx context.Context, client Client, project contract.Project, target GitHubItemTarget) (projectItemLookup, error) {
 	query := ProjectItemQuery(target.Kind)
 	if query == "" {
 		return projectItemLookup{}, fmt.Errorf("unsupported GitHub item kind %q", target.Kind)
 	}
-	output, err := runner.Run(
-		ctx,
-		"api", "graphql",
-		"-f", "query="+query,
-		"-f", "owner="+target.Owner,
-		"-f", "repo="+target.Repo,
-		"-F", "number="+strconv.Itoa(target.Number),
-		"-f", "projectOwner="+project.Owner,
-		"-F", "projectNumber="+strconv.Itoa(project.Number),
-	)
+	output, err := graphQLBytes(ctx, client, query, map[string]any{"owner": target.Owner, "repo": target.Repo, "number": target.Number, "projectOwner": project.Owner, "projectNumber": project.Number})
 	if err != nil {
 		return projectItemLookup{}, fmt.Errorf("query Project membership for %s: %w", target.URL, err)
 	}
@@ -706,24 +697,24 @@ type ProjectItemMembership struct {
 // EnsureProjectItem adds a missing item, or restores an archived one, and
 // proves membership with a separate, target-centred read. Existing unarchived
 // membership is an idempotent no-op.
-func EnsureProjectItem(ctx context.Context, runner Runner, project contract.Project, target GitHubItemTarget) (ProjectItemMembership, error) {
-	lookup, err := lookupProjectItem(ctx, runner, project, target)
+func EnsureProjectItem(ctx context.Context, client Client, project contract.Project, target GitHubItemTarget) (ProjectItemMembership, error) {
+	lookup, err := lookupProjectItem(ctx, client, project, target)
 	if err != nil {
 		return ProjectItemMembership{}, fmt.Errorf("inspect Project membership: %w", err)
 	}
-	return ensureProjectMembership(ctx, runner, project, target, lookup)
+	return ensureProjectMembership(ctx, client, project, target, lookup)
 }
 
-func ensureProjectMembership(ctx context.Context, runner Runner, project contract.Project, target GitHubItemTarget, lookup projectItemLookup) (ProjectItemMembership, error) {
+func ensureProjectMembership(ctx context.Context, client Client, project contract.Project, target GitHubItemTarget, lookup projectItemLookup) (ProjectItemMembership, error) {
 	if lookup.Item != nil && !lookup.Item.Archived {
 		return ProjectItemMembership{Item: *lookup.Item}, nil
 	}
 	if lookup.Item != nil {
 		before := *lookup.Item
-		if err := unarchiveProjectItem(ctx, runner, lookup.ProjectID, before.ItemID); err != nil {
+		if err := unarchiveProjectItem(ctx, client, lookup.ProjectID, before.ItemID); err != nil {
 			return ProjectItemMembership{}, err
 		}
-		after, err := QueryProjectItem(ctx, runner, project, target)
+		after, err := QueryProjectItem(ctx, client, project, target)
 		if err != nil {
 			return ProjectItemMembership{Unarchived: true}, fmt.Errorf("read back unarchived Project item: %w", err)
 		}
@@ -739,11 +730,11 @@ func ensureProjectMembership(ctx context.Context, runner Runner, project contrac
 		return ProjectItemMembership{Item: *after, Unarchived: true}, nil
 	}
 
-	itemID, err := addProjectItemByID(ctx, runner, lookup.ProjectID, lookup.ContentID)
+	itemID, err := addProjectItemByID(ctx, client, lookup.ProjectID, lookup.ContentID)
 	if err != nil {
 		return ProjectItemMembership{}, fmt.Errorf("add %s to Project %s/%d: %w", target.URL, project.Owner, project.Number, err)
 	}
-	after, err := QueryProjectItem(ctx, runner, project, target)
+	after, err := QueryProjectItem(ctx, client, project, target)
 	if err != nil {
 		return ProjectItemMembership{Added: true}, fmt.Errorf("read back added Project item: %w", err)
 	}
@@ -799,16 +790,11 @@ func mutationItemID(raw json.RawMessage, payloadField string) string {
 
 // addProjectItemByID adds content to a Project by node IDs already verified by
 // the target-centred read, avoiding gh project item-add's internal lookups.
-func addProjectItemByID(ctx context.Context, runner Runner, projectID, contentID string) (string, error) {
+func addProjectItemByID(ctx context.Context, client Client, projectID, contentID string) (string, error) {
 	if projectID == "" || contentID == "" {
 		return "", errors.New("Project and target node IDs are required to add an item")
 	}
-	output, err := runner.Run(ctx,
-		"api", "graphql",
-		"-f", "query="+addProjectItemMutation,
-		"-f", "projectId="+projectID,
-		"-f", "contentId="+contentID,
-	)
+	output, err := graphQLBytes(ctx, client, addProjectItemMutation, map[string]any{"projectId": projectID, "contentId": contentID})
 	if err != nil {
 		return "", err
 	}
@@ -826,13 +812,8 @@ func addProjectItemByID(ctx context.Context, runner Runner, projectID, contentID
 	return itemID, nil
 }
 
-func unarchiveProjectItem(ctx context.Context, runner Runner, projectID, itemID string) error {
-	output, err := runner.Run(ctx,
-		"api", "graphql",
-		"-f", "query="+unarchiveProjectItemMutation,
-		"-f", "projectId="+projectID,
-		"-f", "itemId="+itemID,
-	)
+func unarchiveProjectItem(ctx context.Context, client Client, projectID, itemID string) error {
+	output, err := graphQLBytes(ctx, client, unarchiveProjectItemMutation, map[string]any{"projectId": projectID, "itemId": itemID})
 	if err != nil {
 		return fmt.Errorf("unarchive Project item %s: %w", itemID, err)
 	}
@@ -896,19 +877,22 @@ func projectFieldWriteRequest(projectID, itemID string, changes []projectFieldCh
 // writeProjectItemFields applies every change in one GraphQL request. GitHub
 // executes each aliased mutation independently, so an error does not mean
 // nothing applied; callers must read back before reporting what changed.
-func writeProjectItemFields(ctx context.Context, runner Runner, projectID, itemID string, changes []projectFieldChange) error {
+func writeProjectItemFields(ctx context.Context, client Client, projectID, itemID string, changes []projectFieldChange) error {
 	if len(changes) == 0 {
 		return nil
-	}
-	stdinRunner, ok := runner.(inputRunner)
-	if !ok {
-		return errors.New("GitHub runner does not support GraphQL request bodies")
 	}
 	body, aliases, err := projectFieldWriteRequest(projectID, itemID, changes)
 	if err != nil {
 		return err
 	}
-	output, err := stdinRunner.RunInput(ctx, body, "api", "graphql", "--input", "-")
+	var request struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		return err
+	}
+	output, err := graphQLBytes(ctx, client, request.Query, request.Variables)
 	if err != nil {
 		return err
 	}
@@ -935,12 +919,12 @@ func writeProjectItemFields(ctx context.Context, runner Runner, projectID, itemI
 // projectFieldWriteError reports a failed batched write honestly. GraphQL may
 // have applied some aliased mutations, so it reads the item back and names
 // which requested values are now present.
-func projectFieldWriteError(ctx context.Context, runner Runner, project contract.Project, target GitHubItemTarget, changes []projectFieldChange, writeErr error) error {
+func projectFieldWriteError(ctx context.Context, client Client, project contract.Project, target GitHubItemTarget, changes []projectFieldChange, writeErr error) error {
 	names := make([]string, 0, len(changes))
 	for _, change := range changes {
 		names = append(names, change.Name)
 	}
-	item, readErr := QueryProjectItem(ctx, runner, project, target)
+	item, readErr := QueryProjectItem(ctx, client, project, target)
 	if readErr == nil && item == nil {
 		readErr = errors.New("item is no longer a member")
 	}
@@ -992,18 +976,8 @@ type issueFieldValue struct {
 	} `json:"single_select_option"`
 }
 
-func apiHeaders() []string {
-	return []string{
-		"-H", "Accept: application/vnd.github+json",
-		"-H", "X-GitHub-Api-Version: " + githubAPIVersion,
-	}
-}
-
-func queryOrganizationIssueFields(ctx context.Context, runner Runner, owner string) ([]organizationIssueField, error) {
-	args := []string{"api", "--paginate", "--slurp"}
-	args = append(args, apiHeaders()...)
-	args = append(args, "orgs/"+owner+"/issue-fields?per_page=100")
-	output, err := runner.Run(ctx, args...)
+func queryOrganizationIssueFields(ctx context.Context, client Client, owner string) ([]organizationIssueField, error) {
+	output, err := restPageBytes(ctx, client, "/"+"orgs/"+owner+"/issue-fields?per_page=100")
 	if err != nil {
 		return nil, fmt.Errorf("list organization issue fields for %s: %w", owner, err)
 	}
@@ -1046,11 +1020,8 @@ func resolveOrganizationIssueField(fields []organizationIssueField, owner, name,
 	return field, nil
 }
 
-func validateRepositoryIssueType(ctx context.Context, runner Runner, repository, desired string) error {
-	args := []string{"api", "--paginate", "--slurp"}
-	args = append(args, apiHeaders()...)
-	args = append(args, fmt.Sprintf("repos/%s/issue-types?per_page=100", repository))
-	output, err := runner.Run(ctx, args...)
+func validateRepositoryIssueType(ctx context.Context, client Client, repository, desired string) error {
+	output, err := restPageBytes(ctx, client, "/"+fmt.Sprintf("repos/%s/issue-types?per_page=100", repository))
 	if err != nil {
 		return fmt.Errorf("list issue types available to %s: %w", repository, err)
 	}
@@ -1072,11 +1043,8 @@ func validateRepositoryIssueType(ctx context.Context, runner Runner, repository,
 	return nil
 }
 
-func queryIssueFieldValues(ctx context.Context, runner Runner, target GitHubItemTarget) ([]issueFieldValue, error) {
-	args := []string{"api", "--paginate", "--slurp"}
-	args = append(args, apiHeaders()...)
-	args = append(args, fmt.Sprintf("repos/%s/issues/%d/issue-field-values?per_page=100", target.Repository, target.Number))
-	output, err := runner.Run(ctx, args...)
+func queryIssueFieldValues(ctx context.Context, client Client, target GitHubItemTarget) ([]issueFieldValue, error) {
+	output, err := restPageBytes(ctx, client, "/"+fmt.Sprintf("repos/%s/issues/%d/issue-field-values?per_page=100", target.Repository, target.Number))
 	if err != nil {
 		return nil, fmt.Errorf("list issue field values for %s#%d: %w", target.Repository, target.Number, err)
 	}
@@ -1091,11 +1059,11 @@ func queryIssueFieldValues(ctx context.Context, runner Runner, target GitHubItem
 	return result, nil
 }
 
-func setOrganizationIssueFields(ctx context.Context, runner Runner, target GitHubItemTarget, changes []organizationFieldChange) (bool, error) {
+func setOrganizationIssueFields(ctx context.Context, client Client, target GitHubItemTarget, changes []organizationFieldChange) (bool, error) {
 	if len(changes) == 0 {
 		return false, nil
 	}
-	before, err := queryIssueFieldValues(ctx, runner, target)
+	before, err := queryIssueFieldValues(ctx, client, target)
 	if err != nil {
 		return false, err
 	}
@@ -1114,21 +1082,10 @@ func setOrganizationIssueFields(ctx context.Context, runner Runner, target GitHu
 		values = append(values, map[string]any{"field_id": change.Field.ID, "value": change.Desired})
 		changedIDs[change.Field.ID] = struct{}{}
 	}
-	body, err := json.Marshal(map[string]any{"issue_field_values": values})
-	if err != nil {
-		return false, fmt.Errorf("encode issue field update: %w", err)
-	}
-	args := []string{"api", "--method", "POST"}
-	args = append(args, apiHeaders()...)
-	args = append(args, fmt.Sprintf("repos/%s/issues/%d/issue-field-values", target.Repository, target.Number), "--input", "-")
-	stdinRunner, ok := runner.(inputRunner)
-	if !ok {
-		return false, errors.New("GitHub runner does not support JSON request bodies")
-	}
-	if _, err := stdinRunner.RunInput(ctx, body, args...); err != nil {
+	if _, err := client.REST(ctx, "POST", fmt.Sprintf("/repos/%s/issues/%d/issue-field-values", target.Repository, target.Number), map[string]any{"issue_field_values": values}); err != nil {
 		return false, fmt.Errorf("set organization issue fields: %w", err)
 	}
-	after, err := queryIssueFieldValues(ctx, runner, target)
+	after, err := queryIssueFieldValues(ctx, client, target)
 	if err != nil {
 		return true, fmt.Errorf("read back organization issue fields: %w", err)
 	}
@@ -1234,7 +1191,7 @@ type PreparedProjectItemMutation struct {
 // PrepareProjectItemMutation resolves configuration before an issue is created,
 // or before an existing item is changed. The same invocation can then use Apply
 // without fetching those definitions again.
-func PrepareProjectItemMutation(ctx context.Context, runner Runner, input MutateProjectItemInput) (*PreparedProjectItemMutation, error) {
+func PrepareProjectItemMutation(ctx context.Context, client Client, input MutateProjectItemInput) (*PreparedProjectItemMutation, error) {
 	if err := validateProjectMutationValues(input); err != nil {
 		return nil, err
 	}
@@ -1256,12 +1213,12 @@ func PrepareProjectItemMutation(ctx context.Context, runner Runner, input Mutate
 	}
 	schema := ProjectSchema{Fields: make(map[string]ProjectField)}
 	if projectMutationNeedsSchema(input) {
-		schema, err = QueryProjectSchema(ctx, runner, input.Project)
+		schema, err = QueryProjectSchema(ctx, client, input.Project)
 		if err != nil {
 			return nil, err
 		}
 	}
-	projectChanges, organizationChanges, issueType, err := prepareProjectChanges(ctx, runner, input, target, schema)
+	projectChanges, organizationChanges, issueType, err := prepareProjectChanges(ctx, client, input, target, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -1273,29 +1230,29 @@ func PrepareProjectItemMutation(ctx context.Context, runner Runner, input Mutate
 
 // ValidateProjectItemMutationConfiguration checks live configuration without
 // reading or mutating a particular issue.
-func ValidateProjectItemMutationConfiguration(ctx context.Context, runner Runner, input MutateProjectItemInput) error {
-	_, err := PrepareProjectItemMutation(ctx, runner, input)
+func ValidateProjectItemMutationConfiguration(ctx context.Context, client Client, input MutateProjectItemInput) error {
+	_, err := PrepareProjectItemMutation(ctx, client, input)
 	return err
 }
 
 // InspectProjectItemMutation validates the requested fields against fresh live
 // definitions and returns the current target-centred item state for plan output.
-func InspectProjectItemMutation(ctx context.Context, runner Runner, input MutateProjectItemInput) (*ProjectItemState, error) {
+func InspectProjectItemMutation(ctx context.Context, client Client, input MutateProjectItemInput) (*ProjectItemState, error) {
 	target, err := validateProjectMutationInput(input)
 	if err != nil {
 		return nil, err
 	}
 	schema := ProjectSchema{Fields: make(map[string]ProjectField)}
 	if projectMutationNeedsSchema(input) {
-		schema, err = QueryProjectSchema(ctx, runner, input.Project)
+		schema, err = QueryProjectSchema(ctx, client, input.Project)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if _, _, _, err := prepareProjectChanges(ctx, runner, input, target, schema); err != nil {
+	if _, _, _, err := prepareProjectChanges(ctx, client, input, target, schema); err != nil {
 		return nil, err
 	}
-	item, err := QueryProjectItem(ctx, runner, input.Project, target)
+	item, err := QueryProjectItem(ctx, client, input.Project, target)
 	if err != nil {
 		return nil, err
 	}
@@ -1308,20 +1265,20 @@ func InspectProjectItemMutation(ctx context.Context, runner Runner, input Mutate
 // MutateProjectItem performs contract-bound field updates and independently
 // verifies the resulting values plus preservation of unrelated scalar Project
 // fields in one bounded final readback.
-func MutateProjectItem(ctx context.Context, runner Runner, input MutateProjectItemInput) (MutateProjectItemResult, error) {
+func MutateProjectItem(ctx context.Context, client Client, input MutateProjectItemInput) (MutateProjectItemResult, error) {
 	if _, err := validateProjectMutationInput(input); err != nil {
 		return MutateProjectItemResult{}, err
 	}
-	prepared, err := PrepareProjectItemMutation(ctx, runner, input)
+	prepared, err := PrepareProjectItemMutation(ctx, client, input)
 	if err != nil {
 		return MutateProjectItemResult{}, err
 	}
-	return prepared.Apply(ctx, runner, input.IssueNumber, input.URL)
+	return prepared.Apply(ctx, client, input.IssueNumber, input.URL)
 }
 
 // Apply inspects the target afresh, applies the prepared changes and verifies
 // them independently. Only the target identity may be supplied after preflight.
-func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, runner Runner, issueNumber int, url string) (MutateProjectItemResult, error) {
+func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, client Client, issueNumber int, url string) (MutateProjectItemResult, error) {
 	if prepared == nil {
 		return MutateProjectItemResult{}, errors.New("Project mutation has not been prepared")
 	}
@@ -1343,7 +1300,7 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, runner R
 	schema := prepared.schema
 	projectChanges, organizationChanges, issueType := prepared.projectChanges, prepared.organizationChanges, prepared.issueType
 
-	lookup, err := lookupProjectItem(ctx, runner, input.Project, target)
+	lookup, err := lookupProjectItem(ctx, client, input.Project, target)
 	if err != nil {
 		return MutateProjectItemResult{}, fmt.Errorf("inspect current Project item: %w", err)
 	}
@@ -1356,7 +1313,7 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, runner R
 	current := lookup.Item
 	added, unarchived := false, false
 	if input.AddIfMissing && (current == nil || current.Archived) {
-		membership, err := ensureProjectMembership(ctx, runner, input.Project, target, lookup)
+		membership, err := ensureProjectMembership(ctx, client, input.Project, target, lookup)
 		if err != nil {
 			return MutateProjectItemResult{}, err
 		}
@@ -1373,12 +1330,12 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, runner R
 	}
 	projectMutationApplied := len(pending) > 0
 	if projectMutationApplied {
-		if err := writeProjectItemFields(ctx, runner, lookup.ProjectID, current.ItemID, pending); err != nil {
-			return MutateProjectItemResult{}, projectFieldWriteError(ctx, runner, input.Project, target, pending, err)
+		if err := writeProjectItemFields(ctx, client, lookup.ProjectID, current.ItemID, pending); err != nil {
+			return MutateProjectItemResult{}, projectFieldWriteError(ctx, client, input.Project, target, pending, err)
 		}
 	}
 
-	if _, err := setOrganizationIssueFields(ctx, runner, target, organizationChanges); err != nil {
+	if _, err := setOrganizationIssueFields(ctx, client, target, organizationChanges); err != nil {
 		return MutateProjectItemResult{}, partialProjectMutationError("organization issue fields", err)
 	}
 
@@ -1386,7 +1343,7 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, runner R
 		if target.Kind != "issues" {
 			return MutateProjectItemResult{}, errors.New("organization issue types can only be set on issues, not pull requests")
 		}
-		if _, err := EditIssue(ctx, runner, EditIssueInput{
+		if _, err := EditIssue(ctx, client, EditIssueInput{
 			Repo:      target.Repository,
 			Number:    target.Number,
 			IssueType: &issueType,
@@ -1399,7 +1356,7 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, runner R
 	var sideEffects []string
 	if projectMutationApplied {
 		readBack := func() (*ProjectItemState, error) {
-			item, err := QueryProjectItem(ctx, runner, input.Project, target)
+			item, err := QueryProjectItem(ctx, client, input.Project, target)
 			if err != nil {
 				return nil, partialProjectMutationError("final Project readback", err)
 			}
@@ -1422,8 +1379,8 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, runner R
 			if err := sleepContext(ctx, addedItemAutomationSettleDelay); err != nil {
 				return MutateProjectItemResult{}, partialProjectMutationError(status.Name, err)
 			}
-			if err := writeProjectItemFields(ctx, runner, lookup.ProjectID, current.ItemID, []projectFieldChange{status}); err != nil {
-				return MutateProjectItemResult{}, projectFieldWriteError(ctx, runner, input.Project, target, []projectFieldChange{status}, err)
+			if err := writeProjectItemFields(ctx, client, lookup.ProjectID, current.ItemID, []projectFieldChange{status}); err != nil {
+				return MutateProjectItemResult{}, projectFieldWriteError(ctx, client, input.Project, target, []projectFieldChange{status}, err)
 			}
 			finalItem, err = readBack()
 			if err != nil {
@@ -1583,7 +1540,7 @@ func projectMutationNeedsSchema(input MutateProjectItemInput) bool {
 	return input.TargetDate != "" || len(input.ClearFields) > 0
 }
 
-func prepareProjectChanges(ctx context.Context, runner Runner, input MutateProjectItemInput, target GitHubItemTarget, schema ProjectSchema) ([]projectFieldChange, []organizationFieldChange, string, error) {
+func prepareProjectChanges(ctx context.Context, client Client, input MutateProjectItemInput, target GitHubItemTarget, schema ProjectSchema) ([]projectFieldChange, []organizationFieldChange, string, error) {
 	var projectChanges []projectFieldChange
 	var organizationChanges []organizationFieldChange
 	var organizationFields []organizationIssueField
@@ -1625,7 +1582,7 @@ func prepareProjectChanges(ctx context.Context, runner Runner, input MutateProje
 			}
 			if !organizationFieldsLoaded {
 				var err error
-				organizationFields, err = queryOrganizationIssueFields(ctx, runner, target.Owner)
+				organizationFields, err = queryOrganizationIssueFields(ctx, client, target.Owner)
 				if err != nil {
 					return err
 				}
@@ -1670,7 +1627,7 @@ func prepareProjectChanges(ctx context.Context, runner Runner, input MutateProje
 			if target.Kind != "issues" {
 				return nil, nil, "", errors.New("Class uses an organization issue type and cannot be set on a pull request")
 			}
-			if err := validateRepositoryIssueType(ctx, runner, target.Repository, value); err != nil {
+			if err := validateRepositoryIssueType(ctx, client, target.Repository, value); err != nil {
 				return nil, nil, "", err
 			}
 			issueType = value

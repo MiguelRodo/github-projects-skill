@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -13,14 +15,12 @@ import (
 )
 
 func TestCreateIssue(t *testing.T) {
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{method: "GET", path: "/repos/owner/repo/labels/" + url.PathEscape("bug")}, output: []byte("{}")},
+		{request: request{method: "POST", path: "/repos/owner/repo/issues", body: map[string]any{"title": "Test Title", "body": "Test Body", "labels": []string{"bug"}, "assignees": []string{"monalisa"}}}, output: objectFixture("html_url", []byte("https://github.com/owner/repo/issues/42\n"))},
 		{
-			args:   []string{"issue", "create", "--repo", "owner/repo", "--title", "Test Title", "--body", "Test Body", "--label", "bug", "--assignee", "monalisa"},
-			output: []byte("https://github.com/owner/repo/issues/42\n"),
-		},
-		{
-			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: []byte(`{"number":42,"title":"Test Title","body":"Test Body","state":"OPEN","url":"https://github.com/owner/repo/issues/42","labels":[{"name":"bug"}],"assignees":[{"login":"monalisa"}]}`),
+			request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+			output:  issueFixture([]byte(`{"number":42,"title":"Test Title","body":"Test Body","state":"OPEN","url":"https://github.com/owner/repo/issues/42","labels":[{"name":"bug"}],"assignees":[{"login":"monalisa"}]}`)),
 		},
 	}}
 
@@ -45,26 +45,24 @@ func TestCreateIssue(t *testing.T) {
 func TestEditIssue(t *testing.T) {
 	newTitle := "Updated Title"
 	state := "closed"
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
 		{
 			// Initial view before edit
-			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: []byte(`{"number":42,"title":"Old Title","body":"Old Body","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`),
+			request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+			output:  issueFixture([]byte(`{"number":42,"title":"Old Title","body":"Old Body","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`)),
 		},
+		{request: request{method: "GET", path: "/repos/owner/repo/labels/" + url.PathEscape("enhancement")}, output: []byte("{}")},
+		{request: request{method: "PATCH", path: "/repos/owner/repo/issues/42", body: map[string]any{"title": "Updated Title"}}, output: []byte("https://github.com/owner/repo/issues/42\n")},
+		{request: request{method: "POST", path: "/repos/owner/repo/issues/42/labels", body: map[string]any{"labels": []string{"enhancement"}}}, output: []byte("https://github.com/owner/repo/issues/42\n")},
 		{
-			// gh issue edit
-			args:   []string{"issue", "edit", "42", "--repo", "owner/repo", "--title", "Updated Title", "--add-label", "enhancement"},
-			output: []byte("https://github.com/owner/repo/issues/42\n"),
-		},
-		{
-			// gh issue close
-			args:   []string{"issue", "close", "42", "--repo", "owner/repo", "--reason", "completed"},
-			output: []byte("Closed issue #42\n"),
+			// State PATCH
+			request: request{method: "PATCH", path: "/repos/owner/repo/issues/42", body: map[string]any{"state": "closed", "state_reason": "completed"}},
+			output:  []byte("Closed issue #42\n"),
 		},
 		{
 			// View after edit for readback
-			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: []byte(`{"number":42,"title":"Updated Title","body":"Old Body","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42","labels":[{"name":"enhancement"}]}`),
+			request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+			output:  issueFixture([]byte(`{"number":42,"title":"Updated Title","body":"Old Body","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42","labels":[{"name":"enhancement"}]}`)),
 		},
 	}}
 
@@ -85,7 +83,7 @@ func TestEditIssue(t *testing.T) {
 }
 
 func TestCreateIssueRejectsEmptyTitle(t *testing.T) {
-	fake := &fakeRunner{t: t}
+	fake := &fakeClient{t: t}
 	_, err := CreateIssue(context.Background(), fake, CreateIssueInput{
 		Repo:  "owner/repo",
 		Title: "   ",
@@ -96,14 +94,12 @@ func TestCreateIssueRejectsEmptyTitle(t *testing.T) {
 }
 
 func TestCreateIssueRejectsIncompleteReadback(t *testing.T) {
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{method: "GET", path: "/repos/owner/repo/labels/" + url.PathEscape("bug")}, output: []byte("{}")},
+		{request: request{method: "POST", path: "/repos/owner/repo/issues", body: map[string]any{"title": "Title", "body": "", "labels": []string{"bug"}}}, output: objectFixture("html_url", []byte("https://github.com/owner/repo/issues/42\n"))},
 		{
-			args:   []string{"issue", "create", "--repo", "owner/repo", "--title", "Title", "--body", "", "--label", "bug"},
-			output: []byte("https://github.com/owner/repo/issues/42\n"),
-		},
-		{
-			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","labels":[]}`),
+			request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+			output:  issueFixture([]byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","labels":[]}`)),
 		},
 	}}
 	_, err := CreateIssue(context.Background(), fake, CreateIssueInput{Repo: "owner/repo", Title: "Title", Labels: []string{"bug"}})
@@ -117,26 +113,20 @@ func TestEditIssueVerifiesFullDeltaAndPreservation(t *testing.T) {
 	body := "New Body"
 	milestone := ""
 	projectItems := `[{"title":"Planning","status":{"name":"Todo","optionId":"1"}}]`
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
 		{
-			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: []byte(`{"number":42,"title":"Title","body":"Old Body","state":"OPEN","url":"https://github.com/owner/repo/issues/42","labels":[{"name":"keep"},{"name":"old"}],"assignees":[{"login":"old-user"}],"milestone":{"title":"v1"},"issueType":{"name":"Task"},"projectItems":` + projectItems + `}`),
+			request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+			output:  issueFixture([]byte(`{"number":42,"title":"Title","body":"Old Body","state":"OPEN","url":"https://github.com/owner/repo/issues/42","labels":[{"name":"keep"},{"name":"old"}],"assignees":[{"login":"old-user"}],"milestone":{"title":"v1"},"issueType":{"name":"Task"},"projectItems":` + projectItems + `}`)),
 		},
+		{request: request{method: "GET", path: "/repos/owner/repo/labels/" + url.PathEscape("enhancement")}, output: []byte("{}")},
+		{request: request{method: "PATCH", path: "/repos/owner/repo/issues/42", body: map[string]any{"body": "New Body", "milestone": nil}}, output: []byte("https://github.com/owner/repo/issues/42\n")},
+		{request: request{method: "POST", path: "/repos/owner/repo/issues/42/labels", body: map[string]any{"labels": []string{"enhancement"}}}, output: []byte("https://github.com/owner/repo/issues/42\n")},
+		{request: request{method: "DELETE", path: "/repos/owner/repo/issues/42/labels/" + url.PathEscape("old")}, output: []byte("https://github.com/owner/repo/issues/42\n")},
+		{request: request{method: "POST", path: "/repos/owner/repo/issues/42/assignees", body: map[string]any{"assignees": []string{"new-user"}}}, output: []byte("https://github.com/owner/repo/issues/42\n")},
+		{request: request{method: "DELETE", path: "/repos/owner/repo/issues/42/assignees", body: map[string]any{"assignees": []string{"old-user"}}}, output: []byte("https://github.com/owner/repo/issues/42\n")},
 		{
-			args: []string{
-				"issue", "edit", "42", "--repo", "owner/repo",
-				"--body", "New Body",
-				"--add-label", "enhancement",
-				"--remove-label", "old",
-				"--add-assignee", "new-user",
-				"--remove-assignee", "old-user",
-				"--remove-milestone",
-			},
-			output: []byte("https://github.com/owner/repo/issues/42\n"),
-		},
-		{
-			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: []byte(`{"number":42,"title":"Title","body":"New Body","state":"OPEN","url":"https://github.com/owner/repo/issues/42","labels":[{"name":"keep"},{"name":"enhancement"}],"assignees":[{"login":"new-user"}],"issueType":{"name":"Task"},"projectItems":` + projectItems + `}`),
+			request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+			output:  issueFixture([]byte(`{"number":42,"title":"Title","body":"New Body","state":"OPEN","url":"https://github.com/owner/repo/issues/42","labels":[{"name":"keep"},{"name":"enhancement"}],"assignees":[{"login":"new-user"}],"issueType":{"name":"Task"},"projectItems":` + projectItems + `}`)),
 		},
 	}}
 	_, err := EditIssue(context.Background(), fake, EditIssueInput{
@@ -152,18 +142,15 @@ func TestEditIssueVerifiesFullDeltaAndPreservation(t *testing.T) {
 
 func TestEditIssueRejectsCollateralBodyChange(t *testing.T) {
 	title := "New Title"
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
 		{
-			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: []byte(`{"number":42,"title":"Old Title","body":"Preserve me","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`),
+			request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+			output:  issueFixture([]byte(`{"number":42,"title":"Old Title","body":"Preserve me","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`)),
 		},
+		{request: request{method: "PATCH", path: "/repos/owner/repo/issues/42", body: map[string]any{"title": "New Title"}}, output: []byte("https://github.com/owner/repo/issues/42\n")},
 		{
-			args:   []string{"issue", "edit", "42", "--repo", "owner/repo", "--title", "New Title"},
-			output: []byte("https://github.com/owner/repo/issues/42\n"),
-		},
-		{
-			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: []byte(`{"number":42,"title":"New Title","body":"Changed elsewhere","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`),
+			request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+			output:  issueFixture([]byte(`{"number":42,"title":"New Title","body":"Changed elsewhere","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`)),
 		},
 	}}
 	_, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, Title: &title})
@@ -178,29 +165,18 @@ func TestEditIssueRejectsConflictingLabelsAndInvalidState(t *testing.T) {
 		{Repo: "owner/repo", Number: 42, AddLabels: []string{"Bug"}, RemoveLabels: []string{"bug"}},
 		{Repo: "owner/repo", Number: 42, State: &state},
 	} {
-		_, err := EditIssue(context.Background(), &fakeRunner{t: t}, input)
+		_, err := EditIssue(context.Background(), &fakeClient{t: t}, input)
 		if err == nil {
 			t.Fatalf("EditIssue(%+v) error = nil", input)
 		}
 	}
 }
 
-const exactTitleSearchJQ = `{total_count, incomplete_results, items: [.items[] | {number, title, state, url: .html_url, pull_request: (.pull_request != null)}]}`
-
 func exactTitleSearchCall(repo, title string, page int, output string, err error) fakeResponse {
 	return fakeResponse{
-		args: []string{
-			"api", "-X", "GET",
-			"-H", "Accept: application/vnd.github+json",
-			"-H", "X-GitHub-Api-Version: 2026-03-10",
-			"search/issues",
-			"-f", `q=repo:` + repo + ` is:issue in:title "` + title + `"`,
-			"-f", "per_page=100",
-			"-f", "page=" + strconv.Itoa(page),
-			"--jq", exactTitleSearchJQ,
-		},
-		output: []byte(output),
-		err:    err,
+		request: request{method: "GET", path: "/" + "search/issues" + "?" + url.Values{"q": {fmt.Sprintf(`repo:%s is:issue in:title "%s"`, repo, title)}, "per_page": {"100"}, "page": {strconv.Itoa(page)}}.Encode()},
+		output:  []byte(output),
+		err:     err,
 	}
 }
 
@@ -217,12 +193,12 @@ func fixExactTitleClock(t *testing.T) {
 // exactTitleTitlesCall is one titles-only GraphQL page of the newest open
 // issues in owner/repo, requested after cursor ("" for the first page).
 func exactTitleTitlesCall(cursor string, hasNext bool, endCursor string, nodes ...string) fakeResponse {
-	args := []string{"api", "graphql", "-f", "query=" + exactTitleRecentQuery, "-f", "owner=owner", "-f", "name=repo"}
+	args := request{query: exactTitleRecentQuery, variables: map[string]any{"owner": "owner", "name": "repo"}}
 	if cursor != "" {
-		args = append(args, "-f", "cursor="+cursor)
+		args.variables["cursor"] = cursor
 	}
 	return fakeResponse{
-		args: args,
+		request: args,
 		output: []byte(fmt.Sprintf(`{"data":{"repository":{"issues":{"nodes":[%s],"pageInfo":{"hasNextPage":%t,"endCursor":%q}}}}}`,
 			strings.Join(nodes, ","), hasNext, endCursor)),
 	}
@@ -247,7 +223,7 @@ func titleNodes(first, count int) []string {
 
 func searchItem(number int, title string, pullRequest bool) string {
 	encoded, _ := json.Marshal(title)
-	return fmt.Sprintf(`{"number":%d,"title":%s,"state":"open","url":"https://github.com/owner/repo/issues/%d","pull_request":%t}`, number, encoded, number, pullRequest)
+	return fmt.Sprintf(`{"number":%d,"title":%s,"state":"open","html_url":"https://github.com/owner/repo/issues/%d","pull_request":%s}`, number, encoded, number, map[bool]string{true: `{}`, false: `null`}[pullRequest])
 }
 
 func searchPage(total int, incomplete bool, items ...string) string {
@@ -264,7 +240,7 @@ func matchNumbers(matches []IssueSummary) []int {
 
 func TestFindIssuesByExactTitleUsesSearchAndKeepsOnlyExactIssueTitles(t *testing.T) {
 	fixExactTitleClock(t)
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
 		exactTitleSearchCall("owner/repo", "Fix the build", 1, searchPage(6, false,
 			searchItem(9, "Fix the build", false),
 			searchItem(8, "Fix the build", true),      // pull request
@@ -296,7 +272,7 @@ func TestFindIssuesByExactTitleUsesSearchAndKeepsOnlyExactIssueTitles(t *testing
 
 func TestFindIssuesByExactTitleFindsRecentIssueMissingFromSearchIndex(t *testing.T) {
 	fixExactTitleClock(t)
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
 		exactTitleSearchCall("owner/repo", "Same", 1, searchPage(1, false, searchItem(2, "Same", false)), nil),
 		exactTitleTitlesCall("", true, "c1",
 			titleNode(40, "Same", time.Second),
@@ -326,7 +302,7 @@ func TestFindIssuesByExactTitlePaginatesSearch(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		first = append(first, searchItem(1000+i, "Same thing", false))
 	}
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
 		exactTitleSearchCall("owner/repo", "Same thing", 1, searchPage(101, false, first...), nil),
 		exactTitleSearchCall("owner/repo", "Same thing", 2, searchPage(101, false, searchItem(4, "Same thing", false)), nil),
 		exactTitleTitlesCall("", false, ""),
@@ -361,7 +337,7 @@ func TestFindIssuesByExactTitleFallsBackToRecentOpenIssues(t *testing.T) {
 				exactTitleTitlesCall("", true, "c1", page1...),
 				exactTitleTitlesCall("c1", true, "c2", page2...),
 			)
-			fake := &fakeRunner{t: t, responses: responses}
+			fake := &fakeClient{t: t, responses: responses}
 			check, err := FindIssuesByExactTitle(context.Background(), fake, "owner/repo", "Same")
 			if err != nil {
 				t.Fatal(err)
@@ -398,7 +374,7 @@ func TestFindIssuesByExactTitleFallbackStopsAtCapInsideWindow(t *testing.T) {
 		cursor = next
 	}
 	// A sixth page would fail the fake runner as an unexpected call.
-	fake := &fakeRunner{t: t, responses: responses}
+	fake := &fakeClient{t: t, responses: responses}
 	check, err := FindIssuesByExactTitle(context.Background(), fake, "owner/repo", "Same")
 	if err != nil {
 		t.Fatal(err)
@@ -438,7 +414,7 @@ func TestFindIssuesByExactTitleSkipsSearchForUnsearchableTitles(t *testing.T) {
 		"format character": "\U000e0001",
 	} {
 		t.Run(name, func(t *testing.T) {
-			fake := &fakeRunner{t: t, responses: []fakeResponse{exactTitleTitlesCall("", false, "", titleNode(7, title, time.Hour))}}
+			fake := &fakeClient{t: t, responses: []fakeResponse{exactTitleTitlesCall("", false, "", titleNode(7, title, time.Hour))}}
 			check, err := FindIssuesByExactTitle(context.Background(), fake, "owner/repo", "  "+title+"  ")
 			if err != nil {
 				t.Fatal(err)
@@ -462,7 +438,7 @@ func TestFindIssuesByExactTitleTitlesErrorIsReported(t *testing.T) {
 		"fallback":     {exactTitleSearchCall("owner/repo", "Same", 1, "", errors.New("search unavailable")), titlesErr},
 	} {
 		t.Run(name, func(t *testing.T) {
-			fake := &fakeRunner{t: t, responses: responses}
+			fake := &fakeClient{t: t, responses: responses}
 			if _, err := FindIssuesByExactTitle(context.Background(), fake, "owner/repo", "Same"); err == nil || !strings.Contains(err.Error(), "titles unavailable") {
 				t.Fatalf("err = %v", err)
 			}
@@ -474,23 +450,23 @@ func TestFindIssuesByExactTitleRejectsMissingRepository(t *testing.T) {
 	fixExactTitleClock(t)
 	missing := exactTitleTitlesCall("", false, "")
 	missing.output = []byte(`{"data":{"repository":null}}`)
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
 		exactTitleSearchCall("owner/repo", "Same", 1, searchPage(0, false), nil),
 		missing,
 	}}
 	if _, err := FindIssuesByExactTitle(context.Background(), fake, "owner/repo", "Same"); err == nil || !strings.Contains(err.Error(), "repository not found") {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := FindIssuesByExactTitle(context.Background(), &fakeRunner{t: t}, "owner", "Same"); err == nil {
+	if _, err := FindIssuesByExactTitle(context.Background(), &fakeClient{t: t}, "owner", "Same"); err == nil {
 		t.Fatal("invalid repository accepted")
 	}
 }
 
 func TestEditIssueNoOpNeedsOnlyOneRead(t *testing.T) {
 	title := "Same title"
-	fake := &fakeRunner{t: t, responses: []fakeResponse{{
-		args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-		output: []byte(`{"number":42,"title":"Same title","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`),
+	fake := &fakeClient{t: t, responses: []fakeResponse{{
+		request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+		output:  issueFixture([]byte(`{"number":42,"title":"Same title","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`)),
 	}}}
 	if _, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, Title: &title}); err != nil {
 		t.Fatal(err)
@@ -502,12 +478,12 @@ func TestEditIssueNoOpNeedsOnlyOneRead(t *testing.T) {
 
 const issueViewJSONFields = "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"
 
-func TestEditIssueMapsNotPlannedForGhClose(t *testing.T) {
+func TestEditIssueMapsNotPlannedForStatePATCH(t *testing.T) {
 	state := "closed"
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`)},
-		{args: []string{"issue", "close", "42", "--repo", "owner/repo", "--reason", "not planned"}, output: []byte("Closed\n")},
-		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"NOT_PLANNED","url":"https://github.com/owner/repo/issues/42"}`)},
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`))},
+		{request: request{method: "PATCH", path: "/repos/owner/repo/issues/42", body: map[string]any{"state": "closed", "state_reason": "not_planned"}}, output: []byte("Closed\n")},
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"NOT_PLANNED","url":"https://github.com/owner/repo/issues/42"}`))},
 	}}
 	if _, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state, CloseReason: "not_planned"}); err != nil {
 		t.Fatal(err)
@@ -516,13 +492,10 @@ func TestEditIssueMapsNotPlannedForGhClose(t *testing.T) {
 
 func TestEditIssueChangesReasonOnAlreadyClosedIssue(t *testing.T) {
 	state := "closed"
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42"}`)},
-		{args: []string{
-			"api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2026-03-10",
-			"repos/owner/repo/issues/42", "-f", "state=closed", "-f", "state_reason=not_planned", "--jq", ".state_reason",
-		}, output: []byte("not_planned\n")},
-		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"NOT_PLANNED","url":"https://github.com/owner/repo/issues/42"}`)},
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42"}`))},
+		{request: request{method: "PATCH", path: "/" + "repos/owner/repo/issues/42", body: map[string]any{"state": "closed", "state_reason": "not_planned"}}, output: []byte("not_planned\n")},
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"NOT_PLANNED","url":"https://github.com/owner/repo/issues/42"}`))},
 	}}
 	view, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state, CloseReason: "not_planned"})
 	if err != nil || view.StateReason != "NOT_PLANNED" {
@@ -532,13 +505,10 @@ func TestEditIssueChangesReasonOnAlreadyClosedIssue(t *testing.T) {
 
 func TestEditIssueRejectsUnappliedCloseReason(t *testing.T) {
 	state := "closed"
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42"}`)},
-		{args: []string{
-			"api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2026-03-10",
-			"repos/owner/repo/issues/42", "-f", "state=closed", "-f", "state_reason=not_planned", "--jq", ".state_reason",
-		}, output: []byte("completed\n")},
-		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42"}`)},
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42"}`))},
+		{request: request{method: "PATCH", path: "/" + "repos/owner/repo/issues/42", body: map[string]any{"state": "closed", "state_reason": "not_planned"}}, output: []byte("completed\n")},
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42"}`))},
 	}}
 	_, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state, CloseReason: "not_planned"})
 	if err == nil || !strings.Contains(err.Error(), "close reason readback disagrees") {
@@ -548,8 +518,8 @@ func TestEditIssueRejectsUnappliedCloseReason(t *testing.T) {
 
 func TestEditIssueKeepsExistingReasonWhenNoneRequested(t *testing.T) {
 	state := "closed"
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"NOT_PLANNED","url":"https://github.com/owner/repo/issues/42"}`)},
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"NOT_PLANNED","url":"https://github.com/owner/repo/issues/42"}`))},
 	}}
 	if _, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state}); err != nil {
 		t.Fatal(err)
@@ -558,10 +528,10 @@ func TestEditIssueKeepsExistingReasonWhenNoneRequested(t *testing.T) {
 
 func TestEditIssueReportsStatusSetByItemClosedWorkflow(t *testing.T) {
 	state := "closed"
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42","projectItems":[{"title":"Planning","status":{"name":"In Progress","optionId":"2"}}]}`)},
-		{args: []string{"issue", "close", "42", "--repo", "owner/repo", "--reason", "completed"}, output: []byte("Closed\n")},
-		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42","projectItems":[{"title":"Planning","status":{"name":"Done","optionId":"3"}}]}`)},
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42","projectItems":[{"title":"Planning","status":{"name":"In Progress","optionId":"2"}}]}`))},
+		{request: request{method: "PATCH", path: "/repos/owner/repo/issues/42", body: map[string]any{"state": "closed", "state_reason": "completed"}}, output: []byte("Closed\n")},
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42","projectItems":[{"title":"Planning","status":{"name":"Done","optionId":"3"}}]}`))},
 	}}
 	view, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state, CloseReason: "completed"})
 	if err != nil {
@@ -574,10 +544,10 @@ func TestEditIssueReportsStatusSetByItemClosedWorkflow(t *testing.T) {
 
 func TestEditIssueStillRejectsProjectMembershipChangeOnClose(t *testing.T) {
 	state := "closed"
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42","projectItems":[{"title":"Planning","status":{"name":"Todo","optionId":"1"}}]}`)},
-		{args: []string{"issue", "close", "42", "--repo", "owner/repo"}, output: []byte("Closed\n")},
-		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42","projectItems":[]}`)},
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42","projectItems":[{"title":"Planning","status":{"name":"Todo","optionId":"1"}}]}`))},
+		{request: request{method: "PATCH", path: "/repos/owner/repo/issues/42", body: map[string]any{"state": "closed", "state_reason": "completed"}}, output: []byte("Closed\n")},
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42","projectItems":[]}`))},
 	}}
 	_, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state})
 	if err == nil || !strings.Contains(err.Error(), "Project membership") {
@@ -587,14 +557,11 @@ func TestEditIssueStillRejectsProjectMembershipChangeOnClose(t *testing.T) {
 
 func TestCreateIssueAlwaysPassesBodyEvenWhenEmpty(t *testing.T) {
 	// gh rejects a non-interactive issue create without --body.
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{method: "POST", path: "/repos/owner/repo/issues", body: map[string]any{"title": "Title", "body": ""}}, output: objectFixture("html_url", []byte("https://github.com/owner/repo/issues/42\n"))},
 		{
-			args:   []string{"issue", "create", "--repo", "owner/repo", "--title", "Title", "--body", ""},
-			output: []byte("https://github.com/owner/repo/issues/42\n"),
-		},
-		{
-			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields},
-			output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`),
+			request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+			output:  issueFixture([]byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`)),
 		},
 	}}
 	if _, err := CreateIssue(context.Background(), fake, CreateIssueInput{Repo: "owner/repo", Title: "Title"}); err != nil {
@@ -603,14 +570,11 @@ func TestCreateIssueAlwaysPassesBodyEvenWhenEmpty(t *testing.T) {
 }
 
 func TestCreateIssueReadbackFailureForbidsRetry(t *testing.T) {
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{method: "POST", path: "/repos/owner/repo/issues", body: map[string]any{"title": "Title", "body": "Body"}}, output: objectFixture("html_url", []byte("https://github.com/owner/repo/issues/42\n"))},
 		{
-			args:   []string{"issue", "create", "--repo", "owner/repo", "--title", "Title", "--body", "Body"},
-			output: []byte("https://github.com/owner/repo/issues/42\n"),
-		},
-		{
-			args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields},
-			err:  errors.New("HTTP 502"),
+			request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+			err:     errors.New("HTTP 502"),
 		},
 	}}
 	_, err := CreateIssue(context.Background(), fake, CreateIssueInput{Repo: "owner/repo", Title: "Title", Body: "Body"})
@@ -621,18 +585,15 @@ func TestCreateIssueReadbackFailureForbidsRetry(t *testing.T) {
 }
 
 func TestCreateIssueResolvesSelfAssigneeBeforeVerification(t *testing.T) {
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
+	fake := &fakeClient{t: t, responses: []fakeResponse{
 		{
-			args:   []string{"api", "user", "--jq", ".login"},
-			output: []byte("octocat\n"),
+			request: request{method: "GET", path: "/" + "user"},
+			output:  objectFixture("login", []byte("octocat\n")),
 		},
+		{request: request{method: "POST", path: "/repos/owner/repo/issues", body: map[string]any{"title": "Title", "body": "", "assignees": []string{"octocat", "monalisa"}}}, output: objectFixture("html_url", []byte("https://github.com/owner/repo/issues/42\n"))},
 		{
-			args:   []string{"issue", "create", "--repo", "owner/repo", "--title", "Title", "--body", "", "--assignee", "octocat", "--assignee", "monalisa"},
-			output: []byte("https://github.com/owner/repo/issues/42\n"),
-		},
-		{
-			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields},
-			output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"octocat"},{"login":"monalisa"}]}`),
+			request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}},
+			output:  issueFixture([]byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"octocat"},{"login":"monalisa"}]}`)),
 		},
 	}}
 	if _, err := CreateIssue(context.Background(), fake, CreateIssueInput{Repo: "owner/repo", Title: "Title", Assignees: []string{"@me", "monalisa"}}); err != nil {
@@ -641,15 +602,13 @@ func TestCreateIssueResolvesSelfAssigneeBeforeVerification(t *testing.T) {
 }
 
 func TestEditIssueResolvesSelfAssigneeOnceForAddAndRemove(t *testing.T) {
-	view := []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}
-	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"api", "user", "--jq", ".login"}, output: []byte("octocat\n")},
-		{args: view, output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"octocat"}]}`)},
-		{
-			args:   []string{"issue", "edit", "42", "--repo", "owner/repo", "--add-assignee", "monalisa", "--remove-assignee", "octocat"},
-			output: []byte("https://github.com/owner/repo/issues/42\n"),
-		},
-		{args: view, output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"monalisa"}]}`)},
+	view := request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{method: "GET", path: "/" + "user"}, output: objectFixture("login", []byte("octocat\n"))},
+		{request: view, output: issueFixture([]byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"octocat"}]}`))},
+		{request: request{method: "POST", path: "/repos/owner/repo/issues/42/assignees", body: map[string]any{"assignees": []string{"monalisa"}}}, output: []byte("https://github.com/owner/repo/issues/42\n")},
+		{request: request{method: "DELETE", path: "/repos/owner/repo/issues/42/assignees", body: map[string]any{"assignees": []string{"octocat"}}}, output: []byte("https://github.com/owner/repo/issues/42\n")},
+		{request: view, output: issueFixture([]byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"monalisa"}]}`))},
 	}}
 	if _, err := EditIssue(context.Background(), fake, EditIssueInput{
 		Repo:            "owner/repo",
@@ -660,16 +619,104 @@ func TestEditIssueResolvesSelfAssigneeOnceForAddAndRemove(t *testing.T) {
 		t.Fatalf("EditIssue error = %v", err)
 	}
 
-	fake = &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"api", "user", "--jq", ".login"}, output: []byte("octocat\n")},
-		{args: view, output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[]}`)},
-		{
-			args:   []string{"issue", "edit", "42", "--repo", "owner/repo", "--add-assignee", "octocat"},
-			output: []byte("https://github.com/owner/repo/issues/42\n"),
-		},
-		{args: view, output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"octocat"}]}`)},
+	fake = &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{method: "GET", path: "/" + "user"}, output: objectFixture("login", []byte("octocat\n"))},
+		{request: view, output: issueFixture([]byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[]}`))},
+		{request: request{method: "POST", path: "/repos/owner/repo/issues/42/assignees", body: map[string]any{"assignees": []string{"octocat"}}}, output: []byte("https://github.com/owner/repo/issues/42\n")},
+		{request: view, output: issueFixture([]byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"octocat"}]}`))},
 	}}
 	if _, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, AddAssignees: []string{"@me"}}); err != nil {
 		t.Fatalf("EditIssue add @me error = %v", err)
+	}
+}
+
+func TestIssueLabelsMustExistBeforeAnyMutation(t *testing.T) {
+	for _, create := range []bool{true, false} {
+		t.Run(fmt.Sprint(create), func(t *testing.T) {
+			steps := []fakeResponse{}
+			if !create {
+				steps = append(steps, fakeResponse{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"Before","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`))})
+			}
+			steps = append(steps,
+				fakeResponse{request: request{method: "GET", path: "/repos/owner/repo/labels/exists"}, output: []byte(`{}`)},
+				fakeResponse{request: request{method: "GET", path: "/repos/owner/repo/labels/missing"}, err: &HTTPError{Status: 404, Message: "Not Found"}},
+			)
+			client := &fakeClient{t: t, responses: steps}
+			var err error
+			if create {
+				_, err = CreateIssue(context.Background(), client, CreateIssueInput{Repo: "owner/repo", Title: "New", Labels: []string{"exists", "missing"}})
+			} else {
+				title := "New"
+				_, err = EditIssue(context.Background(), client, EditIssueInput{Repo: "owner/repo", Number: 42, Title: &title, AddLabels: []string{"exists", "missing"}})
+			}
+			if err == nil || err.Error() != "label missing does not exist in owner/repo" || client.calls != len(steps) {
+				t.Fatalf("error=%v calls=%d", err, client.calls)
+			}
+		})
+	}
+}
+
+func TestIssueEditEscapesLabelNamesAndKeepsOtherLabels(t *testing.T) {
+	view := request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}
+	client := &fakeClient{t: t, responses: []fakeResponse{
+		{request: view, output: issueFixture([]byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42","labels":[{"name":"old/name"},{"name":"keep"}]}`))},
+		{request: request{method: "GET", path: "/repos/owner/repo/labels/new%2Fname%20%23%3F"}, output: []byte(`{}`)},
+		{request: request{method: "POST", path: "/repos/owner/repo/issues/42/labels", body: map[string]any{"labels": []string{"new/name #?"}}}, output: []byte(`[]`)},
+		{request: request{method: "DELETE", path: "/repos/owner/repo/issues/42/labels/old%2Fname"}, output: []byte(`[]`)},
+		{request: view, output: issueFixture([]byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42","labels":[{"name":"keep"},{"name":"new/name #?"}]}`))},
+	}}
+	_, err := EditIssue(context.Background(), client, EditIssueInput{Repo: "owner/repo", Number: 42, AddLabels: []string{"new/name #?"}, RemoveLabels: []string{"old/name"}})
+	if err != nil || client.calls != 5 {
+		t.Fatalf("error=%v calls=%d", err, client.calls)
+	}
+}
+
+func TestMilestoneResolutionPaginatesClosedMilestonesAndFailsBeforeWriting(t *testing.T) {
+	for _, found := range []bool{true, false} {
+		t.Run(fmt.Sprint(found), func(t *testing.T) {
+			title := "Release"
+			second := `[{"title":"Other","number":2}]`
+			if found {
+				second = `[{"title":"Release","number":9,"state":"closed"}]`
+			}
+			steps := []fakeResponse{
+				{request: request{method: "GET", path: "/repos/owner/repo/milestones?state=all&per_page=100"}, output: []byte(`[{"title":"First","number":1}]`), header: http.Header{"Link": {`<https://api.github.com/repos/owner/repo/milestones?state=all&per_page=100&page=2>; rel="next"`}}},
+				{request: request{method: "GET", path: "https://api.github.com/repos/owner/repo/milestones?state=all&per_page=100&page=2"}, output: []byte(second)},
+			}
+			if found {
+				steps = append(steps,
+					fakeResponse{request: request{method: "POST", path: "/repos/owner/repo/issues", body: map[string]any{"title": "T", "body": "", "milestone": 9}}, output: []byte(`{"html_url":"https://github.com/owner/repo/issues/42"}`)},
+					fakeResponse{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: issueFixture([]byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42","milestone":{"title":"Release"}}`))},
+				)
+			}
+			client := &fakeClient{t: t, responses: steps}
+			_, err := CreateIssue(context.Background(), client, CreateIssueInput{Repo: "owner/repo", Title: "T", Milestone: title})
+			if found && err != nil || !found && (err == nil || !strings.Contains(err.Error(), `milestone "Release" does not exist`)) || client.calls != len(steps) {
+				t.Fatalf("found=%v error=%v calls=%d", found, err, client.calls)
+			}
+		})
+	}
+}
+
+func TestIssueViewHasOneRequestAndNullSafeProjectStatus(t *testing.T) {
+	client := &fakeClient{t: t, responses: []fakeResponse{{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: []byte(`{"data":{"repository":{"issue":{"number":42,"title":"T","state":"OPEN","labels":{"nodes":[]},"assignees":{"nodes":[]},"projectItems":{"nodes":[{"project":{"title":"With status"},"status":{"name":"Done","optionId":"done"}},{"project":{"title":"Unset"},"status":null}]}}}}}`)}}}
+	view, err := ViewIssue(context.Background(), client, "owner/repo", 42)
+	if err != nil || client.calls != 1 || len(view.ProjectItems) != 2 {
+		t.Fatalf("view=%+v error=%v calls=%d", view, err, client.calls)
+	}
+	want := []json.RawMessage{json.RawMessage(`{"title":"With status","status":{"name":"Done","optionId":"done"}}`), json.RawMessage(`{"title":"Unset","status":{"name":"","optionId":""}}`)}
+	if !reflect.DeepEqual(canonicalRawSet(view.ProjectItems), canonicalRawSet(want)) {
+		t.Fatalf("project summaries=%s", view.ProjectItems)
+	}
+}
+
+func TestIssueViewOverflowKeepsAllProjectsWithoutDuplicatingOtherConnections(t *testing.T) {
+	client := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42}}, output: []byte(`{"data":{"repository":{"issue":{"number":42,"title":"T","state":"OPEN","labels":{"nodes":[{"name":"keep"}]},"assignees":{"nodes":[]},"projectItems":{"nodes":[null,{"project":{"title":"First"},"status":null}],"pageInfo":{"hasNextPage":true,"endCursor":"p1"}}}}}}`)},
+		{request: request{query: IssueViewQuery, variables: map[string]any{"owner": "owner", "name": "repo", "number": 42, "projectsCursor": "p1"}}, output: []byte(`{"data":{"repository":{"issue":{"number":42,"title":"T","state":"OPEN","labels":{"nodes":[{"name":"keep"}]},"assignees":{"nodes":[]},"projectItems":{"nodes":[{"project":{"title":"Second"},"status":{"name":"Todo","optionId":"todo"}}],"pageInfo":{"hasNextPage":false}}}}}}`)},
+	}}
+	view, err := ViewIssue(context.Background(), client, "owner/repo", 42)
+	if err != nil || client.calls != 2 || len(view.ProjectItems) != 2 || len(view.Labels) != 1 {
+		t.Fatalf("view=%+v error=%v calls=%d", view, err, client.calls)
 	}
 }

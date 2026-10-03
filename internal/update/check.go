@@ -2,6 +2,8 @@ package update
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -29,14 +31,15 @@ type Result struct {
 	NoPublishedRelease bool   `json:"noPublishedRelease"`
 }
 
-// Check reads the latest GitHub Release through gh and compares strict release
+// Check reads the latest GitHub Release through HTTP and compares strict release
 // versions. Release automation in this repository emits X.Y.Z versions only.
-func Check(ctx context.Context, runner githubcli.Runner, installed string) (Result, error) {
+func Check(ctx context.Context, client githubcli.Client, installed string) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
-	output, err := runner.Run(ctx, "api", "--hostname", releaseHost, "repos/"+repository+"/releases/latest", "--jq", ".tag_name")
+	response, err := client.REST(ctx, "GET", "/repos/"+repository+"/releases/latest", nil)
 	if err != nil {
-		if strings.Contains(err.Error(), "HTTP 404") {
+		var failure *githubcli.HTTPError
+		if errors.As(err, &failure) && failure.Status == 404 {
 			return Result{
 				Installed:          normalise(installed),
 				Development:        isDevelopment(normalise(installed)),
@@ -45,7 +48,13 @@ func Check(ctx context.Context, runner githubcli.Runner, installed string) (Resu
 		}
 		return Result{}, fmt.Errorf("read latest projects release: %w", err)
 	}
-	latest := strings.TrimSpace(string(output))
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.Unmarshal(response.Body, &release); err != nil {
+		return Result{}, fmt.Errorf("decode latest projects release: %w", err)
+	}
+	latest := strings.TrimSpace(release.TagName)
 	if latest == "" {
 		return Result{}, fmt.Errorf("read latest projects release: GitHub returned an empty tag")
 	}

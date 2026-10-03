@@ -74,7 +74,7 @@ func sortedFieldNames(fields map[string]string) []string {
 	return names
 }
 
-func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer, runner githubcli.Runner) int {
+func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer, client githubcli.Client) int {
 	flags := flag.NewFlagSet("issue create", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "repository root containing .projects/project.md")
@@ -200,7 +200,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		progress(stderr, *quiet, "[1/%d] Skipping duplicate inspection by explicit request", stageCount)
 	} else {
 		progress(stderr, *quiet, "[1/%d] Inspecting %s for exact-title duplicates", stageCount, targetRepo)
-		check, err := githubcli.FindIssuesByExactTitle(ctx, runner, targetRepo, *title)
+		check, err := githubcli.FindIssuesByExactTitle(ctx, client, targetRepo, *title)
 		if err != nil {
 			return operationError(stderr, "inspect equivalent issues", err)
 		}
@@ -213,7 +213,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 		return operationError(stderr, "inspect equivalent issues", fmt.Errorf("exact-title issue already exists: %s; edit that issue or pass --allow-duplicate deliberately", strings.Join(locations, ", ")))
 	}
-	if err := githubcli.ResolveSelfAssignees(ctx, runner, (*[]string)(&assignees)); err != nil {
+	if err := githubcli.ResolveSelfAssignees(ctx, client, (*[]string)(&assignees)); err != nil {
 		return operationError(stderr, "resolve assignees", err)
 	}
 
@@ -308,7 +308,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 
 	var preparedProject *githubcli.PreparedProjectItemMutation
 	if hasProject {
-		preparedProject, err = githubcli.PrepareProjectItemMutation(ctx, runner, githubcli.MutateProjectItemInput{
+		preparedProject, err = githubcli.PrepareProjectItemMutation(ctx, client, githubcli.MutateProjectItemInput{
 			Project:      resolvedProject,
 			Repo:         targetRepo,
 			Priority:     *priority,
@@ -322,7 +322,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 	}
 	progress(stderr, *quiet, "[2/%d] Creating issue in %s", stageCount, targetRepo)
-	created, err := githubcli.CreateIssue(ctx, runner, githubcli.CreateIssueInput{
+	created, err := githubcli.CreateIssue(ctx, client, githubcli.CreateIssueInput{
 		Repo:      targetRepo,
 		Title:     *title,
 		Body:      bodyContent,
@@ -338,7 +338,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 	var projectResult *githubcli.MutateProjectItemResult
 	if hasProject {
 		progress(stderr, *quiet, "[4/4] Adding issue to Project %s/%d and setting fields", resolvedProject.Owner, resolvedProject.Number)
-		mutRes, err := preparedProject.Apply(ctx, runner, created.Number, created.URL)
+		mutRes, err := preparedProject.Apply(ctx, client, created.Number, created.URL)
 		if err != nil {
 			return operationError(stderr, "add issue to Project and update fields", fmt.Errorf("issue was created at %s; do not retry creation: %w", created.URL, err))
 		}
@@ -384,7 +384,7 @@ func printDuplicateCheckGaps(stdout io.Writer, check *githubcli.ExactTitleCheck)
 	}
 }
 
-func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, runner githubcli.Runner) int {
+func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, client githubcli.Client) int {
 	flags := flag.NewFlagSet("issue edit", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "repository root containing .projects/project.md")
@@ -474,7 +474,7 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		return usageError(stderr, err.Error())
 	}
 
-	if err := githubcli.ResolveSelfAssignees(ctx, runner, (*[]string)(&addAssignees), (*[]string)(&removeAssignees)); err != nil {
+	if err := githubcli.ResolveSelfAssignees(ctx, client, (*[]string)(&addAssignees), (*[]string)(&removeAssignees)); err != nil {
 		return operationError(stderr, "resolve assignees", err)
 	}
 
@@ -506,7 +506,7 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 
 	if !*apply {
 		progress(stderr, *quiet, "[1/2] Inspecting current issue %s#%d", targetRepo, *issueNumber)
-		current, err := githubcli.ViewIssue(ctx, runner, targetRepo, *issueNumber)
+		current, err := githubcli.ViewIssue(ctx, client, targetRepo, *issueNumber)
 		if err != nil {
 			return operationError(stderr, "inspect issue", err)
 		}
@@ -571,7 +571,7 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 
 	progress(stderr, *quiet, "[1/3] Inspecting current issue %s#%d", targetRepo, *issueNumber)
 	progress(stderr, *quiet, "[2/3] Applying requested edits to %s#%d", targetRepo, *issueNumber)
-	edited, err := githubcli.EditIssue(ctx, runner, githubcli.EditIssueInput{
+	edited, err := githubcli.EditIssue(ctx, client, githubcli.EditIssueInput{
 		Repo:            targetRepo,
 		Number:          *issueNumber,
 		Title:           newTitle,
@@ -610,7 +610,7 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	return 0
 }
 
-func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Writer, runner githubcli.Runner) int {
+func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Writer, client githubcli.Client) int {
 	flags := flag.NewFlagSet("project item-add", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "repository root containing .projects/project.md")
@@ -679,7 +679,7 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 
 	if !*apply {
 		progress(stderr, *quiet, "[1/2] Inspecting exact Project membership for %s", target.URL)
-		current, err := githubcli.QueryProjectItem(ctx, runner, project, target)
+		current, err := githubcli.QueryProjectItem(ctx, client, project, target)
 		if err != nil {
 			return operationError(stderr, "inspect Project membership", err)
 		}
@@ -717,7 +717,7 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 
 	progress(stderr, *quiet, "[1/3] Inspecting exact Project membership")
 	progress(stderr, *quiet, "[2/3] Applying the membership addition if required")
-	membership, err := githubcli.EnsureProjectItem(ctx, runner, project, target)
+	membership, err := githubcli.EnsureProjectItem(ctx, client, project, target)
 	item, added := membership.Item, membership.Added
 	if err != nil {
 		return operationError(stderr, "ensure Project membership", err)
@@ -750,7 +750,7 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 	return 0
 }
 
-func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Writer, runner githubcli.Runner) int {
+func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Writer, client githubcli.Client) int {
 	flags := flag.NewFlagSet("project item-edit", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "repository root containing .projects/project.md")
@@ -852,7 +852,7 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 
 	if !*apply {
 		progress(stderr, *quiet, "[1/2] Inspecting live schema, exact membership, and current fields")
-		current, err := githubcli.InspectProjectItemMutation(ctx, runner, githubcli.MutateProjectItemInput{
+		current, err := githubcli.InspectProjectItemMutation(ctx, client, githubcli.MutateProjectItemInput{
 			Project:     project,
 			Repo:        targetRepo,
 			URL:         target.URL,
@@ -924,7 +924,7 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 
 	progress(stderr, *quiet, "[1/3] Resolving Project schema and item identity")
 	progress(stderr, *quiet, "[2/3] Applying field updates to Project item")
-	result, err := githubcli.MutateProjectItem(ctx, runner, githubcli.MutateProjectItemInput{
+	result, err := githubcli.MutateProjectItem(ctx, client, githubcli.MutateProjectItemInput{
 		Project:     project,
 		Repo:        targetRepo,
 		IssueNumber: 0,
