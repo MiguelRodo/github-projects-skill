@@ -158,11 +158,12 @@ func CreateIssue(ctx context.Context, runner Runner, input CreateIssueInput) (Is
 		return IssueView{}, errors.New("issue creation requires a non-empty title")
 	}
 	input.Title = strings.TrimSpace(input.Title)
-
-	args := []string{"issue", "create", "--repo", input.Repo, "--title", input.Title}
-	if input.Body != "" {
-		args = append(args, "--body", input.Body)
+	if err := ResolveSelfAssignees(ctx, runner, &input.Assignees); err != nil {
+		return IssueView{}, err
 	}
+
+	// gh refuses a non-interactive create without --body, so always pass it.
+	args := []string{"issue", "create", "--repo", input.Repo, "--title", input.Title, "--body", input.Body}
 	for _, l := range input.Labels {
 		if strings.TrimSpace(l) != "" {
 			args = append(args, "--label", strings.TrimSpace(l))
@@ -182,21 +183,23 @@ func CreateIssue(ctx context.Context, runner Runner, input CreateIssueInput) (Is
 		return IssueView{}, fmt.Errorf("create issue in %s: %w", input.Repo, err)
 	}
 
+	// gh issue create succeeded, so every later failure must tell the caller
+	// not to retry and risk a duplicate issue.
 	target, err := ResolveGitHubItemTarget(input.Repo, 0, strings.TrimSpace(string(output)))
 	if err != nil {
-		return IssueView{}, fmt.Errorf("could not resolve created issue identity from gh output %q: %w", string(output), err)
+		return IssueView{}, fmt.Errorf("issue was created but its identity could not be resolved from gh output %q; do not retry creation: %w", string(output), err)
 	}
 	if target.Kind != "issues" {
-		return IssueView{}, fmt.Errorf("created issue command returned a non-issue URL: %s", target.URL)
+		return IssueView{}, fmt.Errorf("issue was created but gh returned a non-issue URL %s; do not retry creation", target.URL)
 	}
 
 	view, err := ViewIssue(ctx, runner, input.Repo, target.Number)
 	if err != nil {
-		return IssueView{}, fmt.Errorf("read back created issue %s#%d: %w", input.Repo, target.Number, err)
+		return IssueView{}, fmt.Errorf("issue was created at %s; do not retry creation: read back created issue %s#%d: %w", target.URL, input.Repo, target.Number, err)
 	}
 
 	if err := verifyCreatedIssue(view, input); err != nil {
-		return IssueView{}, err
+		return IssueView{}, fmt.Errorf("issue was created at %s; do not retry creation: %w", target.URL, err)
 	}
 
 	return view, nil
@@ -209,6 +212,10 @@ func EditIssue(ctx context.Context, runner Runner, input EditIssueInput) (IssueV
 	}
 	if input.Number <= 0 {
 		return IssueView{}, errors.New("issue edit requires a positive issue number")
+	}
+	// Resolve @me first so an add/remove overlap through the alias is caught.
+	if err := ResolveSelfAssignees(ctx, runner, &input.AddAssignees, &input.RemoveAssignees); err != nil {
+		return IssueView{}, err
 	}
 	if err := validateIssueEditInput(input); err != nil {
 		return IssueView{}, err
@@ -338,6 +345,41 @@ func EditIssue(ctx context.Context, runner Runner, input EditIssueInput) (IssueV
 	}
 	after.AutomationSideEffects = projectStatusAutomation(before.ProjectItems, after.ProjectItems)
 	return after, nil
+}
+
+// SelfAssignee is gh's alias for the authenticated user.
+const SelfAssignee = "@me"
+
+// ResolveSelfAssignees replaces gh's @me alias in each list with the
+// authenticated user's login, so plans and readback compare real logins. It
+// calls gh at most once, and only when the alias is present. Each list that
+// contains the alias is replaced with a new slice.
+func ResolveSelfAssignees(ctx context.Context, runner Runner, lists ...*[]string) error {
+	login := ""
+	for _, list := range lists {
+		if list == nil || !containsName(*list, SelfAssignee) {
+			continue
+		}
+		if login == "" {
+			output, err := runner.Run(ctx, "api", "user", "--jq", ".login")
+			if err != nil {
+				return fmt.Errorf("resolve %s to the authenticated login: %w", SelfAssignee, err)
+			}
+			login = strings.TrimSpace(string(output))
+			if login == "" || strings.ContainsAny(login, " \t\n") {
+				return fmt.Errorf("resolve %s to the authenticated login: unexpected gh output %q", SelfAssignee, string(output))
+			}
+		}
+		resolved := make([]string, 0, len(*list))
+		for _, value := range *list {
+			if strings.EqualFold(strings.TrimSpace(value), SelfAssignee) {
+				value = login
+			}
+			resolved = append(resolved, value)
+		}
+		*list = resolved
+	}
+	return nil
 }
 
 func verifyCreatedIssue(view IssueView, input CreateIssueInput) error {

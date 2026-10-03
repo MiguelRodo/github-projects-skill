@@ -3,6 +3,7 @@ package githubcli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -93,7 +94,7 @@ func TestCreateIssueRejectsEmptyTitle(t *testing.T) {
 func TestCreateIssueRejectsIncompleteReadback(t *testing.T) {
 	fake := &fakeRunner{t: t, responses: []fakeResponse{
 		{
-			args:   []string{"issue", "create", "--repo", "owner/repo", "--title", "Title", "--label", "bug"},
+			args:   []string{"issue", "create", "--repo", "owner/repo", "--title", "Title", "--body", "", "--label", "bug"},
 			output: []byte("https://github.com/owner/repo/issues/42\n"),
 		},
 		{
@@ -102,8 +103,9 @@ func TestCreateIssueRejectsIncompleteReadback(t *testing.T) {
 		},
 	}}
 	_, err := CreateIssue(context.Background(), fake, CreateIssueInput{Repo: "owner/repo", Title: "Title", Labels: []string{"bug"}})
-	if err == nil || !strings.Contains(err.Error(), "labels readback disagrees") {
-		t.Fatalf("error = %v, want label readback disagreement", err)
+	if err == nil || !strings.Contains(err.Error(), "labels readback disagrees") ||
+		!strings.Contains(err.Error(), "issue was created at https://github.com/owner/repo/issues/42; do not retry creation") {
+		t.Fatalf("error = %v, want label readback disagreement that forbids retrying creation", err)
 	}
 }
 
@@ -316,5 +318,94 @@ func TestEditIssueStillRejectsProjectMembershipChangeOnClose(t *testing.T) {
 	_, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state})
 	if err == nil || !strings.Contains(err.Error(), "Project membership") {
 		t.Fatalf("error = %v, want membership preservation failure", err)
+	}
+}
+
+func TestCreateIssueAlwaysPassesBodyEvenWhenEmpty(t *testing.T) {
+	// gh rejects a non-interactive issue create without --body.
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{
+			args:   []string{"issue", "create", "--repo", "owner/repo", "--title", "Title", "--body", ""},
+			output: []byte("https://github.com/owner/repo/issues/42\n"),
+		},
+		{
+			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields},
+			output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`),
+		},
+	}}
+	if _, err := CreateIssue(context.Background(), fake, CreateIssueInput{Repo: "owner/repo", Title: "Title"}); err != nil {
+		t.Fatalf("CreateIssue error = %v", err)
+	}
+}
+
+func TestCreateIssueReadbackFailureForbidsRetry(t *testing.T) {
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{
+			args:   []string{"issue", "create", "--repo", "owner/repo", "--title", "Title", "--body", "Body"},
+			output: []byte("https://github.com/owner/repo/issues/42\n"),
+		},
+		{
+			args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields},
+			err:  errors.New("HTTP 502"),
+		},
+	}}
+	_, err := CreateIssue(context.Background(), fake, CreateIssueInput{Repo: "owner/repo", Title: "Title", Body: "Body"})
+	if err == nil || !strings.Contains(err.Error(), "issue was created at https://github.com/owner/repo/issues/42; do not retry creation") ||
+		!strings.Contains(err.Error(), "HTTP 502") {
+		t.Fatalf("error = %v, want created-issue retry warning", err)
+	}
+}
+
+func TestCreateIssueResolvesSelfAssigneeBeforeVerification(t *testing.T) {
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{
+			args:   []string{"api", "user", "--jq", ".login"},
+			output: []byte("octocat\n"),
+		},
+		{
+			args:   []string{"issue", "create", "--repo", "owner/repo", "--title", "Title", "--body", "", "--assignee", "octocat", "--assignee", "monalisa"},
+			output: []byte("https://github.com/owner/repo/issues/42\n"),
+		},
+		{
+			args:   []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields},
+			output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"octocat"},{"login":"monalisa"}]}`),
+		},
+	}}
+	if _, err := CreateIssue(context.Background(), fake, CreateIssueInput{Repo: "owner/repo", Title: "Title", Assignees: []string{"@me", "monalisa"}}); err != nil {
+		t.Fatalf("CreateIssue error = %v", err)
+	}
+}
+
+func TestEditIssueResolvesSelfAssigneeOnceForAddAndRemove(t *testing.T) {
+	view := []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"api", "user", "--jq", ".login"}, output: []byte("octocat\n")},
+		{args: view, output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"octocat"}]}`)},
+		{
+			args:   []string{"issue", "edit", "42", "--repo", "owner/repo", "--add-assignee", "monalisa", "--remove-assignee", "octocat"},
+			output: []byte("https://github.com/owner/repo/issues/42\n"),
+		},
+		{args: view, output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"monalisa"}]}`)},
+	}}
+	if _, err := EditIssue(context.Background(), fake, EditIssueInput{
+		Repo:            "owner/repo",
+		Number:          42,
+		AddAssignees:    []string{"monalisa"},
+		RemoveAssignees: []string{"@me"},
+	}); err != nil {
+		t.Fatalf("EditIssue error = %v", err)
+	}
+
+	fake = &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"api", "user", "--jq", ".login"}, output: []byte("octocat\n")},
+		{args: view, output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[]}`)},
+		{
+			args:   []string{"issue", "edit", "42", "--repo", "owner/repo", "--add-assignee", "octocat"},
+			output: []byte("https://github.com/owner/repo/issues/42\n"),
+		},
+		{args: view, output: []byte(`{"number":42,"title":"Title","body":"","state":"OPEN","url":"https://github.com/owner/repo/issues/42","assignees":[{"login":"octocat"}]}`)},
+	}}
+	if _, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, AddAssignees: []string{"@me"}}); err != nil {
+		t.Fatalf("EditIssue add @me error = %v", err)
 	}
 }
