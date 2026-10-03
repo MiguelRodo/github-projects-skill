@@ -18,15 +18,19 @@ func cliProjectItemQueryArgs() []string {
 		"-f", "owner=octo-org",
 		"-f", "repo=example",
 		"-F", "number=55",
+		"-f", "projectOwner=octo-org",
+		"-F", "projectNumber=12",
 	}
 }
 
+const cliProjectOwnerJSON = `"projectOwner":{"__typename":"Organization","login":"octo-org","projectV2":{"id":"PVT_12","number":12,"title":"Example planning"}}`
+
 func cliProjectItemQueryJSON(itemID string) string {
-	return fmt.Sprintf(`{"data":{"repository":{"target":{"url":"https://github.com/octo-org/example/issues/55","projectItems":{"nodes":[{"id":%q,"isArchived":false,"project":{"id":"PVT_12","number":12,"title":"Example planning","owner":{"login":"octo-org"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false}}}],"pageInfo":{"hasNextPage":false}}}}}}`, itemID)
+	return fmt.Sprintf(`{"data":{`+cliProjectOwnerJSON+`,"repository":{"target":{"id":"I_55","url":"https://github.com/octo-org/example/issues/55","projectItems":{"nodes":[{"id":%q,"isArchived":false,"project":{"id":"PVT_12","number":12,"title":"Example planning","owner":{"login":"octo-org"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false}}}],"pageInfo":{"hasNextPage":false}}}}}}`, itemID)
 }
 
 func cliMissingProjectItemQueryJSON() string {
-	return `{"data":{"repository":{"target":{"url":"https://github.com/octo-org/example/issues/55","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`
+	return `{"data":{` + cliProjectOwnerJSON + `,"repository":{"target":{"id":"I_55","url":"https://github.com/octo-org/example/issues/55","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`
 }
 
 func exactTitleScanArgs(repo, title string) []string {
@@ -228,8 +232,8 @@ func TestProjectItemAddApply(t *testing.T) {
 			output: cliMissingProjectItemQueryJSON(),
 		},
 		{
-			args:   []string{"project", "item-add", "12", "--owner", "octo-org", "--url", "https://github.com/octo-org/example/issues/55", "--format", "json"},
-			output: `{"id": "PVTI_ITEM_55"}`,
+			args:   []string{"api", "graphql", "-f", "query=mutation($projectId: ID!, $contentId: ID!) {\n  addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) { item { id } }\n}", "-f", "projectId=PVT_12", "-f", "contentId=I_55"},
+			output: `{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_ITEM_55"}}}}`,
 		},
 		{
 			args:   cliProjectItemQueryArgs(),
@@ -338,6 +342,26 @@ func TestDispatcherIssueCreatePlanIncludesRoutingLabel(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"project:alpha"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestProjectItemAddApplyUnarchivesArchivedMember(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	archived := strings.Replace(cliProjectItemQueryJSON("PVTI_ITEM_55"), `"isArchived":false`, `"isArchived":true`, 1)
+	fake := &runner{t: t, responses: []response{
+		{args: cliProjectItemQueryArgs(), output: archived},
+		{
+			args:   []string{"api", "graphql", "-f", "query=mutation($projectId: ID!, $itemId: ID!) {\n  unarchiveProjectV2Item(input: {projectId: $projectId, itemId: $itemId}) { item { id } }\n}", "-f", "projectId=PVT_12", "-f", "itemId=PVTI_ITEM_55"},
+			output: `{"data":{"unarchiveProjectV2Item":{"item":{"id":"PVTI_ITEM_55"}}}}`,
+		},
+		{args: cliProjectItemQueryArgs(), output: cliProjectItemQueryJSON("PVTI_ITEM_55")},
+	}}
+	exitCode := Run(context.Background(), []string{"project", "item-add", "--root", fixture(t, "single"), "--issue", "55", "--apply", "--json"}, &stdout, &stderr, fake)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"unarchived": true`) || !strings.Contains(stdout.String(), `"applied": true`) {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
 }

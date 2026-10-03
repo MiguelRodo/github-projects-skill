@@ -659,6 +659,7 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 		}
 		if current != nil {
 			plan["current"] = current
+			plan["wouldUnarchive"] = current.Archived
 		}
 		if *jsonOutput {
 			if err := writeJSON(stdout, plan); err != nil {
@@ -668,7 +669,9 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 		}
 		fmt.Fprintf(stdout, "Planned addition to Project %s/%d (%s):\n", project.Owner, project.Number, project.Title)
 		fmt.Fprintf(stdout, "  URL: %s\n", target.URL)
-		if current != nil {
+		if current != nil && current.Archived {
+			fmt.Fprintf(stdout, "  Change: unarchive item %s (a member, but archived and hidden from views)\n", current.ItemID)
+		} else if current != nil {
 			fmt.Fprintf(stdout, "  No change: already a member as item %s\n", current.ItemID)
 		} else {
 			fmt.Fprintln(stdout, "  Change: add Project membership")
@@ -679,7 +682,8 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 
 	progress(stderr, *quiet, "[1/3] Inspecting exact Project membership")
 	progress(stderr, *quiet, "[2/3] Applying the membership addition if required")
-	item, added, err := githubcli.EnsureProjectItem(ctx, runner, project, target)
+	membership, err := githubcli.EnsureProjectItem(ctx, runner, project, target)
+	item, added := membership.Item, membership.Added
 	if err != nil {
 		return operationError(stderr, "ensure Project membership", err)
 	}
@@ -688,8 +692,9 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 	if *jsonOutput {
 		result := map[string]any{
 			"action":        "project_item_add",
-			"applied":       added,
+			"applied":       added || membership.Unarchived,
 			"alreadyMember": !added,
+			"unarchived":    membership.Unarchived,
 			"itemId":        item.ItemID,
 			"url":           target.URL,
 			"project":       compactProject(project),
@@ -700,7 +705,9 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 		return 0
 	}
 
-	if added {
+	if membership.Unarchived {
+		fmt.Fprintf(stdout, "Unarchived %s in Project %s/%d (item %s); it was a hidden archived member\n", target.URL, project.Owner, project.Number, item.ItemID)
+	} else if added {
 		fmt.Fprintf(stdout, "Added %s to Project %s/%d (item %s)\n", target.URL, project.Owner, project.Number, item.ItemID)
 	} else {
 		fmt.Fprintf(stdout, "%s was already in Project %s/%d (item %s); no mutation was needed\n", target.URL, project.Owner, project.Number, item.ItemID)
@@ -903,6 +910,9 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 	}
 
 	fmt.Fprintf(stdout, "Updated Project item %s on Project %s/%d:\n", result.ItemID, project.Owner, project.Number)
+	if result.Archived {
+		fmt.Fprintln(stdout, "  Note: this item is archived and hidden from Project views; run project item-add to restore it")
+	}
 	for _, name := range sortedFieldNames(result.Fields) {
 		fmt.Fprintf(stdout, "  %s: %s\n", name, result.Fields[name])
 	}
