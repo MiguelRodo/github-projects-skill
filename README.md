@@ -126,16 +126,6 @@ In the Codex environment:
 
 Environment variables remain available while the agent works, whereas setup-only secrets do not. The [official Codex environment guide](https://developers.openai.com/codex/environments/cloud-environment) explains these settings.
 
-## 5. Give it a useful first request
-
-After the chat interface or execution-capable agent is ready, the initializer gives you one proposal-only request tailored to a resolved Project.
-
-The request asks the surface to inspect existing issues, propose how to organise them using the standard Project fields and useful native parent/sub-issue relationships, repair generic root or category-wrapper issues, choose checkboxes versus sub-issues based on whether work needs independent planning state, and suggest optional sub-project labels only where they add value. It explicitly forbids live changes until you approve the proposal.
-
-After approval, an execution-capable agent can apply and verify the proposal.
-A chat that cannot complete a change uses the configured local queue when
-available, or a command block with independent readback.
-
 ## Add another GitHub Project
 
 If the repository already has a dispatcher (`Mode | dispatcher` in

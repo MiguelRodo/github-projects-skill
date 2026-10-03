@@ -123,19 +123,6 @@ api.github.com
 
 See the [official Codex environment guide](https://developers.openai.com/codex/environments/cloud-environment) for how environment variables, setup and agent internet access work.
 
-## 5. Start with the current issues
-
-The initializer offers one shared, proposal-only first request after the chat and execution-capable agent instructions. For a resolved Project, the request can:
-
-- organise existing issues using the standard Project fields and useful native parent/sub-issue relationships;
-- repair generic project-root, category-wrapper or standing issues where the existing structure obscures real outcomes;
-- use body checkboxes for small local steps and sub-issues when work needs independent planning state;
-- suggest optional sub-project labels only where they add value.
-
-It does not authorise changes until you approve the proposal. After approval,
-an execution-capable agent can apply and verify it; a chat that cannot complete
-a change uses the configured queue, or minimal commands with readback.
-
 ## Add another Project
 
 For an existing dispatcher, rerun
