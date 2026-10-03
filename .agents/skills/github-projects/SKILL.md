@@ -2,9 +2,10 @@
 description: Administer GitHub issues and Projects from short outcome requests. Use for Project-aware inspection, prioritisation, creation, updates, assignment, routing, hierarchy, field changes, or when a surface must hand unsupported mutations to the local pj administration queue.
 metadata:
     github-path: skills/github-projects
+    github-pinned: main
     github-ref: refs/heads/main
     github-repo: https://github.com/MiguelRodo/github-projects-skill
-    github-tree-sha: 5ae534caba0224987735235bec8a818146e6c63b
+    github-tree-sha: f46e26a86116e148667d5f85d91f28f9286713de
 name: github-projects
 ---
 # GitHub Project administration

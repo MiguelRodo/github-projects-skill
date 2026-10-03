@@ -1,0 +1,45 @@
+# GitHub Project configuration
+
+| Key | Value |
+| --- | --- |
+| Contract version | 1 |
+| Mode | single |
+| Issue repository | octo-org/example |
+| Project owner | octo-org |
+| Owner type | organization |
+| Project number | 12 |
+| Project title | Example planning |
+| Routing | linked repository |
+| Privacy | repository |
+| Issue write-up style | direct |
+
+## Field locations
+
+| Common dimension | Provider location | Provider field |
+| --- | --- | --- |
+| Class | organization issue type | Issue Type |
+| Priority | organization issue field | Priority |
+| Status | project field | Status |
+| Workstream | project field | Workstream |
+| Due date | project field | Target date |
+
+Illustrative example only, not live configuration:
+
+```markdown
+## Priority mapping
+
+| Common value | Provider value |
+| --- | --- |
+| P0 | Urgent |
+| P1 | High |
+| P2 | Medium |
+| P3 | Low |
+```
+
+## Priority mapping
+
+Live priority mapping is not configured yet.
+
+## Governance
+
+- Use only synthetic test data.
