@@ -322,6 +322,28 @@ JSON safe to pipe into another tool:
 projects project item-list --json >project-items.json
 ```
 
+### JSON results
+
+The mutating commands report their outcome with three keys that are independent
+of the payload:
+
+- `action` names the operation (`create_issue`, `edit_issue`,
+  `project_item_add` or `project_item_edit`).
+- `applied` is `true` exactly when the command ran with `--apply`; a plan
+  reports `applied: false`.
+- `changed` is `true` only when GitHub state was actually modified by this run.
+  An `--apply` run that verified nothing needed doing reports `applied: true`
+  with `changed: false`, and its text output says `No change needed`. A plan
+  omits `changed` for `issue edit` and `project item-edit`, which cannot know
+  whether applying would change anything; `project item-add`'s plan sets it to
+  `wouldAdd || wouldUnarchive`.
+
+`project item-edit --apply --json` nests its verified result under
+`projectItem` (matching `issue create`) beside `action`, `applied` and
+`changed`. `project item-add`'s `applied` always means "ran with `--apply`";
+use `changed` to tell whether it added or unarchived the item.
+Plans of all four commands report `applied: false`; earlier versions used the key `apply` for this.
+
 Usage errors exit with status 2. These include a Project selector that names
 no configured route, a selector used with a single-Project contract, and a
 dispatcher command without a selector; such failures list the configured

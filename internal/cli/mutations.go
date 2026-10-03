@@ -273,7 +273,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		progress(stderr, *quiet, "[%d/%d] Planning issue creation for %s", stageCount, stageCount, targetRepo)
 		plan := map[string]any{
 			"action":         "create_issue",
-			"apply":          false,
+			"applied":        false,
 			"repository":     targetRepo,
 			"title":          *title,
 			"allowDuplicate": *allowDuplicate,
@@ -386,6 +386,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		result := map[string]any{
 			"action":  "create_issue",
 			"applied": true,
+			"changed": true,
 			"issue":   created,
 		}
 		if projectResult != nil {
@@ -551,7 +552,7 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 
 		plan := map[string]any{
 			"action":      "edit_issue",
-			"apply":       false,
+			"applied":     false,
 			"repository":  targetRepo,
 			"issueNumber": *issueNumber,
 			"current":     current,
@@ -630,6 +631,7 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		result := map[string]any{
 			"action":  "edit_issue",
 			"applied": true,
+			"changed": edited.Changed,
 			"issue":   edited,
 		}
 		if err := writeJSON(stdout, result); err != nil {
@@ -638,7 +640,11 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		return 0
 	}
 
-	fmt.Fprintf(stdout, "Updated issue %s#%d: %s\n", targetRepo, edited.Number, edited.URL)
+	if !edited.Changed {
+		fmt.Fprintf(stdout, "No change needed for issue %s#%d: %s\n", targetRepo, edited.Number, edited.URL)
+	} else {
+		fmt.Fprintf(stdout, "Updated issue %s#%d: %s\n", targetRepo, edited.Number, edited.URL)
+	}
 	fmt.Fprintf(stdout, "Title: %s\nState: %s\n", edited.Title, edited.State)
 	if edited.StateReason != "" {
 		fmt.Fprintf(stdout, "State reason: %s\n", edited.StateReason)
@@ -723,11 +729,12 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 		progress(stderr, *quiet, "[2/2] Planning item addition to Project %s/%d (%s)", project.Owner, project.Number, project.Title)
 		plan := map[string]any{
 			"action":        "project_item_add",
-			"apply":         false,
+			"applied":       false,
 			"project":       compactProject(project),
 			"url":           target.URL,
 			"alreadyMember": current != nil,
 			"wouldAdd":      current == nil,
+			"changed":       current == nil || current.Archived,
 		}
 		if current != nil {
 			plan["current"] = current
@@ -764,7 +771,8 @@ func runProjectItemAdd(ctx context.Context, args []string, stdout, stderr io.Wri
 	if *jsonOutput {
 		result := map[string]any{
 			"action":        "project_item_add",
-			"applied":       added || membership.Unarchived,
+			"applied":       true,
+			"changed":       added || membership.Unarchived,
 			"alreadyMember": !added,
 			"unarchived":    membership.Unarchived,
 			"itemId":        item.ItemID,
@@ -905,7 +913,7 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 		progress(stderr, *quiet, "[2/2] Planning field updates on Project %s/%d (%s)", project.Owner, project.Number, project.Title)
 		plan := map[string]any{
 			"action":  "project_item_edit",
-			"apply":   false,
+			"applied": false,
 			"project": compactProject(project),
 			"url":     target.URL,
 			"current": current,
@@ -978,13 +986,23 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 	progress(stderr, *quiet, "[3/3] Independently verified requested values and other scalar Project fields")
 
 	if *jsonOutput {
-		if err := writeJSON(stdout, result); err != nil {
+		wrapped := map[string]any{
+			"action":      "project_item_edit",
+			"applied":     true,
+			"changed":     result.Changed,
+			"projectItem": result,
+		}
+		if err := writeJSON(stdout, wrapped); err != nil {
 			return operationError(stderr, "write result JSON", err)
 		}
 		return 0
 	}
 
-	fmt.Fprintf(stdout, "Updated Project item %s on Project %s/%d:\n", result.ItemID, project.Owner, project.Number)
+	if result.Changed {
+		fmt.Fprintf(stdout, "Updated Project item %s on Project %s/%d:\n", result.ItemID, project.Owner, project.Number)
+	} else {
+		fmt.Fprintf(stdout, "No change needed for Project item %s on Project %s/%d:\n", result.ItemID, project.Owner, project.Number)
+	}
 	if result.Archived {
 		fmt.Fprintln(stdout, "  Note: this item is archived and hidden from Project views; run project item-add to restore it")
 	}

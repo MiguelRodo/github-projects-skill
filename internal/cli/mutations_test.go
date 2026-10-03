@@ -108,7 +108,7 @@ func TestIssueCreatePlanDefault(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"action": "create_issue"`) ||
-		!strings.Contains(stdout.String(), `"apply": false`) ||
+		!strings.Contains(stdout.String(), `"applied": false`) ||
 		!strings.Contains(stdout.String(), `"title": "Sample Plan Issue"`) ||
 		!strings.Contains(stdout.String(), `"method": "search+recent"`) ||
 		!strings.Contains(stdout.String(), `"complete": true`) {
@@ -200,6 +200,7 @@ func TestIssueCreateApply(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"applied": true`) ||
+		!strings.Contains(stdout.String(), `"changed": true`) ||
 		!strings.Contains(stdout.String(), `"number": 55`) ||
 		!strings.Contains(stdout.String(), `"duplicateCheck"`) {
 		t.Fatalf("stdout = %s", stdout.String())
@@ -230,7 +231,7 @@ func TestIssueEditPlan(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"action": "edit_issue"`) ||
-		!strings.Contains(stdout.String(), `"apply": false`) ||
+		!strings.Contains(stdout.String(), `"applied": false`) ||
 		!strings.Contains(stdout.String(), `"New Title"`) {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
@@ -261,6 +262,7 @@ func TestIssueEditApply(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"applied": true`) ||
+		!strings.Contains(stdout.String(), `"changed": true`) ||
 		!strings.Contains(stdout.String(), `"New Title"`) {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
@@ -285,7 +287,8 @@ func TestProjectItemAddPlan(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"action": "project_item_add"`) ||
-		!strings.Contains(stdout.String(), `"apply": false`) ||
+		!strings.Contains(stdout.String(), `"applied": false`) ||
+		!strings.Contains(stdout.String(), `"changed": true`) ||
 		!strings.Contains(stdout.String(), "issues/55") {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
@@ -322,6 +325,7 @@ func TestProjectItemAddApply(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"applied": true`) ||
+		!strings.Contains(stdout.String(), `"changed": true`) ||
 		!strings.Contains(stdout.String(), "PVTI_ITEM_55") {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
@@ -347,7 +351,7 @@ func TestProjectItemEditPlan(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"action": "project_item_edit"`) ||
-		!strings.Contains(stdout.String(), `"apply": false`) ||
+		!strings.Contains(stdout.String(), `"applied": false`) ||
 		!strings.Contains(stdout.String(), `"priority": "High"`) {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
@@ -712,5 +716,86 @@ func TestProjectItemEditPriorityAndStatusUsesFourRequests(t *testing.T) {
 	code := Run(context.Background(), []string{"project", "item-edit", "--root", localFieldsFixture(t), "--issue", "55", "--priority", "P1", "--status", "Done", "--apply"}, &stdout, &stderr, client)
 	if code != 0 || client.index != 4 {
 		t.Fatalf("exit=%d requests=%d stderr=%s", code, client.index, stderr.String())
+	}
+}
+
+func TestIssueEditApplyNoOpReportsNoChange(t *testing.T) {
+	view := request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}}
+	body := string(issueFixture([]byte(`{"number":55,"title":"Same Title","body":"Body","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`)))
+
+	var stdout, stderr bytes.Buffer
+	fake := &fakeClient{t: t, responses: []response{{request: view, output: body}}}
+	exitCode := Run(context.Background(), []string{"issue", "edit", "--root", fixture(t, "single"), "--issue", "55", "--title", "Same Title", "--apply", "--json"}, &stdout, &stderr, fake)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"applied": true`) || !strings.Contains(stdout.String(), `"changed": false`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+	if fake.index != 1 {
+		t.Fatalf("GitHub requests = %d, want 1 (no write on a no-op)", fake.index)
+	}
+
+	var textOut, textErr bytes.Buffer
+	fake = &fakeClient{t: t, responses: []response{{request: view, output: body}}}
+	exitCode = Run(context.Background(), []string{"issue", "edit", "--root", fixture(t, "single"), "--issue", "55", "--title", "Same Title", "--apply"}, &textOut, &textErr, fake)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, textErr.String())
+	}
+	if !strings.Contains(textOut.String(), "No change needed for issue octo-org/example#55: https://github.com/octo-org/example/issues/55") {
+		t.Fatalf("stdout = %s", textOut.String())
+	}
+	if strings.Contains(textOut.String(), "Updated issue") {
+		t.Fatalf("stdout = %s, want no 'Updated issue'", textOut.String())
+	}
+}
+
+func TestProjectItemAddApplyAlreadyMember(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	fake := &fakeClient{t: t, responses: []response{{request: cliProjectItemRequest(), output: cliProjectItemQueryJSON("PVTI_ITEM_55")}}}
+	exitCode := Run(context.Background(), []string{"project", "item-add", "--root", fixture(t, "single"), "--issue", "55", "--apply", "--json"}, &stdout, &stderr, fake)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"applied": true`) ||
+		!strings.Contains(stdout.String(), `"changed": false`) ||
+		!strings.Contains(stdout.String(), `"alreadyMember": true`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestProjectItemEditApplyNoOpReportsNoChange(t *testing.T) {
+	responses := []response{
+		{request: request{query: githubcli.ProjectSchemaQuery(), variables: map[string]any{"login": "octo-org", "number": 12}}, output: localFieldsSchema()},
+		{request: cliProjectItemRequest(), output: localFieldsItem("High", "Task", "Done")},
+	}
+	args := []string{"project", "item-edit", "--root", localFieldsFixture(t), "--issue", "55", "--priority", "P1", "--status", "Done", "--apply", "--json"}
+
+	var stdout, stderr bytes.Buffer
+	client := &fakeClient{t: t, responses: responses}
+	code := Run(context.Background(), args, &stdout, &stderr, client)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if client.index != 2 {
+		t.Fatalf("GitHub requests = %d, want 2 (no write on a no-op); stderr=%s", client.index, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"action": "project_item_edit"`) ||
+		!strings.Contains(stdout.String(), `"applied": true`) ||
+		!strings.Contains(stdout.String(), `"changed": false`) ||
+		!strings.Contains(stdout.String(), `"projectItem"`) ||
+		!strings.Contains(stdout.String(), `"itemId": "PVTI_ITEM_55"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+
+	var textOut, textErr bytes.Buffer
+	client = &fakeClient{t: t, responses: responses}
+	textArgs := []string{"project", "item-edit", "--root", localFieldsFixture(t), "--issue", "55", "--priority", "P1", "--status", "Done", "--apply"}
+	code = Run(context.Background(), textArgs, &textOut, &textErr, client)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, textErr.String())
+	}
+	if !strings.Contains(textOut.String(), "No change needed for Project item PVTI_ITEM_55 on Project octo-org/12:") {
+		t.Fatalf("stdout = %s", textOut.String())
 	}
 }

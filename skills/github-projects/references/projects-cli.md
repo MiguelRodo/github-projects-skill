@@ -51,6 +51,9 @@ uses one invocation:
 projects project item-edit --issue 313 --priority P2 --status "In progress" --apply --json
 ```
 
+In a mutation's `--json` result, `changed` is `true` only when GitHub state was
+actually modified; use it, not `applied`, to tell a real change from a verified no-op.
+
 `item-edit` requires existing Project membership. Add membership separately
 only when it is authorised or necessarily implied and permitted by the
 contract. `item-add` verifies an existing membership as a no-op. For pull
