@@ -22,11 +22,11 @@ func cliProjectItemRequest() request {
 const cliProjectOwnerJSON = `"projectOwner":{"__typename":"Organization","login":"octo-org","projectV2":{"id":"PVT_12","number":12,"title":"Example planning"}}`
 
 func cliProjectItemQueryJSON(itemID string) string {
-	return fmt.Sprintf(`{"data":{`+cliProjectOwnerJSON+`,"repository":{"target":{"id":"I_55","url":"https://github.com/octo-org/example/issues/55","projectItems":{"nodes":[{"id":%q,"isArchived":false,"project":{"id":"PVT_12","number":12,"title":"Example planning","owner":{"login":"octo-org"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false}}}],"pageInfo":{"hasNextPage":false}}}}}}`, itemID)
+	return fmt.Sprintf(`{"data":{`+cliProjectOwnerJSON+`,"repository":{"target":{"id":"I_55","url":"https://github.com/octo-org/example/issues/55","state":"OPEN","projectItems":{"nodes":[{"id":%q,"isArchived":false,"project":{"id":"PVT_12","number":12,"title":"Example planning","owner":{"login":"octo-org"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false}}}],"pageInfo":{"hasNextPage":false}}}}}}`, itemID)
 }
 
 func cliMissingProjectItemQueryJSON() string {
-	return `{"data":{` + cliProjectOwnerJSON + `,"repository":{"target":{"id":"I_55","url":"https://github.com/octo-org/example/issues/55","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`
+	return `{"data":{` + cliProjectOwnerJSON + `,"repository":{"target":{"id":"I_55","url":"https://github.com/octo-org/example/issues/55","state":"OPEN","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`
 }
 
 // exactTitleRecentQuery mirrors the titles-only GraphQL query used by the

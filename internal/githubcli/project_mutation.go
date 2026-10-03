@@ -67,7 +67,11 @@ type ProjectItemState struct {
 	// Archived reports that the item is archived in the Project: it remains a
 	// member but is hidden from Project views.
 	Archived bool `json:"archived"`
-	raw      map[string]json.RawMessage
+	// ContentState is the issue or pull request state (for example OPEN or
+	// CLOSED) reported alongside the Project item. It is content, not a Project
+	// field, so it is deliberately excluded from preservation comparisons.
+	ContentState string `json:"contentState,omitempty"`
+	raw          map[string]json.RawMessage
 }
 
 type graphQLFieldNode struct {
@@ -365,6 +369,7 @@ type graphQLProjectItemResponse struct {
 			Target *struct {
 				ID           string `json:"id"`
 				URL          string `json:"url"`
+				State        string `json:"state"`
 				ProjectItems struct {
 					Nodes    []graphQLProjectItemNode `json:"nodes"`
 					PageInfo struct {
@@ -407,6 +412,7 @@ func ProjectItemQuery(kind string) string {
     target: %s(number: $number) {
       id
       url
+      state
       projectItems(first: 100) {
         nodes {
           id
@@ -563,7 +569,7 @@ func lookupProjectItem(ctx context.Context, client Client, project contract.Proj
 		return projectItemLookup{}, fmt.Errorf("Project item %s has more than 100 set fields; refusing an incomplete field read", match.ID)
 	}
 
-	state, err := decodeGraphQLProjectItem(*match, target)
+	state, err := decodeGraphQLProjectItem(*match, target, observedTarget.State)
 	if err != nil {
 		return projectItemLookup{}, err
 	}
@@ -571,7 +577,7 @@ func lookupProjectItem(ctx context.Context, client Client, project contract.Proj
 	return lookup, nil
 }
 
-func decodeGraphQLProjectItem(node graphQLProjectItemNode, target GitHubItemTarget) (ProjectItemState, error) {
+func decodeGraphQLProjectItem(node graphQLProjectItemNode, target GitHubItemTarget, contentState string) (ProjectItemState, error) {
 	fields := make(map[string]string)
 	rawFields := make(map[string]json.RawMessage)
 	rawFields["meta:id"] = mustMarshalProjectValue(node.ID)
@@ -624,12 +630,13 @@ func decodeGraphQLProjectItem(node graphQLProjectItemNode, target GitHubItemTarg
 	}
 
 	return ProjectItemState{
-		ItemID:      node.ID,
-		IssueNumber: target.Number,
-		URL:         target.URL,
-		Fields:      fields,
-		Archived:    node.IsArchived,
-		raw:         rawFields,
+		ItemID:       node.ID,
+		IssueNumber:  target.Number,
+		URL:          target.URL,
+		Fields:       fields,
+		Archived:     node.IsArchived,
+		ContentState: contentState,
+		raw:          rawFields,
 	}, nil
 }
 
@@ -1354,6 +1361,10 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, client C
 
 	finalItem := current
 	var sideEffects []string
+	contentKind := "pull request"
+	if target.Kind == "issues" {
+		contentKind = "issue"
+	}
 	changedFields := make([]string, 0, len(projectChanges))
 	for _, change := range projectChanges {
 		changedFields = append(changedFields, change.Field.Name)
@@ -1406,6 +1417,12 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, client C
 		if len(mismatches) > 0 {
 			got, _ := projectItemFieldValue(*finalItem, mismatches[0].Field.Name)
 			return MutateProjectItemResult{}, partialProjectMutationError(mismatches[0].Name, fmt.Errorf("readback disagrees: got %q, want %q", got, mismatches[0].Desired))
+		}
+		if baseline.ContentState != "" && finalItem.ContentState != "" && baseline.ContentState != finalItem.ContentState {
+			sideEffects = append(sideEffects, fmt.Sprintf(
+				"Project automation changed the %s state from %s to %s (for example the built-in Auto-close issue workflow when Status is Done)",
+				contentKind, baseline.ContentState, finalItem.ContentState,
+			))
 		}
 	}
 	if added {
