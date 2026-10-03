@@ -601,6 +601,47 @@ func TestIssueCreateWithThreeProjectFieldsUsesTenRequests(t *testing.T) {
 		t.Fatalf("exit=%d requests=%d stderr=%s", code, client.index, stderr.String())
 	}
 }
+
+// projectFieldsPlanSteps returns the plan-mode request sequence for an
+// issue create that requests Project fields against the single fixture: the
+// duplicate check followed by the Project schema preflight.
+func projectFieldsPlanSteps(title string) []response {
+	steps := exactTitleCheck("octo-org/example", title, "", "")
+	return append(steps, response{request: request{query: githubcli.ProjectSchemaQuery(), variables: map[string]any{"login": "octo-org", "number": 12}}, output: localFieldsSchema()})
+}
+
+func TestIssueCreatePlanValidatesProjectFields(t *testing.T) {
+	client := &fakeClient{t: t, responses: projectFieldsPlanSteps("Planned Issue")}
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"issue", "create", "--root", fixture(t, "single"), "--title", "Planned Issue", "--status", "Done", "--json"}, &stdout, &stderr, client)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if client.index != 3 {
+		t.Fatalf("GitHub requests = %d, want 3 (no mutating request)", client.index)
+	}
+	if !strings.Contains(stderr.String(), "[2/3] Validating Project fields") || !strings.Contains(stderr.String(), "[3/3] Planning issue creation") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"status": "Done"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestIssueCreatePlanRejectsUnknownProjectStatusOption(t *testing.T) {
+	client := &fakeClient{t: t, responses: projectFieldsPlanSteps("In review issue")}
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"issue", "create", "--root", fixture(t, "single"), "--title", "In review issue", "--status", "In review", "--json"}, &stdout, &stderr, client)
+	if code == 0 {
+		t.Fatalf("exit=%d, want non-zero; stdout=%s", code, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `option "In review" for Status is absent from Project field "Status"`) {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+	if client.index != 3 {
+		t.Fatalf("GitHub requests = %d, want 3 (no mutating request)", client.index)
+	}
+}
 func TestIssueEditAddLabelUsesFourRequests(t *testing.T) {
 	view := request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}}
 	client := &fakeClient{t: t, responses: []response{

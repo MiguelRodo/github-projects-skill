@@ -186,8 +186,11 @@ projects issue create \
 
 `@me` in `--assignee`, `--add-assignee` or `--remove-assignee` is resolved
 once to the authenticated login before planning, so plans and readback show
-the real login. If anything fails after GitHub has created the issue, the
-error names the created issue's URL and says not to retry creation.
+the real login. When these Project fields are requested, the plan itself
+validates them against the live Project (for example, a `--status` option the
+Project does not define fails the plan, not only `--apply`). If anything fails
+after GitHub has created the issue, the error names the created issue's URL
+and says not to retry creation.
 
 Edit an existing issue:
 

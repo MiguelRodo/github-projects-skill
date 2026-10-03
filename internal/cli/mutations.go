@@ -188,10 +188,25 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 	}
 
+	var projectMutationInput githubcli.MutateProjectItemInput
+	if hasProject {
+		projectMutationInput = githubcli.MutateProjectItemInput{
+			Project:      resolvedProject,
+			Repo:         targetRepo,
+			Priority:     *priority,
+			Class:        *class,
+			Status:       *status,
+			TargetDate:   *targetDate,
+			AddIfMissing: true,
+		}
+	}
+
 	stageCount := 2
 	if *apply && hasProject {
 		stageCount = 4
 	} else if *apply {
+		stageCount = 3
+	} else if hasProject {
 		stageCount = 3
 	}
 	var exactTitleMatches []githubcli.IssueSummary
@@ -218,7 +233,13 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 
 	if !*apply {
-		progress(stderr, *quiet, "[2/2] Planning issue creation for %s", targetRepo)
+		if hasProject {
+			progress(stderr, *quiet, "[2/%d] Validating Project fields for %s/%d", stageCount, resolvedProject.Owner, resolvedProject.Number)
+			if _, err := githubcli.PrepareProjectItemMutation(ctx, client, projectMutationInput); err != nil {
+				return operationError(stderr, "preflight Project configuration", err)
+			}
+		}
+		progress(stderr, *quiet, "[%d/%d] Planning issue creation for %s", stageCount, stageCount, targetRepo)
 		plan := map[string]any{
 			"action":         "create_issue",
 			"apply":          false,
@@ -308,15 +329,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 
 	var preparedProject *githubcli.PreparedProjectItemMutation
 	if hasProject {
-		preparedProject, err = githubcli.PrepareProjectItemMutation(ctx, client, githubcli.MutateProjectItemInput{
-			Project:      resolvedProject,
-			Repo:         targetRepo,
-			Priority:     *priority,
-			Class:        *class,
-			Status:       *status,
-			TargetDate:   *targetDate,
-			AddIfMissing: true,
-		})
+		preparedProject, err = githubcli.PrepareProjectItemMutation(ctx, client, projectMutationInput)
 		if err != nil {
 			return operationError(stderr, "preflight Project configuration", err)
 		}
