@@ -9,7 +9,7 @@ import (
 	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
 )
 
-type commandFunc func(ctx context.Context, args []string, stdout, stderr io.Writer, runner githubcli.Runner) int
+type commandFunc func(ctx context.Context, args []string, stdout, stderr io.Writer, client githubcli.Client) int
 
 type subcommand struct {
 	group   string
@@ -33,7 +33,7 @@ func init() {
 	commandGroups = []*commandGroup{
 		{name: "contract", subcommands: []*subcommand{
 			{name: "validate", summary: "Validate the complete .projects contract without GitHub access.",
-				run: func(_ context.Context, args []string, stdout, stderr io.Writer, _ githubcli.Runner) int {
+				run: func(_ context.Context, args []string, stdout, stderr io.Writer, _ githubcli.Client) int {
 					return runContractValidate(args, stdout, stderr)
 				}},
 		}},

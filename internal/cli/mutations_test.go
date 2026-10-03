@@ -6,22 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
 )
 
-func cliProjectItemQueryArgs() []string {
-	return []string{
-		"api", "graphql",
-		"-f", "query=" + githubcli.ProjectItemQuery("issues"),
-		"-f", "owner=octo-org",
-		"-f", "repo=example",
-		"-F", "number=55",
-		"-f", "projectOwner=octo-org",
-		"-F", "projectNumber=12",
-	}
+func cliProjectItemRequest() request {
+	return request{query: githubcli.ProjectItemQuery("issues"), variables: map[string]any{"owner": "octo-org", "repo": "example", "number": 55, "projectOwner": "octo-org", "projectNumber": 12}}
 }
 
 const cliProjectOwnerJSON = `"projectOwner":{"__typename":"Organization","login":"octo-org","projectV2":{"id":"PVT_12","number":12,"title":"Example planning"}}`
@@ -45,30 +40,21 @@ const exactTitleRecentQuery = `query($owner: String!, $name: String!, $cursor: S
   }
 }`
 
-func exactTitleSearchArgs(repo, title string) []string {
-	return []string{
-		"api", "-X", "GET",
-		"-H", "Accept: application/vnd.github+json",
-		"-H", "X-GitHub-Api-Version: 2026-03-10",
-		"search/issues",
-		"-f", fmt.Sprintf(`q=repo:%s is:issue in:title "%s"`, repo, strings.TrimSpace(title)),
-		"-f", "per_page=100",
-		"-f", "page=1",
-		"--jq", `{total_count, incomplete_results, items: [.items[] | {number, title, state, url: .html_url, pull_request: (.pull_request != null)}]}`,
-	}
+func exactTitleSearchRequest(repo, title string) request {
+	return request{method: "GET", path: "/" + "search/issues" + "?" + url.Values{"q": {fmt.Sprintf("repo:%s is:issue in:title \"%s\"", repo, strings.TrimSpace(title))}, "per_page": {"100"}, "page": {"1"}}.Encode()}
 }
 
 // exactTitleTitlesPage returns the fake response for one titles-only page of
 // the newest open issues in repo, requested after cursor ("" for the first page).
 func exactTitleTitlesPage(repo, cursor string, hasNext bool, endCursor, nodes string) response {
 	owner, name, _ := strings.Cut(repo, "/")
-	args := []string{"api", "graphql", "-f", "query=" + exactTitleRecentQuery, "-f", "owner=" + owner, "-f", "name=" + name}
+	args := request{query: exactTitleRecentQuery, variables: map[string]any{"owner": owner, "name": name}}
 	if cursor != "" {
-		args = append(args, "-f", "cursor="+cursor)
+		args.variables["cursor"] = cursor
 	}
 	return response{
-		args:   args,
-		output: fmt.Sprintf(`{"data":{"repository":{"issues":{"nodes":[%s],"pageInfo":{"hasNextPage":%t,"endCursor":%q}}}}}`, nodes, hasNext, endCursor),
+		request: args,
+		output:  fmt.Sprintf(`{"data":{"repository":{"issues":{"nodes":[%s],"pageInfo":{"hasNextPage":%t,"endCursor":%q}}}}}`, nodes, hasNext, endCursor),
 	}
 }
 
@@ -78,8 +64,8 @@ func exactTitleCheck(repo, title, searchItems, titleNodes string) []response {
 	count := strings.Count(searchItems, `"number"`)
 	return []response{
 		{
-			args:   exactTitleSearchArgs(repo, title),
-			output: fmt.Sprintf(`{"total_count":%d,"incomplete_results":false,"items":[%s]}`, count, searchItems),
+			request: exactTitleSearchRequest(repo, title),
+			output:  fmt.Sprintf(`{"total_count":%d,"incomplete_results":false,"items":[%s]}`, count, searchItems),
 		},
 		exactTitleTitlesPage(repo, "", false, "", titleNodes),
 	}
@@ -89,7 +75,7 @@ func exactTitleCheck(repo, title, searchItems, titleNodes string) []response {
 // followed by the recent-open scan stopping at its 500-issue cap while still
 // inside the window (the issues are dated far in the future).
 func exactTitleCappedFallback(repo, title string) []response {
-	responses := []response{{args: exactTitleSearchArgs(repo, title), err: errors.New("gh: API rate limit exceeded (HTTP 403)")}}
+	responses := []response{{request: exactTitleSearchRequest(repo, title), err: errors.New("gh: API rate limit exceeded (HTTP 403)")}}
 	cursor := ""
 	for page := 1; page <= 5; page++ {
 		next := fmt.Sprintf("c%d", page)
@@ -106,7 +92,7 @@ func exactTitleCappedFallback(repo, title string) []response {
 
 func TestIssueCreatePlanDefault(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: exactTitleCheck("octo-org/example", "Sample Plan Issue", "", "")}
+	fake := &fakeClient{t: t, responses: exactTitleCheck("octo-org/example", "Sample Plan Issue", "", "")}
 	exitCode := Run(
 		context.Background(),
 		[]string{"issue", "create", "--root", fixture(t, "single"), "--title", "Sample Plan Issue", "--json"},
@@ -131,7 +117,7 @@ func TestIssueCreatePlanDefault(t *testing.T) {
 
 func TestIssueCreateReportsCappedDuplicateCheck(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: exactTitleCappedFallback("octo-org/example", "Capped")}
+	fake := &fakeClient{t: t, responses: exactTitleCappedFallback("octo-org/example", "Capped")}
 	exitCode := Run(context.Background(), []string{
 		"issue", "create", "--root", fixture(t, "single"), "--title", "Capped", "--json",
 	}, &stdout, &stderr, fake)
@@ -155,7 +141,7 @@ func TestIssueCreateReportsCappedDuplicateCheck(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	fake = &runner{t: t, responses: exactTitleCappedFallback("octo-org/example", "Capped")}
+	fake = &fakeClient{t: t, responses: exactTitleCappedFallback("octo-org/example", "Capped")}
 	exitCode = Run(context.Background(), []string{
 		"issue", "create", "--root", fixture(t, "single"), "--title", "Capped",
 	}, &stdout, &stderr, fake)
@@ -169,7 +155,7 @@ func TestIssueCreateReportsCappedDuplicateCheck(t *testing.T) {
 
 func TestIssueCreateAllowDuplicateSkipsRepositoryScan(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t}
+	fake := &fakeClient{t: t}
 	exitCode := Run(
 		context.Background(),
 		[]string{"issue", "create", "--root", fixture(t, "single"), "--title", "Intentional duplicate", "--allow-duplicate", "--json"},
@@ -190,14 +176,12 @@ func TestIssueCreateAllowDuplicateSkipsRepositoryScan(t *testing.T) {
 
 func TestIssueCreateApply(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: append(exactTitleCheck("octo-org/example", "Created Issue", "", ""), []response{
+	fake := &fakeClient{t: t, responses: append(exactTitleCheck("octo-org/example", "Created Issue", "", ""), []response{
+		{request: request{method: "GET", path: "/repos/octo-org/example/labels/" + url.PathEscape("bug")}, output: "{}"},
+		{request: request{method: "POST", path: "/repos/octo-org/example/issues", body: map[string]any{"title": "Created Issue", "body": "Body text", "labels": []string{"bug"}}}, output: string(objectFixture("html_url", []byte("https://github.com/octo-org/example/issues/55\n")))},
 		{
-			args:   []string{"issue", "create", "--repo", "octo-org/example", "--title", "Created Issue", "--body", "Body text", "--label", "bug"},
-			output: "https://github.com/octo-org/example/issues/55\n",
-		},
-		{
-			args:   []string{"issue", "view", "55", "--repo", "octo-org/example", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: `{"number":55,"title":"Created Issue","body":"Body text","state":"OPEN","url":"https://github.com/octo-org/example/issues/55","labels":[{"name":"bug"}]}`,
+			request: request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}},
+			output:  string(issueFixture([]byte(`{"number":55,"title":"Created Issue","body":"Body text","state":"OPEN","url":"https://github.com/octo-org/example/issues/55","labels":[{"name":"bug"}]}`))),
 		},
 	}...)}
 
@@ -224,10 +208,10 @@ func TestIssueCreateApply(t *testing.T) {
 
 func TestIssueEditPlan(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: []response{
+	fake := &fakeClient{t: t, responses: []response{
 		{
-			args:   []string{"issue", "view", "55", "--repo", "octo-org/example", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: `{"number":55,"title":"Original Title","body":"Original Body","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`,
+			request: request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}},
+			output:  string(issueFixture([]byte(`{"number":55,"title":"Original Title","body":"Original Body","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`))),
 		},
 	}}
 
@@ -250,18 +234,15 @@ func TestIssueEditPlan(t *testing.T) {
 
 func TestIssueEditApply(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: []response{
+	fake := &fakeClient{t: t, responses: []response{
 		{
-			args:   []string{"issue", "view", "55", "--repo", "octo-org/example", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: `{"number":55,"title":"Original Title","body":"Original Body","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`,
+			request: request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}},
+			output:  string(issueFixture([]byte(`{"number":55,"title":"Original Title","body":"Original Body","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`))),
 		},
+		{request: request{method: "PATCH", path: "/repos/octo-org/example/issues/55", body: map[string]any{"title": "New Title"}}, output: "https://github.com/octo-org/example/issues/55\n"},
 		{
-			args:   []string{"issue", "edit", "55", "--repo", "octo-org/example", "--title", "New Title"},
-			output: "https://github.com/octo-org/example/issues/55\n",
-		},
-		{
-			args:   []string{"issue", "view", "55", "--repo", "octo-org/example", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
-			output: `{"number":55,"title":"New Title","body":"Original Body","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`,
+			request: request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}},
+			output:  string(issueFixture([]byte(`{"number":55,"title":"New Title","body":"Original Body","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`))),
 		},
 	}}
 
@@ -283,10 +264,10 @@ func TestIssueEditApply(t *testing.T) {
 
 func TestProjectItemAddPlan(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: []response{
+	fake := &fakeClient{t: t, responses: []response{
 		{
-			args:   cliProjectItemQueryArgs(),
-			output: cliMissingProjectItemQueryJSON(),
+			request: cliProjectItemRequest(),
+			output:  cliMissingProjectItemQueryJSON(),
 		},
 	}}
 	exitCode := Run(
@@ -311,18 +292,18 @@ func TestProjectItemAddPlan(t *testing.T) {
 
 func TestProjectItemAddApply(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: []response{
+	fake := &fakeClient{t: t, responses: []response{
 		{
-			args:   cliProjectItemQueryArgs(),
-			output: cliMissingProjectItemQueryJSON(),
+			request: cliProjectItemRequest(),
+			output:  cliMissingProjectItemQueryJSON(),
 		},
 		{
-			args:   []string{"api", "graphql", "-f", "query=mutation($projectId: ID!, $contentId: ID!) {\n  addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) { item { id } }\n}", "-f", "projectId=PVT_12", "-f", "contentId=I_55"},
-			output: `{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_ITEM_55"}}}}`,
+			request: request{query: "mutation($projectId: ID!, $contentId: ID!) {\n  addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) { item { id } }\n}", variables: map[string]any{"projectId": "PVT_12", "contentId": "I_55"}},
+			output:  `{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_ITEM_55"}}}}`,
 		},
 		{
-			args:   cliProjectItemQueryArgs(),
-			output: cliProjectItemQueryJSON("PVTI_ITEM_55"),
+			request: cliProjectItemRequest(),
+			output:  cliProjectItemQueryJSON("PVTI_ITEM_55"),
 		},
 	}}
 
@@ -344,17 +325,12 @@ func TestProjectItemAddApply(t *testing.T) {
 
 func TestProjectItemEditPlan(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: []response{
+	fake := &fakeClient{t: t, responses: []response{
 		{
-			args: []string{
-				"api", "--paginate", "--slurp",
-				"-H", "Accept: application/vnd.github+json",
-				"-H", "X-GitHub-Api-Version: 2026-03-10",
-				"orgs/octo-org/issue-fields?per_page=100",
-			},
-			output: `[[{"id":1,"name":"Priority","data_type":"single_select","options":[{"id":2,"name":"High"}]}]]`,
+			request: request{method: "GET", path: "/" + "orgs/octo-org/issue-fields?per_page=100"},
+			output:  `[{"id":1,"name":"Priority","data_type":"single_select","options":[{"id":2,"name":"High"}]}]`,
 		},
-		{args: cliProjectItemQueryArgs(), output: cliProjectItemQueryJSON("PVTI_ITEM_55")},
+		{request: cliProjectItemRequest(), output: cliProjectItemQueryJSON("PVTI_ITEM_55")},
 	}}
 	exitCode := Run(
 		context.Background(),
@@ -378,8 +354,8 @@ func TestProjectItemEditPlan(t *testing.T) {
 
 func TestIssueCreateRejectsExactTitleDuplicate(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: exactTitleCheck("octo-org/example", "Existing",
-		`{"number":55,"title":"Existing","state":"open","url":"https://github.com/octo-org/example/issues/55","pull_request":false}`, "")}
+	fake := &fakeClient{t: t, responses: exactTitleCheck("octo-org/example", "Existing",
+		`{"number":55,"title":"Existing","state":"open","html_url":"https://github.com/octo-org/example/issues/55","pull_request":null}`, "")}
 	exitCode := Run(context.Background(), []string{
 		"issue", "create", "--root", fixture(t, "single"), "--title", "Existing", "--apply",
 	}, &stdout, &stderr, fake)
@@ -392,7 +368,7 @@ func TestMutationCommandsRejectRepositoryDisagreementBeforeGitHub(t *testing.T) 
 	var stdout, stderr bytes.Buffer
 	exitCode := Run(context.Background(), []string{
 		"issue", "edit", "--root", fixture(t, "single"), "--repo", "other/repo", "--issue", "55", "--title", "Title",
-	}, &stdout, &stderr, &runner{t: t})
+	}, &stdout, &stderr, &fakeClient{t: t})
 	if exitCode != 2 || !strings.Contains(stderr.String(), "disagrees with contract repository") {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
@@ -405,7 +381,7 @@ func TestProjectMutationTargetsAreMutuallyExclusive(t *testing.T) {
 		if command == "item-edit" {
 			args = append(args, "--status", "Todo")
 		}
-		exitCode := Run(context.Background(), args, &stdout, &stderr, &runner{t: t})
+		exitCode := Run(context.Background(), args, &stdout, &stderr, &fakeClient{t: t})
 		if exitCode != 2 || !strings.Contains(stderr.String(), "mutually exclusive") {
 			t.Fatalf("%s exit code = %d, stderr = %s", command, exitCode, stderr.String())
 		}
@@ -414,7 +390,7 @@ func TestProjectMutationTargetsAreMutuallyExclusive(t *testing.T) {
 
 func TestDispatcherIssueCreatePlanIncludesRoutingLabel(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: exactTitleCheck("octo-user/issues", "Routed", "", "")}
+	fake := &fakeClient{t: t, responses: exactTitleCheck("octo-user/issues", "Routed", "", "")}
 	exitCode := Run(context.Background(), []string{
 		"issue", "create", "--root", fixture(t, "dispatcher"), "--project-key", "alpha", "--title", "Routed", "--json",
 	}, &stdout, &stderr, fake)
@@ -429,13 +405,13 @@ func TestDispatcherIssueCreatePlanIncludesRoutingLabel(t *testing.T) {
 func TestProjectItemAddApplyUnarchivesArchivedMember(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	archived := strings.Replace(cliProjectItemQueryJSON("PVTI_ITEM_55"), `"isArchived":false`, `"isArchived":true`, 1)
-	fake := &runner{t: t, responses: []response{
-		{args: cliProjectItemQueryArgs(), output: archived},
+	fake := &fakeClient{t: t, responses: []response{
+		{request: cliProjectItemRequest(), output: archived},
 		{
-			args:   []string{"api", "graphql", "-f", "query=mutation($projectId: ID!, $itemId: ID!) {\n  unarchiveProjectV2Item(input: {projectId: $projectId, itemId: $itemId}) { item { id } }\n}", "-f", "projectId=PVT_12", "-f", "itemId=PVTI_ITEM_55"},
-			output: `{"data":{"unarchiveProjectV2Item":{"item":{"id":"PVTI_ITEM_55"}}}}`,
+			request: request{query: "mutation($projectId: ID!, $itemId: ID!) {\n  unarchiveProjectV2Item(input: {projectId: $projectId, itemId: $itemId}) { item { id } }\n}", variables: map[string]any{"projectId": "PVT_12", "itemId": "PVTI_ITEM_55"}},
+			output:  `{"data":{"unarchiveProjectV2Item":{"item":{"id":"PVTI_ITEM_55"}}}}`,
 		},
-		{args: cliProjectItemQueryArgs(), output: cliProjectItemQueryJSON("PVTI_ITEM_55")},
+		{request: cliProjectItemRequest(), output: cliProjectItemQueryJSON("PVTI_ITEM_55")},
 	}}
 	exitCode := Run(context.Background(), []string{"project", "item-add", "--root", fixture(t, "single"), "--issue", "55", "--apply", "--json"}, &stdout, &stderr, fake)
 	if exitCode != 0 {
@@ -450,8 +426,8 @@ const cliIssueViewJSONFields = "number,title,body,state,stateReason,labels,assig
 
 func TestIssueCreatePlanResolvesSelfAssignee(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: append(exactTitleCheck("octo-org/example", "Mine", "", ""),
-		response{args: []string{"api", "user", "--jq", ".login"}, output: "octocat\n"},
+	fake := &fakeClient{t: t, responses: append(exactTitleCheck("octo-org/example", "Mine", "", ""),
+		response{request: request{method: "GET", path: "/" + "user"}, output: string(objectFixture("login", []byte("octocat\n")))},
 	)}
 	exitCode := Run(
 		context.Background(),
@@ -470,12 +446,12 @@ func TestIssueCreatePlanResolvesSelfAssignee(t *testing.T) {
 
 func TestIssueEditApplyResolvesSelfAssignee(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	view := []string{"issue", "view", "55", "--repo", "octo-org/example", "--json", cliIssueViewJSONFields}
-	fake := &runner{t: t, responses: []response{
-		{args: []string{"api", "user", "--jq", ".login"}, output: "octocat\n"},
-		{args: view, output: `{"number":55,"title":"T","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55","assignees":[]}`},
-		{args: []string{"issue", "edit", "55", "--repo", "octo-org/example", "--add-assignee", "octocat"}, output: "https://github.com/octo-org/example/issues/55\n"},
-		{args: view, output: `{"number":55,"title":"T","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55","assignees":[{"login":"octocat"}]}`},
+	view := request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}}
+	fake := &fakeClient{t: t, responses: []response{
+		{request: request{method: "GET", path: "/" + "user"}, output: string(objectFixture("login", []byte("octocat\n")))},
+		{request: view, output: string(issueFixture([]byte(`{"number":55,"title":"T","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55","assignees":[]}`)))},
+		{request: request{method: "POST", path: "/repos/octo-org/example/issues/55/assignees", body: map[string]any{"assignees": []string{"octocat"}}}, output: "https://github.com/octo-org/example/issues/55\n"},
+		{request: view, output: string(issueFixture([]byte(`{"number":55,"title":"T","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55","assignees":[{"login":"octocat"}]}`)))},
 	}}
 	exitCode := Run(
 		context.Background(),
@@ -488,17 +464,17 @@ func TestIssueEditApplyResolvesSelfAssignee(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
 	if fake.index != len(fake.responses) {
-		t.Fatalf("gh calls = %d, want %d", fake.index, len(fake.responses))
+		t.Fatalf("GitHub requests = %d, want %d", fake.index, len(fake.responses))
 	}
 }
 
 func TestIssueEditTrimsTitle(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	view := []string{"issue", "view", "55", "--repo", "octo-org/example", "--json", cliIssueViewJSONFields}
-	fake := &runner{t: t, responses: []response{
-		{args: view, output: `{"number":55,"title":"Old","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`},
-		{args: []string{"issue", "edit", "55", "--repo", "octo-org/example", "--title", "New Title"}, output: "https://github.com/octo-org/example/issues/55\n"},
-		{args: view, output: `{"number":55,"title":"New Title","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`},
+	view := request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}}
+	fake := &fakeClient{t: t, responses: []response{
+		{request: view, output: string(issueFixture([]byte(`{"number":55,"title":"Old","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`)))},
+		{request: request{method: "PATCH", path: "/repos/octo-org/example/issues/55", body: map[string]any{"title": "New Title"}}, output: "https://github.com/octo-org/example/issues/55\n"},
+		{request: view, output: string(issueFixture([]byte(`{"number":55,"title":"New Title","body":"","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`)))},
 	}}
 	exitCode := Run(
 		context.Background(),
@@ -519,7 +495,7 @@ func TestIssueEditRejectsBlankTitle(t *testing.T) {
 		[]string{"issue", "edit", "--root", fixture(t, "single"), "--issue", "55", "--title", "   "},
 		&stdout,
 		&stderr,
-		&runner{t: t},
+		&fakeClient{t: t},
 	)
 	if exitCode != 2 || !strings.Contains(stderr.String(), "--title must not be empty") {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
@@ -535,10 +511,120 @@ func TestMutationsRejectNegativeProjectNumber(t *testing.T) {
 		t.Run(args[1], func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			full := append(append([]string{}, args...), "--root", fixture(t, "single"))
-			exitCode := Run(context.Background(), full, &stdout, &stderr, &runner{t: t})
+			exitCode := Run(context.Background(), full, &stdout, &stderr, &fakeClient{t: t})
 			if exitCode != 2 || !strings.Contains(stderr.String(), "--project-number must be a positive integer") {
 				t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 			}
 		})
+	}
+}
+
+func localFieldsFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	copyFixture(t, "single", root)
+	path := filepath.Join(root, ".projects", "project.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := strings.ReplaceAll(string(data), "organization issue field | Priority", "project field | Priority")
+	content = strings.ReplaceAll(content, "organization issue type | Issue Type", "project field | Class")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+func localFieldsSchema() string {
+	fields := []map[string]any{}
+	for _, field := range []struct {
+		id, name string
+		options  []string
+	}{{"priority", "Priority", []string{"High", "Medium"}}, {"class", "Class", []string{"Bug", "Task"}}, {"status", "Status", []string{"Done", "Todo"}}} {
+		options := []map[string]string{}
+		for _, name := range field.options {
+			options = append(options, map[string]string{"id": "option-" + name, "name": name})
+		}
+		fields = append(fields, map[string]any{"__typename": "ProjectV2SingleSelectField", "id": field.id, "name": field.name, "dataType": "SINGLE_SELECT", "options": options})
+	}
+	output, _ := json.Marshal(map[string]any{"data": map[string]any{"owner": map[string]any{"__typename": "Organization", "login": "octo-org", "projectV2": map[string]any{"id": "PVT_12", "number": 12, "title": "Example planning", "fields": map[string]any{"nodes": fields}}}}})
+	return string(output)
+}
+func localFieldsItem(priority, class, status string) string {
+	fields := []map[string]any{}
+	for _, field := range []struct{ id, name, value string }{{"priority", "Priority", priority}, {"class", "Class", class}, {"status", "Status", status}} {
+		fields = append(fields, map[string]any{"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": field.value, "optionId": "option-" + field.value, "field": map[string]string{"id": field.id, "name": field.name, "dataType": "SINGLE_SELECT"}})
+	}
+	encoded, _ := json.Marshal(fields)
+	return strings.Replace(cliProjectItemQueryJSON("PVTI_ITEM_55"), `"nodes":[]`, `"nodes":`+string(encoded), 1)
+}
+func localFieldsWriteRequest(names ...string) request {
+	declarations := []string{"$projectId: ID!", "$itemId: ID!"}
+	selections := []string{}
+	variables := map[string]any{"projectId": "PVT_12", "itemId": "PVTI_ITEM_55"}
+	for i, name := range names {
+		alias := fmt.Sprintf("f%d", i)
+		declarations = append(declarations, "$"+alias+"Field: ID!", "$"+alias+"Value: ProjectV2FieldValue!")
+		selections = append(selections, fmt.Sprintf("  %s: updateProjectV2ItemFieldValue(input: {projectId: $projectId, itemId: $itemId, fieldId: $%sField, value: $%sValue}) { projectV2Item { id } }", alias, alias, alias))
+		field := map[string]string{"High": "priority", "Bug": "class", "Done": "status"}[name]
+		variables[alias+"Field"] = field
+		variables[alias+"Value"] = map[string]string{"singleSelectOptionId": "option-" + name}
+	}
+	return request{query: "mutation(" + strings.Join(declarations, ", ") + ") {\n" + strings.Join(selections, "\n") + "\n}", variables: variables}
+}
+func localFieldsWriteOutput(count int) string {
+	data := map[string]any{}
+	for i := 0; i < count; i++ {
+		data[fmt.Sprintf("f%d", i)] = map[string]any{"projectV2Item": map[string]string{"id": "PVTI_ITEM_55"}}
+	}
+	encoded, _ := json.Marshal(map[string]any{"data": data})
+	return string(encoded)
+}
+
+func TestIssueCreateWithThreeProjectFieldsUsesTenRequests(t *testing.T) {
+	root := localFieldsFixture(t)
+	steps := exactTitleCheck("octo-org/example", "Created Issue", "", "")
+	steps = append(steps,
+		response{request: request{query: githubcli.ProjectSchemaQuery(), variables: map[string]any{"login": "octo-org", "number": 12}}, output: localFieldsSchema()},
+		response{request: request{method: "POST", path: "/repos/octo-org/example/issues", body: map[string]any{"title": "Created Issue", "body": ""}}, output: `{"html_url":"https://github.com/octo-org/example/issues/55"}`},
+		response{request: request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}}, output: string(issueFixture([]byte(`{"number":55,"title":"Created Issue","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`)))},
+		response{request: cliProjectItemRequest(), output: cliMissingProjectItemQueryJSON()},
+		response{request: request{query: "mutation($projectId: ID!, $contentId: ID!) {\n  addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) { item { id } }\n}", variables: map[string]any{"projectId": "PVT_12", "contentId": "I_55"}}, output: `{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_ITEM_55"}}}}`},
+		response{request: cliProjectItemRequest(), output: localFieldsItem("Medium", "Task", "Todo")},
+		response{request: localFieldsWriteRequest("High", "Bug", "Done"), output: localFieldsWriteOutput(3)},
+		response{request: cliProjectItemRequest(), output: localFieldsItem("High", "Bug", "Done")},
+	)
+	client := &fakeClient{t: t, responses: steps}
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"issue", "create", "--root", root, "--title", "Created Issue", "--priority", "P1", "--class", "Bug", "--status", "Done", "--apply", "--json"}, &stdout, &stderr, client)
+	if code != 0 || client.index != 10 {
+		t.Fatalf("exit=%d requests=%d stderr=%s", code, client.index, stderr.String())
+	}
+}
+func TestIssueEditAddLabelUsesFourRequests(t *testing.T) {
+	view := request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}}
+	client := &fakeClient{t: t, responses: []response{
+		{request: view, output: string(issueFixture([]byte(`{"number":55,"title":"T","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`)))},
+		{request: request{method: "GET", path: "/repos/octo-org/example/labels/x"}, output: `{}`},
+		{request: request{method: "POST", path: "/repos/octo-org/example/issues/55/labels", body: map[string]any{"labels": []string{"x"}}}, output: `[]`},
+		{request: view, output: string(issueFixture([]byte(`{"number":55,"title":"T","state":"OPEN","url":"https://github.com/octo-org/example/issues/55","labels":[{"name":"x"}]}`)))},
+	}}
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"issue", "edit", "--root", fixture(t, "single"), "--issue", "55", "--add-label", "x", "--apply"}, &stdout, &stderr, client)
+	if code != 0 || client.index != 4 {
+		t.Fatalf("exit=%d requests=%d stderr=%s", code, client.index, stderr.String())
+	}
+}
+func TestProjectItemEditPriorityAndStatusUsesFourRequests(t *testing.T) {
+	client := &fakeClient{t: t, responses: []response{
+		{request: request{query: githubcli.ProjectSchemaQuery(), variables: map[string]any{"login": "octo-org", "number": 12}}, output: localFieldsSchema()},
+		{request: cliProjectItemRequest(), output: localFieldsItem("Medium", "Task", "Todo")},
+		{request: localFieldsWriteRequest("High", "Done"), output: localFieldsWriteOutput(2)},
+		{request: cliProjectItemRequest(), output: localFieldsItem("High", "Task", "Done")},
+	}}
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"project", "item-edit", "--root", localFieldsFixture(t), "--issue", "55", "--priority", "P1", "--status", "Done", "--apply"}, &stdout, &stderr, client)
+	if code != 0 || client.index != 4 {
+		t.Fatalf("exit=%d requests=%d stderr=%s", code, client.index, stderr.String())
 	}
 }

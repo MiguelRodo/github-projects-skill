@@ -168,19 +168,15 @@ func TestBacklogViewMatchesIgnoresVisibleFieldOrder(t *testing.T) {
 	}
 }
 
-type captureArgsRunner struct {
-	args [][]string
-}
+type captureClient struct{ requests []request }
 
-func (r *captureArgsRunner) Run(_ context.Context, args ...string) ([]byte, error) {
-	r.args = append(r.args, args)
-	return []byte(`{"node_id":"view-node-id"}`), nil
+func (r *captureClient) GraphQL(_ context.Context, query string, variables map[string]any) (GraphQLResponse, error) {
+	r.requests = append(r.requests, request{query: query, variables: variables})
+	return GraphQLResponse{}, nil
 }
-
-func (r *captureArgsRunner) RunInput(_ context.Context, input []byte, args ...string) ([]byte, error) {
-	r.args = append(r.args, args)
-	_ = input
-	return []byte(`{"node_id":"view-node-id"}`), nil
+func (r *captureClient) REST(_ context.Context, method, path string, body any) (RESTResponse, error) {
+	r.requests = append(r.requests, request{method: method, path: path, body: body})
+	return RESTResponse{Status: 201, Body: []byte(`{"node_id":"view-node-id"}`)}, nil
 }
 
 func TestCreateBacklogViewUsesAccountLoginForUserProjects(t *testing.T) {
@@ -193,12 +189,12 @@ func TestCreateBacklogViewUsesAccountLoginForUserProjects(t *testing.T) {
 		{ownerType: "user", owner: "octo-user", wantPath: "users/octo-user/projectsV2/4/views"},
 		{ownerType: "organization", owner: "octo-org", wantPath: "orgs/octo-org/projectsV2/4/views"},
 	} {
-		runner := &captureArgsRunner{}
+		runner := &captureClient{}
 		state.ownerType = tc.ownerType
 		if _, err := createBacklogView(context.Background(), runner, contract.Project{Owner: tc.owner, Number: 4}, state); err != nil {
 			t.Fatal(err)
 		}
-		joined := strings.Join(runner.args[len(runner.args)-1], " ")
+		joined := runner.requests[len(runner.requests)-1].path
 		if !strings.Contains(joined, tc.wantPath) {
 			t.Fatalf("create args = %s, want path %s", joined, tc.wantPath)
 		}
@@ -208,25 +204,12 @@ func TestCreateBacklogViewUsesAccountLoginForUserProjects(t *testing.T) {
 	}
 }
 
-type captureInputRunner struct {
-	input []byte
-}
-
-func (r *captureInputRunner) Run(context.Context, ...string) ([]byte, error) {
-	return nil, nil
-}
-
-func (r *captureInputRunner) RunInput(_ context.Context, input []byte, _ ...string) ([]byte, error) {
-	r.input = append([]byte(nil), input...)
-	return []byte(`{}`), nil
-}
-
 func TestDeleteProjectViewUsesDeleteMutationReturnField(t *testing.T) {
-	runner := &captureInputRunner{}
+	runner := &captureClient{}
 	if err := deleteProjectView(context.Background(), runner, "view-1"); err != nil {
 		t.Fatal(err)
 	}
-	payload := string(runner.input)
+	payload := runner.requests[0].query
 	if !strings.Contains(payload, "projectV2View") || strings.Contains(payload, "projectV2 {") {
 		t.Fatalf("delete mutation payload = %s", payload)
 	}

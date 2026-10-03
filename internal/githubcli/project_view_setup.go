@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/MiguelRodo/github-projects-skill/internal/contract"
@@ -121,15 +120,12 @@ type backlogViewState struct {
 	spec      backlogViewSpec
 }
 
-func queryRESTProjectFields(ctx context.Context, runner Runner, project contract.Project, ownerType string) ([]restProjectField, error) {
+func queryRESTProjectFields(ctx context.Context, client Client, project contract.Project, ownerType string) ([]restProjectField, error) {
 	endpoint := fmt.Sprintf("users/%s/projectsV2/%d/fields?per_page=100", project.Owner, project.Number)
 	if ownerType == "organization" {
 		endpoint = fmt.Sprintf("orgs/%s/projectsV2/%d/fields?per_page=100", project.Owner, project.Number)
 	}
-	args := []string{"api", "--paginate", "--slurp"}
-	args = append(args, apiHeaders()...)
-	args = append(args, endpoint)
-	out, err := runner.Run(ctx, args...)
+	out, err := restPageBytes(ctx, client, "/"+endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("list Project fields: %w", err)
 	}
@@ -144,7 +140,7 @@ func queryRESTProjectFields(ctx context.Context, runner Runner, project contract
 	return fields, nil
 }
 
-func queryProjectViews(ctx context.Context, runner Runner, project contract.Project, ownerType string) ([]projectViewNode, error) {
+func queryProjectViews(ctx context.Context, client Client, project contract.Project, ownerType string) ([]projectViewNode, error) {
 	query := fmt.Sprintf(`query($login: String!, $number: Int!) {
   %s(login: $login) {
     projectV2(number: $number) {
@@ -176,7 +172,7 @@ func queryProjectViews(ctx context.Context, runner Runner, project contract.Proj
     }
   }
 }`, ownerType)
-	out, err := runner.Run(ctx, "api", "graphql", "-f", "query="+query, "-f", "login="+project.Owner, "-F", "number="+strconv.Itoa(project.Number))
+	out, err := graphQLBytes(ctx, client, query, map[string]any{"login": project.Owner, "number": project.Number})
 	if err != nil {
 		return nil, fmt.Errorf("query Project views: %w", err)
 	}
@@ -302,11 +298,11 @@ func buildBacklogViewSpec(project contract.Project, ownerType string, fields []r
 	return spec, nil
 }
 
-func inspectStandardBacklogView(ctx context.Context, runner Runner, project contract.Project) (backlogViewState, error) {
+func inspectStandardBacklogView(ctx context.Context, client Client, project contract.Project) (backlogViewState, error) {
 	ownerType := project.OwnerType
 	if ownerType == "" {
 		var err error
-		ownerType, err = discoverOwnerType(ctx, runner, project.Owner)
+		ownerType, err = discoverOwnerType(ctx, client, project.Owner)
 		if err != nil {
 			return backlogViewState{}, fmt.Errorf("discover Project owner type: %w", err)
 		}
@@ -314,7 +310,7 @@ func inspectStandardBacklogView(ctx context.Context, runner Runner, project cont
 	if ownerType != "user" && ownerType != "organization" {
 		return backlogViewState{}, fmt.Errorf("unsupported Project owner type %q", ownerType)
 	}
-	fields, err := queryRESTProjectFields(ctx, runner, project, ownerType)
+	fields, err := queryRESTProjectFields(ctx, client, project, ownerType)
 	if err != nil {
 		return backlogViewState{}, err
 	}
@@ -322,7 +318,7 @@ func inspectStandardBacklogView(ctx context.Context, runner Runner, project cont
 	if err != nil {
 		return backlogViewState{}, err
 	}
-	views, err := queryProjectViews(ctx, runner, project, ownerType)
+	views, err := queryProjectViews(ctx, client, project, ownerType)
 	if err != nil {
 		return backlogViewState{}, err
 	}
@@ -514,15 +510,15 @@ func planStandardBacklogViewFromState(project contract.Project, state backlogVie
 	return StandardBacklogViewPlan{Project: ProjectIdentity{Owner: project.Owner, Number: project.Number, Title: project.Title}, OwnerType: state.ownerType, VisibleFields: visible, Changes: changes}, nil
 }
 
-func PlanStandardBacklogView(ctx context.Context, runner Runner, project contract.Project) (StandardBacklogViewPlan, error) {
-	state, err := inspectStandardBacklogView(ctx, runner, project)
+func PlanStandardBacklogView(ctx context.Context, client Client, project contract.Project) (StandardBacklogViewPlan, error) {
+	state, err := inspectStandardBacklogView(ctx, client, project)
 	if err != nil {
 		return StandardBacklogViewPlan{}, err
 	}
 	return planStandardBacklogViewFromState(project, state)
 }
 
-func createBacklogView(ctx context.Context, runner Runner, project contract.Project, state backlogViewState) (string, error) {
+func createBacklogView(ctx context.Context, client Client, project contract.Project, state backlogViewState) (string, error) {
 	visible := make([]int, 0, len(state.spec.Visible))
 	for _, field := range state.spec.Visible {
 		visible = append(visible, field.RESTID)
@@ -539,10 +535,7 @@ func createBacklogView(ctx context.Context, runner Runner, project contract.Proj
 		// not accepted and returns 404.
 		endpoint = fmt.Sprintf("users/%s/projectsV2/%d/views", project.Owner, project.Number)
 	}
-	args := []string{"api", "--method", "POST"}
-	args = append(args, apiHeaders()...)
-	args = append(args, endpoint, "--input", "-")
-	out, err := runJSONInput(ctx, runner, body, args...)
+	out, err := restBytes(ctx, client, "POST", "/"+endpoint, body)
 	if err != nil {
 		return "", fmt.Errorf("create Backlog Project view: %w", err)
 	}
@@ -565,7 +558,7 @@ func createBacklogView(ctx context.Context, runner Runner, project contract.Proj
 	return viewID, nil
 }
 
-func updateBacklogView(ctx context.Context, runner Runner, viewID string, spec backlogViewSpec) error {
+func updateBacklogView(ctx context.Context, client Client, viewID string, spec backlogViewSpec) error {
 	query := `mutation($input: UpdateProjectV2ViewInput!) {
   updateProjectV2View(input: $input) { projectV2View { id name layout filter } }
 }`
@@ -573,18 +566,18 @@ func updateBacklogView(ctx context.Context, runner Runner, viewID string, spec b
 		"viewId": viewID, "name": standardBacklogViewName, "layout": "TABLE_LAYOUT", "filter": "",
 		"configuration": map[string]any{"visibleFieldIds": fieldNodeIDs(spec.Visible)},
 	}}}
-	if _, err := runJSONInput(ctx, runner, body, "api", "graphql", "--input", "-"); err != nil {
+	if err := graphQLWrite(ctx, client, body); err != nil {
 		return fmt.Errorf("update Backlog Project view: %w", err)
 	}
 	return nil
 }
 
-func deleteProjectView(ctx context.Context, runner Runner, viewID string) error {
+func deleteProjectView(ctx context.Context, client Client, viewID string) error {
 	query := `mutation($viewId: ID!) {
   deleteProjectV2View(input: {viewId: $viewId}) { projectV2View { id } }
 }`
 	body := map[string]any{"query": query, "variables": map[string]any{"viewId": viewID}}
-	if _, err := runJSONInput(ctx, runner, body, "api", "graphql", "--input", "-"); err != nil {
+	if err := graphQLWrite(ctx, client, body); err != nil {
 		return fmt.Errorf("delete Project view %s: %w", viewID, err)
 	}
 	return nil
@@ -641,17 +634,17 @@ func manualViewDeleteStep(viewID string) string {
 // replaceBacklogView creates a standard replacement, verifies it and only then
 // deletes the old view. A replacement that cannot be verified is removed again
 // so the Project is never left with two Backlog views that block later runs.
-func replaceBacklogView(ctx context.Context, runner Runner, project contract.Project, state backlogViewState, change StandardBacklogViewChange) error {
+func replaceBacklogView(ctx context.Context, client Client, project contract.Project, state backlogViewState, change StandardBacklogViewChange) error {
 	oldLabel := change.ViewID
 	if old, ok := findViewByID(state.views, change.ViewID); ok {
 		oldLabel = viewLabel(old)
 	}
-	createdID, err := createBacklogView(ctx, runner, project, state)
+	createdID, err := createBacklogView(ctx, client, project, state)
 	if err != nil {
 		return fmt.Errorf("old %s was preserved: %w", oldLabel, err)
 	}
 	createdLabel := "replacement Backlog (" + createdID + ")"
-	views, verifyErr := queryProjectViews(ctx, runner, project, state.ownerType)
+	views, verifyErr := queryProjectViews(ctx, client, project, state.ownerType)
 	if verifyErr != nil {
 		verifyErr = fmt.Errorf("re-read Project views: %w", verifyErr)
 	} else {
@@ -661,19 +654,19 @@ func replaceBacklogView(ctx context.Context, runner Runner, project contract.Pro
 		verifyErr = verifyBacklogByID(views, createdID, state.spec)
 	}
 	if verifyErr != nil {
-		if cleanupErr := deleteProjectView(ctx, runner, createdID); cleanupErr != nil {
+		if cleanupErr := deleteProjectView(ctx, client, createdID); cleanupErr != nil {
 			return fmt.Errorf("%s could not be verified (%v) and removing it also failed (%v); the Project now has two Backlog views: original %s and %s. Manually remove the replacement: %s; then rerun setup-backlog-view", createdLabel, verifyErr, cleanupErr, oldLabel, createdLabel, manualViewDeleteStep(createdID))
 		}
 		return fmt.Errorf("%s could not be verified, so it was deleted again and original %s was preserved: %w", createdLabel, oldLabel, verifyErr)
 	}
-	if err := deleteProjectView(ctx, runner, change.ViewID); err != nil {
+	if err := deleteProjectView(ctx, client, change.ViewID); err != nil {
 		return fmt.Errorf("%s is verified but old %s could not be removed (%w); rerun setup-backlog-view --apply, which will plan deleting the non-standard duplicate, or %s", createdLabel, oldLabel, err, manualViewDeleteStep(change.ViewID))
 	}
 	return nil
 }
 
-func ApplyStandardBacklogView(ctx context.Context, runner Runner, project contract.Project) (StandardBacklogViewResult, error) {
-	state, err := inspectStandardBacklogView(ctx, runner, project)
+func ApplyStandardBacklogView(ctx context.Context, client Client, project contract.Project) (StandardBacklogViewResult, error) {
+	state, err := inspectStandardBacklogView(ctx, client, project)
 	if err != nil {
 		return StandardBacklogViewResult{}, err
 	}
@@ -692,13 +685,13 @@ func ApplyStandardBacklogView(ctx context.Context, runner Runner, project contra
 		var err error
 		switch change.Action {
 		case "create_view":
-			_, err = createBacklogView(ctx, runner, project, state)
+			_, err = createBacklogView(ctx, client, project, state)
 		case "update_view":
-			err = updateBacklogView(ctx, runner, change.ViewID, state.spec)
+			err = updateBacklogView(ctx, client, change.ViewID, state.spec)
 		case "replace_view":
-			err = replaceBacklogView(ctx, runner, project, state, change)
+			err = replaceBacklogView(ctx, client, project, state, change)
 		case "delete_view":
-			err = deleteProjectView(ctx, runner, change.ViewID)
+			err = deleteProjectView(ctx, client, change.ViewID)
 		default:
 			err = fmt.Errorf("unsupported Backlog view change %q", change.Action)
 		}
@@ -712,7 +705,7 @@ func ApplyStandardBacklogView(ctx context.Context, runner Runner, project contra
 	// The owner type is already known; do not rediscover it during readback.
 	readProject := project
 	readProject.OwnerType = state.ownerType
-	verified, err := inspectStandardBacklogView(ctx, runner, readProject)
+	verified, err := inspectStandardBacklogView(ctx, client, readProject)
 	if err != nil {
 		return fail("readback", fmt.Errorf("post-write inspection: %w", err))
 	}

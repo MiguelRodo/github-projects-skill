@@ -126,7 +126,10 @@ projects project item-list --routing-label project:personal --json
 projects project item-list --project-number 40 --json
 ```
 
-GitHub commands use the current authenticated `gh` account. Check it with:
+GitHub commands send HTTP requests directly to `api.github.com`. Authentication
+uses `GH_TOKEN`, then `GITHUB_TOKEN`. If neither is set, `gh` is required only
+to obtain a token once with `gh auth token --hostname github.com`. Authenticate
+that fallback account and check it with:
 
 ```bash
 gh auth status
@@ -315,9 +318,9 @@ Usage errors exit with status 2. These include a Project selector that names
 no configured route, a selector used with a single-Project contract, and a
 dispatcher command without a selector; such failures list the configured
 routes. Validation, GitHub and completeness failures exit with status 1. A
-failed command names the stage that failed and starts with the underlying `gh`
-error when one exists, followed by an abbreviated command: GraphQL documents,
-issue bodies and other long arguments are summarised rather than repeated.
+failed command names the stage that failed and includes the underlying GitHub API
+message followed by the HTTP method and path or the first line of the GraphQL
+operation. Full queries and issue bodies are never repeated.
 
 An error during readback does not mean the preceding write failed. For example,
 a GitHub Project workflow can move an item to Done when its issue closes. The

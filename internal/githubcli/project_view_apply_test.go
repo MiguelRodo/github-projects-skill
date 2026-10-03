@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const backlogRESTFieldsJSON = `[[{"id":1,"node_id":"title","name":"Title","data_type":"title"},{"id":2,"node_id":"status","name":"Status","data_type":"single_select"},{"id":3,"node_id":"priority","name":"Priority","data_type":"single_select"},{"id":4,"node_id":"class","name":"Class","data_type":"single_select"}]]`
+const backlogRESTFieldsJSON = `[{"id":1,"node_id":"title","name":"Title","data_type":"title"},{"id":2,"node_id":"status","name":"Status","data_type":"single_select"},{"id":3,"node_id":"priority","name":"Priority","data_type":"single_select"},{"id":4,"node_id":"class","name":"Class","data_type":"single_select"}]`
 
 func viewsJSON(t *testing.T, views ...projectViewNode) string {
 	t.Helper()
@@ -35,20 +35,20 @@ func descendingBacklogView(id string, number int) projectViewNode {
 
 func backlogInspectSteps(t *testing.T, views ...projectViewNode) []seqStep {
 	return []seqStep{
-		{want: "users/octo-user/projectsV2/40/fields", out: backlogRESTFieldsJSON},
-		{want: "views(first", out: viewsJSON(t, views...)},
+		{request: request{method: "GET", path: "/users/octo-user/projectsV2/40/fields?per_page=100"}, out: backlogRESTFieldsJSON},
+		{request: viewsRequest(), out: viewsJSON(t, views...)},
 	}
 }
 
 func TestApplyStandardBacklogViewReplacesAndVerifiesWithoutOwnerRediscovery(t *testing.T) {
 	steps := backlogInspectSteps(t, descendingBacklogView("v1", 1))
 	steps = append(steps,
-		seqStep{want: "users/octo-user/projectsV2/40/views", out: `{"node_id":"v2"}`},
-		seqStep{want: "views(first", out: viewsJSON(t, descendingBacklogView("v1", 1), standardBacklogTestView("v2", 2))},
-		seqStep{want: `"viewId":"v1"`, out: `{}`},
+		seqStep{request: createViewRequest(), out: `{"node_id":"v2"}`},
+		seqStep{request: viewsRequest(), out: viewsJSON(t, descendingBacklogView("v1", 1), standardBacklogTestView("v2", 2))},
+		seqStep{request: deleteViewRequest("v1"), out: `{}`},
 	)
 	steps = append(steps, backlogInspectSteps(t, standardBacklogTestView("v2", 2))...)
-	runner := &seqRunner{t: t, steps: steps}
+	runner := &seqClient{t: t, steps: steps}
 	result, err := ApplyStandardBacklogView(context.Background(), runner, userSetupProject())
 	if err != nil {
 		t.Fatal(err)
@@ -62,11 +62,11 @@ func TestApplyStandardBacklogViewReplacesAndVerifiesWithoutOwnerRediscovery(t *t
 func TestApplyStandardBacklogViewDeletesUnverifiedReplacement(t *testing.T) {
 	steps := backlogInspectSteps(t, descendingBacklogView("v1", 1))
 	steps = append(steps,
-		seqStep{want: "users/octo-user/projectsV2/40/views", out: `{"node_id":"v2"}`},
-		seqStep{want: "views(first", out: viewsJSON(t, descendingBacklogView("v1", 1), descendingBacklogView("v2", 2))},
-		seqStep{want: `"viewId":"v2"`, out: `{}`},
+		seqStep{request: createViewRequest(), out: `{"node_id":"v2"}`},
+		seqStep{request: viewsRequest(), out: viewsJSON(t, descendingBacklogView("v1", 1), descendingBacklogView("v2", 2))},
+		seqStep{request: deleteViewRequest("v2"), out: `{}`},
 	)
-	runner := &seqRunner{t: t, steps: steps}
+	runner := &seqClient{t: t, steps: steps}
 	_, err := ApplyStandardBacklogView(context.Background(), runner, userSetupProject())
 	if err == nil {
 		t.Fatal("expected verification failure")
@@ -82,11 +82,11 @@ func TestApplyStandardBacklogViewDeletesUnverifiedReplacement(t *testing.T) {
 func TestApplyStandardBacklogViewNamesBothViewsWhenCleanupFails(t *testing.T) {
 	steps := backlogInspectSteps(t, descendingBacklogView("v1", 1))
 	steps = append(steps,
-		seqStep{want: "users/octo-user/projectsV2/40/views", out: `{"node_id":"v2"}`},
-		seqStep{want: "views(first", err: errors.New("HTTP 502")},
-		seqStep{want: `"viewId":"v2"`, err: errors.New("HTTP 502")},
+		seqStep{request: createViewRequest(), out: `{"node_id":"v2"}`},
+		seqStep{request: viewsRequest(), err: errors.New("HTTP 502")},
+		seqStep{request: deleteViewRequest("v2"), err: errors.New("HTTP 502")},
 	)
-	runner := &seqRunner{t: t, steps: steps}
+	runner := &seqClient{t: t, steps: steps}
 	_, err := ApplyStandardBacklogView(context.Background(), runner, userSetupProject())
 	if err == nil {
 		t.Fatal("expected failure")
@@ -102,11 +102,11 @@ func TestApplyStandardBacklogViewNamesBothViewsWhenCleanupFails(t *testing.T) {
 func TestApplyStandardBacklogViewOldDeleteFailureIsRecoverable(t *testing.T) {
 	steps := backlogInspectSteps(t, descendingBacklogView("v1", 1))
 	steps = append(steps,
-		seqStep{want: "users/octo-user/projectsV2/40/views", out: `{"node_id":"v2"}`},
-		seqStep{want: "views(first", out: viewsJSON(t, descendingBacklogView("v1", 1), standardBacklogTestView("v2", 2))},
-		seqStep{want: `"viewId":"v1"`, err: errors.New("HTTP 502")},
+		seqStep{request: createViewRequest(), out: `{"node_id":"v2"}`},
+		seqStep{request: viewsRequest(), out: viewsJSON(t, descendingBacklogView("v1", 1), standardBacklogTestView("v2", 2))},
+		seqStep{request: deleteViewRequest("v1"), err: errors.New("HTTP 502")},
 	)
-	runner := &seqRunner{t: t, steps: steps}
+	runner := &seqClient{t: t, steps: steps}
 	_, err := ApplyStandardBacklogView(context.Background(), runner, userSetupProject())
 	if err == nil || !strings.Contains(err.Error(), "will plan deleting the non-standard duplicate") {
 		t.Fatalf("error = %v, want a recoverable rerun instruction", err)
@@ -115,9 +115,9 @@ func TestApplyStandardBacklogViewOldDeleteFailureIsRecoverable(t *testing.T) {
 
 	// The rerun must finish the replacement rather than refuse the duplicate.
 	steps = backlogInspectSteps(t, descendingBacklogView("v1", 1), standardBacklogTestView("v2", 2))
-	steps = append(steps, seqStep{want: `"viewId":"v1"`, out: `{}`})
+	steps = append(steps, seqStep{request: deleteViewRequest("v1"), out: `{}`})
 	steps = append(steps, backlogInspectSteps(t, standardBacklogTestView("v2", 2))...)
-	runner = &seqRunner{t: t, steps: steps}
+	runner = &seqClient{t: t, steps: steps}
 	result, err := ApplyStandardBacklogView(context.Background(), runner, userSetupProject())
 	if err != nil {
 		t.Fatal(err)
@@ -151,9 +151,9 @@ func TestApplyStandardBacklogViewReportsReadbackFailureWithAppliedChanges(t *tes
 	view := standardBacklogTestView("v1", 1)
 	view.Layout = "BOARD_LAYOUT"
 	steps := backlogInspectSteps(t, view)
-	steps = append(steps, seqStep{want: "updateProjectV2View", out: `{}`})
+	steps = append(steps, seqStep{request: updateViewRequest(), out: `{}`})
 	steps = append(steps, backlogInspectSteps(t, view)...)
-	runner := &seqRunner{t: t, steps: steps}
+	runner := &seqClient{t: t, steps: steps}
 	result, err := ApplyStandardBacklogView(context.Background(), runner, userSetupProject())
 	if err == nil || !strings.Contains(err.Error(), "applied: update_view v1; failed at readback") {
 		t.Fatalf("error = %v", err)

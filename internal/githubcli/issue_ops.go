@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -26,7 +26,7 @@ type IssueView struct {
 	Milestone    *IssueMilestone   `json:"milestone,omitempty"`
 	IssueType    *IssueType        `json:"issueType,omitempty"`
 	ProjectItems []json.RawMessage `json:"projectItems,omitempty"`
-	// AutomationSideEffects is never read from gh. EditIssue fills it with
+	// AutomationSideEffects is never read from GitHub. EditIssue fills it with
 	// Project Status changes made by built-in workflows on close or reopen.
 	AutomationSideEffects []string `json:"automationSideEffects,omitempty"`
 }
@@ -85,33 +85,145 @@ type EditIssueInput struct {
 	CloseReason     string  // "completed" or "not_planned"; empty defaults to completed when closing an open issue
 }
 
-// closeReasons maps the documented close reason to the gh issue close spelling
-// and the GraphQL/REST stateReason value.
-var closeReasons = map[string]struct{ gh, state string }{
-	"completed":   {gh: "completed", state: "COMPLETED"},
-	"not_planned": {gh: "not planned", state: "NOT_PLANNED"},
+// closeReasons maps REST close reasons to GraphQL stateReason values.
+var closeReasons = map[string]struct{ state string }{
+	"completed":   {state: "COMPLETED"},
+	"not_planned": {state: "NOT_PLANNED"},
 }
 
 func normalizeCloseReason(reason string) string {
 	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(reason)), " ", "_")
 }
 
-// ViewIssue inspects an issue using gh issue view --json.
-func ViewIssue(ctx context.Context, runner Runner, repo string, number int) (IssueView, error) {
-	output, err := runner.Run(
-		ctx,
-		"issue", "view", strconv.Itoa(number),
-		"--repo", repo,
-		"--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url",
-	)
+// IssueViewQuery reads an issue and its Project Status summaries in one request.
+const IssueViewQuery = `query($owner: String!, $name: String!, $number: Int!, $labelsCursor: String, $assigneesCursor: String, $projectsCursor: String) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      number title body state stateReason url
+      labels(first: 100, after: $labelsCursor) { nodes { name } pageInfo { hasNextPage endCursor } }
+      assignees(first: 100, after: $assigneesCursor) { nodes { login } pageInfo { hasNextPage endCursor } }
+      milestone { title }
+      issueType { name }
+      projectItems(first: 100, after: $projectsCursor) {
+        nodes {
+          project { title }
+          status: fieldValueByName(name: "Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name optionId }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`
+
+func ViewIssue(ctx context.Context, client Client, repo string, number int) (IssueView, error) {
+	owner, name, err := splitGitHubRepository(repo)
 	if err != nil {
-		return IssueView{}, fmt.Errorf("view issue %s#%d: %w", repo, number, err)
+		return IssueView{}, err
 	}
+	type pageInfo struct {
+		HasNextPage bool   `json:"hasNextPage"`
+		EndCursor   string `json:"endCursor"`
+	}
+	var data struct {
+		Repository *struct {
+			Issue *struct {
+				Number      int    `json:"number"`
+				Title       string `json:"title"`
+				Body        string `json:"body"`
+				State       string `json:"state"`
+				StateReason string `json:"stateReason"`
+				URL         string `json:"url"`
+				Labels      struct {
+					Nodes    []IssueLabel `json:"nodes"`
+					PageInfo pageInfo     `json:"pageInfo"`
+				} `json:"labels"`
+				Assignees struct {
+					Nodes    []IssueAssignee `json:"nodes"`
+					PageInfo pageInfo        `json:"pageInfo"`
+				} `json:"assignees"`
+				Milestone    *IssueMilestone `json:"milestone"`
+				IssueType    *IssueType      `json:"issueType"`
+				ProjectItems struct {
+					Nodes []*struct {
+						Project struct {
+							Title string `json:"title"`
+						} `json:"project"`
+						Status struct {
+							Name     string `json:"name"`
+							OptionID string `json:"optionId"`
+						} `json:"status"`
+					} `json:"nodes"`
+					PageInfo pageInfo `json:"pageInfo"`
+				} `json:"projectItems"`
+			} `json:"issue"`
+		} `json:"repository"`
+	}
+
+	variables := map[string]any{"owner": owner, "name": name, "number": number}
+	pending := map[string]bool{"labelsCursor": true, "assigneesCursor": true, "projectsCursor": true}
+	seen := map[string]map[string]bool{"labelsCursor": {}, "assigneesCursor": {}, "projectsCursor": {}}
 	var view IssueView
-	if err := json.Unmarshal(output, &view); err != nil {
-		return IssueView{}, fmt.Errorf("decode issue view: %w", err)
+	for page := 0; ; page++ {
+		response, err := client.GraphQL(ctx, IssueViewQuery, variables)
+		if err != nil {
+			return IssueView{}, fmt.Errorf("view issue %s#%d: %w", repo, number, err)
+		}
+		if len(response.Errors) > 0 {
+			return IssueView{}, fmt.Errorf("view issue %s#%d: %s", repo, number, response.Errors[0].Message)
+		}
+		if err := json.Unmarshal(response.Data, &data); err != nil {
+			return IssueView{}, fmt.Errorf("decode issue view: %w", err)
+		}
+		if data.Repository == nil || data.Repository.Issue == nil {
+			return IssueView{}, fmt.Errorf("view issue %s#%d: issue not found", repo, number)
+		}
+		issue := data.Repository.Issue
+		if page == 0 {
+			view = IssueView{Number: issue.Number, Title: issue.Title, Body: issue.Body, State: issue.State, StateReason: issue.StateReason, URL: issue.URL, Labels: []IssueLabel{}, Assignees: []IssueAssignee{}, Milestone: issue.Milestone, IssueType: issue.IssueType}
+		}
+		if pending["labelsCursor"] {
+			view.Labels = append(view.Labels, issue.Labels.Nodes...)
+		}
+		if pending["assigneesCursor"] {
+			view.Assignees = append(view.Assignees, issue.Assignees.Nodes...)
+		}
+		if pending["projectsCursor"] {
+			for _, item := range issue.ProjectItems.Nodes {
+				if item == nil {
+					continue
+				}
+				raw, _ := json.Marshal(struct {
+					Title  string `json:"title"`
+					Status any    `json:"status"`
+				}{item.Project.Title, item.Status})
+				view.ProjectItems = append(view.ProjectItems, raw)
+			}
+		}
+		next := false
+		for key, info := range map[string]pageInfo{"labelsCursor": issue.Labels.PageInfo, "assigneesCursor": issue.Assignees.PageInfo, "projectsCursor": issue.ProjectItems.PageInfo} {
+			if !pending[key] {
+				continue
+			}
+			pending[key] = info.HasNextPage
+			if !info.HasNextPage {
+				continue
+			}
+			if info.EndCursor == "" || seen[key][info.EndCursor] {
+				return IssueView{}, fmt.Errorf("view issue %s#%d: missing or repeated %s pagination cursor", repo, number, key)
+			}
+			seen[key][info.EndCursor] = true
+			variables[key] = info.EndCursor
+			next = true
+		}
+		if !next {
+			return view, nil
+		}
+		// Overflow connections reuse the same document. Ordinary reads need one
+		// request; completed connections are ignored on subsequent pages.
+		data.Repository = nil
 	}
-	return view, nil
 }
 
 // Exact-title duplicate check methods reported in ExactTitleCheck.Method.
@@ -149,13 +261,13 @@ type ExactTitleCheck struct {
 // titles of open issues created within ExactTitleRecentWindow, at most
 // ExactTitleRecentScanLimit of them, and reports in Unchecked that older and
 // closed issues were not checked.
-func FindIssuesByExactTitle(ctx context.Context, runner Runner, repo, title string) (ExactTitleCheck, error) {
+func FindIssuesByExactTitle(ctx context.Context, client Client, repo, title string) (ExactTitleCheck, error) {
 	normalizedTitle := strings.TrimSpace(title)
 	owner, name, ok := strings.Cut(repo, "/")
 	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
 		return ExactTitleCheck{}, fmt.Errorf("invalid repository %q: want OWNER/REPO", repo)
 	}
-	byNumber, searchOK := findIssuesByExactTitleViaSearch(ctx, runner, repo, normalizedTitle)
+	byNumber, searchOK := findIssuesByExactTitleViaSearch(ctx, client, repo, normalizedTitle)
 	if err := ctx.Err(); err != nil {
 		return ExactTitleCheck{}, fmt.Errorf("check %s for an exact-title match: %w", repo, err)
 	}
@@ -167,7 +279,7 @@ func FindIssuesByExactTitle(ctx context.Context, runner Runner, repo, title stri
 		maxPages = ExactTitleRecentScanLimit / exactTitlePageSize
 	}
 	cutoff := exactTitleNow().Add(-ExactTitleRecentWindow)
-	recent, capped, err := recentOpenIssuesByExactTitle(ctx, runner, owner, name, normalizedTitle, cutoff, maxPages)
+	recent, capped, err := recentOpenIssuesByExactTitle(ctx, client, owner, name, normalizedTitle, cutoff, maxPages)
 	if err != nil {
 		return ExactTitleCheck{}, err
 	}
@@ -216,7 +328,8 @@ type exactTitleSearchPage struct {
 
 type exactTitleSearchEntry struct {
 	IssueSummary
-	PullRequest bool `json:"pull_request"`
+	PullRequest json.RawMessage `json:"pull_request"`
+	HTMLURL     string          `json:"html_url"`
 }
 
 // exactTitleSearchQuery returns the Search API query for title, or false when
@@ -247,7 +360,7 @@ func exactTitleSearchQuery(repo, title string) (string, bool) {
 // findIssuesByExactTitleViaSearch returns the exact matches by number and true
 // only when every search page was complete; otherwise the caller must fall
 // back.
-func findIssuesByExactTitleViaSearch(ctx context.Context, runner Runner, repo, title string) (map[int]IssueSummary, bool) {
+func findIssuesByExactTitleViaSearch(ctx context.Context, client Client, repo, title string) (map[int]IssueSummary, bool) {
 	query, ok := exactTitleSearchQuery(repo, title)
 	if !ok {
 		return nil, false
@@ -255,16 +368,8 @@ func findIssuesByExactTitleViaSearch(ctx context.Context, runner Runner, repo, t
 	byNumber := map[int]IssueSummary{}
 	fetched := 0
 	for page := 1; ; page++ {
-		args := []string{"api", "-X", "GET"}
-		args = append(args, apiHeaders()...)
-		args = append(args,
-			"search/issues",
-			"-f", "q="+query,
-			"-f", fmt.Sprintf("per_page=%d", exactTitlePageSize),
-			"-f", fmt.Sprintf("page=%d", page),
-			"--jq", `{total_count, incomplete_results, items: [.items[] | {number, title, state, url: .html_url, pull_request: (.pull_request != null)}]}`,
-		)
-		output, err := runner.Run(ctx, args...)
+		params := url.Values{"q": {query}, "per_page": {"100"}, "page": {fmt.Sprint(page)}}
+		output, err := restBytes(ctx, client, "GET", "/search/issues?"+params.Encode(), nil)
 		if err != nil {
 			return nil, false
 		}
@@ -276,7 +381,8 @@ func findIssuesByExactTitleViaSearch(ctx context.Context, runner Runner, repo, t
 			return nil, false
 		}
 		for _, item := range result.Items {
-			if !item.PullRequest && item.Title == title {
+			if (len(item.PullRequest) == 0 || string(item.PullRequest) == "null") && item.Title == title {
+				item.URL = item.HTMLURL
 				byNumber[item.Number] = item.IssueSummary
 			}
 		}
@@ -308,7 +414,8 @@ type exactTitleRecentNode struct {
 }
 
 type exactTitleRecentResponse struct {
-	Data struct {
+	Errors []GraphQLError `json:"errors"`
+	Data   struct {
 		Repository *struct {
 			Issues struct {
 				Nodes    []exactTitleRecentNode `json:"nodes"`
@@ -325,22 +432,25 @@ type exactTitleRecentResponse struct {
 // until one was created before cutoff, there are no more, or maxPages pages
 // were read. It returns the exact matches and whether it stopped at maxPages
 // while still inside the window.
-func recentOpenIssuesByExactTitle(ctx context.Context, runner Runner, owner, name, title string, cutoff time.Time, maxPages int) ([]IssueSummary, bool, error) {
+func recentOpenIssuesByExactTitle(ctx context.Context, client Client, owner, name, title string, cutoff time.Time, maxPages int) ([]IssueSummary, bool, error) {
 	repo := owner + "/" + name
 	matches := make([]IssueSummary, 0)
 	cursor := ""
 	for page := 0; page < maxPages; page++ {
-		args := []string{"api", "graphql", "-f", "query=" + exactTitleRecentQuery, "-f", "owner=" + owner, "-f", "name=" + name}
+		variables := map[string]any{"owner": owner, "name": name}
 		if cursor != "" {
-			args = append(args, "-f", "cursor="+cursor)
+			variables["cursor"] = cursor
 		}
-		output, err := runner.Run(ctx, args...)
+		output, err := graphQLBytes(ctx, client, exactTitleRecentQuery, variables)
 		if err != nil {
 			return nil, false, fmt.Errorf("read recent open issue titles in %s for an exact-title match: %w", repo, err)
 		}
 		var response exactTitleRecentResponse
 		if err := json.Unmarshal(output, &response); err != nil {
 			return nil, false, fmt.Errorf("decode recent open issue titles in %s: %w", repo, err)
+		}
+		if len(response.Errors) > 0 {
+			return nil, false, fmt.Errorf("read recent open issue titles in %s: %s", repo, response.Errors[0].Message)
 		}
 		if response.Data.Repository == nil {
 			return nil, false, fmt.Errorf("read recent open issue titles in %s: repository not found", repo)
@@ -368,7 +478,7 @@ func recentOpenIssuesByExactTitle(ctx context.Context, runner Runner, owner, nam
 }
 
 // CreateIssue creates an issue on GitHub and independently verifies it via readback.
-func CreateIssue(ctx context.Context, runner Runner, input CreateIssueInput) (IssueView, error) {
+func CreateIssue(ctx context.Context, client Client, input CreateIssueInput) (IssueView, error) {
 	if input.Repo == "" {
 		return IssueView{}, errors.New("issue creation requires a repository")
 	}
@@ -376,42 +486,47 @@ func CreateIssue(ctx context.Context, runner Runner, input CreateIssueInput) (Is
 		return IssueView{}, errors.New("issue creation requires a non-empty title")
 	}
 	input.Title = strings.TrimSpace(input.Title)
-	if err := ResolveSelfAssignees(ctx, runner, &input.Assignees); err != nil {
+	if err := ResolveSelfAssignees(ctx, client, &input.Assignees); err != nil {
 		return IssueView{}, err
 	}
 
-	// gh refuses a non-interactive create without --body, so always pass it.
-	args := []string{"issue", "create", "--repo", input.Repo, "--title", input.Title, "--body", input.Body}
-	for _, l := range input.Labels {
-		if strings.TrimSpace(l) != "" {
-			args = append(args, "--label", strings.TrimSpace(l))
-		}
+	labels := cleanNames(input.Labels)
+	if err := verifyLabelsExist(ctx, client, input.Repo, labels); err != nil {
+		return IssueView{}, err
 	}
-	for _, a := range input.Assignees {
-		if strings.TrimSpace(a) != "" {
-			args = append(args, "--assignee", strings.TrimSpace(a))
-		}
+	body := map[string]any{"title": input.Title, "body": input.Body}
+	if len(labels) > 0 {
+		body["labels"] = labels
+	}
+	if assignees := cleanNames(input.Assignees); len(assignees) > 0 {
+		body["assignees"] = assignees
 	}
 	if input.Milestone != "" {
-		args = append(args, "--milestone", input.Milestone)
+		number, err := resolveMilestone(ctx, client, input.Repo, input.Milestone)
+		if err != nil {
+			return IssueView{}, err
+		}
+		body["milestone"] = number
 	}
-
-	output, err := runner.Run(ctx, args...)
+	output, err := restBytes(ctx, client, "POST", "/repos/"+input.Repo+"/issues", body)
 	if err != nil {
 		return IssueView{}, fmt.Errorf("create issue in %s: %w", input.Repo, err)
 	}
-
-	// gh issue create succeeded, so every later failure must tell the caller
-	// not to retry and risk a duplicate issue.
-	target, err := ResolveGitHubItemTarget(input.Repo, 0, strings.TrimSpace(string(output)))
+	var created struct {
+		URL string `json:"html_url"`
+	}
+	if err := json.Unmarshal(output, &created); err != nil {
+		return IssueView{}, fmt.Errorf("issue was created but its identity could not be decoded; do not retry creation: %w", err)
+	}
+	target, err := ResolveGitHubItemTarget(input.Repo, 0, created.URL)
 	if err != nil {
-		return IssueView{}, fmt.Errorf("issue was created but its identity could not be resolved from gh output %q; do not retry creation: %w", string(output), err)
+		return IssueView{}, fmt.Errorf("issue was created but its identity could not be resolved; do not retry creation: %w", err)
 	}
 	if target.Kind != "issues" {
-		return IssueView{}, fmt.Errorf("issue was created but gh returned a non-issue URL %s; do not retry creation", target.URL)
+		return IssueView{}, fmt.Errorf("issue was created but GitHub returned a non-issue URL %s; do not retry creation", target.URL)
 	}
 
-	view, err := ViewIssue(ctx, runner, input.Repo, target.Number)
+	view, err := ViewIssue(ctx, client, input.Repo, target.Number)
 	if err != nil {
 		return IssueView{}, fmt.Errorf("issue was created at %s; do not retry creation: read back created issue %s#%d: %w", target.URL, input.Repo, target.Number, err)
 	}
@@ -424,7 +539,7 @@ func CreateIssue(ctx context.Context, runner Runner, input CreateIssueInput) (Is
 }
 
 // EditIssue modifies an issue and independently verifies applied changes and preservation.
-func EditIssue(ctx context.Context, runner Runner, input EditIssueInput) (IssueView, error) {
+func EditIssue(ctx context.Context, client Client, input EditIssueInput) (IssueView, error) {
 	if input.Repo == "" {
 		return IssueView{}, errors.New("issue edit requires a repository")
 	}
@@ -432,120 +547,129 @@ func EditIssue(ctx context.Context, runner Runner, input EditIssueInput) (IssueV
 		return IssueView{}, errors.New("issue edit requires a positive issue number")
 	}
 	// Resolve @me first so an add/remove overlap through the alias is caught.
-	if err := ResolveSelfAssignees(ctx, runner, &input.AddAssignees, &input.RemoveAssignees); err != nil {
+	if err := ResolveSelfAssignees(ctx, client, &input.AddAssignees, &input.RemoveAssignees); err != nil {
 		return IssueView{}, err
 	}
 	if err := validateIssueEditInput(input); err != nil {
 		return IssueView{}, err
 	}
 
-	before, err := ViewIssue(ctx, runner, input.Repo, input.Number)
+	before, err := ViewIssue(ctx, client, input.Repo, input.Number)
 	if err != nil {
 		return IssueView{}, fmt.Errorf("inspect issue before edit: %w", err)
 	}
 
-	editArgs := []string{"issue", "edit", strconv.Itoa(input.Number), "--repo", input.Repo}
-	hasEdits := false
-
+	path := fmt.Sprintf("/repos/%s/issues/%d", input.Repo, input.Number)
+	patch := map[string]any{}
 	if input.Title != nil && *input.Title != before.Title {
-		editArgs = append(editArgs, "--title", *input.Title)
-		hasEdits = true
+		patch["title"] = *input.Title
 	}
 	if input.Body != nil && *input.Body != before.Body {
-		editArgs = append(editArgs, "--body", *input.Body)
-		hasEdits = true
+		patch["body"] = *input.Body
 	}
-	beforeLabels := issueLabelNames(before.Labels)
-	for _, l := range cleanNames(input.AddLabels) {
-		if !containsName(beforeLabels, l) {
-			editArgs = append(editArgs, "--add-label", l)
-			hasEdits = true
+	var addLabels, removeLabels, addAssignees, removeAssignees []string
+	for _, name := range cleanNames(input.AddLabels) {
+		if !containsName(issueLabelNames(before.Labels), name) {
+			addLabels = append(addLabels, name)
 		}
 	}
-	for _, l := range cleanNames(input.RemoveLabels) {
-		if containsName(beforeLabels, l) {
-			editArgs = append(editArgs, "--remove-label", l)
-			hasEdits = true
+	for _, name := range cleanNames(input.RemoveLabels) {
+		if containsName(issueLabelNames(before.Labels), name) {
+			removeLabels = append(removeLabels, name)
 		}
 	}
-	beforeAssignees := issueAssigneeNames(before.Assignees)
-	for _, a := range cleanNames(input.AddAssignees) {
-		if !containsName(beforeAssignees, a) {
-			editArgs = append(editArgs, "--add-assignee", a)
-			hasEdits = true
+	for _, name := range cleanNames(input.AddAssignees) {
+		if !containsName(issueAssigneeNames(before.Assignees), name) {
+			addAssignees = append(addAssignees, name)
 		}
 	}
-	for _, a := range cleanNames(input.RemoveAssignees) {
-		if containsName(beforeAssignees, a) {
-			editArgs = append(editArgs, "--remove-assignee", a)
-			hasEdits = true
+	for _, name := range cleanNames(input.RemoveAssignees) {
+		if containsName(issueAssigneeNames(before.Assignees), name) {
+			removeAssignees = append(removeAssignees, name)
 		}
+	}
+	// Validate every added label before any mutation: REST otherwise creates it.
+	if err := verifyLabelsExist(ctx, client, input.Repo, addLabels); err != nil {
+		return IssueView{}, err
 	}
 	if input.Milestone != nil {
 		if *input.Milestone == "" {
 			if before.Milestone != nil {
-				editArgs = append(editArgs, "--remove-milestone")
-				hasEdits = true
+				patch["milestone"] = nil
 			}
 		} else if before.Milestone == nil || before.Milestone.Title != *input.Milestone {
-			editArgs = append(editArgs, "--milestone", *input.Milestone)
-			hasEdits = true
+			number, err := resolveMilestone(ctx, client, input.Repo, *input.Milestone)
+			if err != nil {
+				return IssueView{}, err
+			}
+			patch["milestone"] = number
 		}
 	}
 	if input.IssueType != nil {
-		requestedType := strings.TrimSpace(*input.IssueType)
-		if requestedType == "" {
+		requested := strings.TrimSpace(*input.IssueType)
+		if requested == "" {
 			if before.IssueType != nil {
-				editArgs = append(editArgs, "--remove-type")
-				hasEdits = true
+				patch["type"] = nil
 			}
-		} else if before.IssueType == nil || !strings.EqualFold(before.IssueType.Name, requestedType) {
-			editArgs = append(editArgs, "--type", requestedType)
-			hasEdits = true
+		} else if before.IssueType == nil || !strings.EqualFold(before.IssueType.Name, requested) {
+			patch["type"] = requested
 		}
 	}
-
-	if hasEdits {
-		if _, err := runner.Run(ctx, editArgs...); err != nil {
+	hasEdits := len(patch) > 0 || len(addLabels)+len(removeLabels)+len(addAssignees)+len(removeAssignees) > 0
+	if len(patch) > 0 {
+		if _, err := client.REST(ctx, "PATCH", path, patch); err != nil {
+			return IssueView{}, fmt.Errorf("apply issue edits: %w", err)
+		}
+	}
+	if len(addLabels) > 0 {
+		if _, err := client.REST(ctx, "POST", path+"/labels", map[string]any{"labels": addLabels}); err != nil {
+			return IssueView{}, fmt.Errorf("apply issue edits: %w", err)
+		}
+	}
+	for _, name := range removeLabels {
+		if _, err := client.REST(ctx, "DELETE", path+"/labels/"+url.PathEscape(name), nil); err != nil {
+			return IssueView{}, fmt.Errorf("apply issue edits: %w", err)
+		}
+	}
+	if len(addAssignees) > 0 {
+		if _, err := client.REST(ctx, "POST", path+"/assignees", map[string]any{"assignees": addAssignees}); err != nil {
+			return IssueView{}, fmt.Errorf("apply issue edits: %w", err)
+		}
+	}
+	if len(removeAssignees) > 0 {
+		if _, err := client.REST(ctx, "DELETE", path+"/assignees", map[string]any{"assignees": removeAssignees}); err != nil {
 			return IssueView{}, fmt.Errorf("apply issue edits: %w", err)
 		}
 	}
 
 	stateChanged := false
 	if input.State != nil {
-		targetState := strings.ToUpper(strings.TrimSpace(*input.State))
-		if targetState == "CLOSED" && strings.EqualFold(before.State, "OPEN") {
-			closeArgs := []string{"issue", "close", strconv.Itoa(input.Number), "--repo", input.Repo}
-			if input.CloseReason != "" {
-				closeArgs = append(closeArgs, "--reason", closeReasons[normalizeCloseReason(input.CloseReason)].gh)
+		state := strings.ToLower(strings.TrimSpace(*input.State))
+		statePatch := map[string]any{"state": state}
+		stage := "reopen issue"
+		if state == "closed" {
+			stage = "close issue"
+			reason := normalizeCloseReason(input.CloseReason)
+			if reason == "" && strings.EqualFold(before.State, "open") {
+				reason = "completed"
 			}
-			if _, err := runner.Run(ctx, closeArgs...); err != nil {
-				return IssueView{}, fmt.Errorf("close issue %s#%d: %w", input.Repo, input.Number, err)
+			if reason != "" {
+				statePatch["state_reason"] = reason
 			}
-			stateChanged = true
-		} else if targetState == "CLOSED" && input.CloseReason != "" &&
-			!strings.EqualFold(before.StateReason, closeReasons[normalizeCloseReason(input.CloseReason)].state) {
-			// gh issue close is a no-op on a closed issue, so change only the reason.
-			reasonArgs := []string{"api", "--method", "PATCH"}
-			reasonArgs = append(reasonArgs, apiHeaders()...)
-			reasonArgs = append(reasonArgs,
-				fmt.Sprintf("repos/%s/issues/%d", input.Repo, input.Number),
-				"-f", "state=closed",
-				"-f", "state_reason="+normalizeCloseReason(input.CloseReason),
-				"--jq", ".state_reason",
-			)
-			if _, err := runner.Run(ctx, reasonArgs...); err != nil {
-				return IssueView{}, fmt.Errorf("change close reason of %s#%d: %w", input.Repo, input.Number, err)
+			stateChanged = strings.EqualFold(before.State, "open") || reason != "" && !strings.EqualFold(before.StateReason, closeReasons[reason].state)
+			if strings.EqualFold(before.State, "closed") {
+				stage = "change close reason of"
 			}
-			stateChanged = true
-		} else if targetState == "OPEN" && strings.EqualFold(before.State, "CLOSED") {
-			reopenArgs := []string{"issue", "reopen", strconv.Itoa(input.Number), "--repo", input.Repo}
-			if _, err := runner.Run(ctx, reopenArgs...); err != nil {
-				return IssueView{}, fmt.Errorf("reopen issue %s#%d: %w", input.Repo, input.Number, err)
+		} else {
+			stateChanged = strings.EqualFold(before.State, "closed")
+		}
+		if stateChanged {
+			if _, err := client.REST(ctx, "PATCH", path, statePatch); err != nil {
+				return IssueView{}, fmt.Errorf("%s %s#%d: %w", stage, input.Repo, input.Number, err)
 			}
-			stateChanged = true
 		}
 	}
+
 	if !hasEdits && !stateChanged {
 		if err := verifyEditedIssue(before, before, input); err != nil {
 			return IssueView{}, err
@@ -553,7 +677,7 @@ func EditIssue(ctx context.Context, runner Runner, input EditIssueInput) (IssueV
 		return before, nil
 	}
 
-	after, err := ViewIssue(ctx, runner, input.Repo, input.Number)
+	after, err := ViewIssue(ctx, client, input.Repo, input.Number)
 	if err != nil {
 		return IssueView{}, fmt.Errorf("read back edited issue: %w", err)
 	}
@@ -570,22 +694,28 @@ const SelfAssignee = "@me"
 
 // ResolveSelfAssignees replaces gh's @me alias in each list with the
 // authenticated user's login, so plans and readback compare real logins. It
-// calls gh at most once, and only when the alias is present. Each list that
+// reads /user at most once, and only when the alias is present. Each list that
 // contains the alias is replaced with a new slice.
-func ResolveSelfAssignees(ctx context.Context, runner Runner, lists ...*[]string) error {
+func ResolveSelfAssignees(ctx context.Context, client Client, lists ...*[]string) error {
 	login := ""
 	for _, list := range lists {
 		if list == nil || !containsName(*list, SelfAssignee) {
 			continue
 		}
 		if login == "" {
-			output, err := runner.Run(ctx, "api", "user", "--jq", ".login")
+			output, err := restBytes(ctx, client, "GET", "/user", nil)
 			if err != nil {
 				return fmt.Errorf("resolve %s to the authenticated login: %w", SelfAssignee, err)
 			}
-			login = strings.TrimSpace(string(output))
+			var user struct {
+				Login string `json:"login"`
+			}
+			if err := json.Unmarshal(output, &user); err != nil {
+				return fmt.Errorf("resolve %s: decode authenticated user: %w", SelfAssignee, err)
+			}
+			login = strings.TrimSpace(user.Login)
 			if login == "" || strings.ContainsAny(login, " \t\n") {
-				return fmt.Errorf("resolve %s to the authenticated login: unexpected gh output %q", SelfAssignee, string(output))
+				return fmt.Errorf("resolve %s to the authenticated login: unexpected GitHub login", SelfAssignee)
 			}
 		}
 		resolved := make([]string, 0, len(*list))
@@ -902,4 +1032,40 @@ func canonicalRawSet(values []json.RawMessage) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+// verifyLabelsExist preserves gh's refusal to implicitly create labels.
+func verifyLabelsExist(ctx context.Context, client Client, repo string, names []string) error {
+	for _, name := range names {
+		_, err := client.REST(ctx, "GET", "/repos/"+repo+"/labels/"+url.PathEscape(name), nil)
+		if err != nil {
+			var failure *HTTPError
+			if errors.As(err, &failure) && failure.Status == 404 {
+				return fmt.Errorf("label %s does not exist in %s", name, repo)
+			}
+			return fmt.Errorf("verify label %s in %s: %w", name, repo, err)
+		}
+	}
+	return nil
+}
+func resolveMilestone(ctx context.Context, client Client, repo, title string) (int, error) {
+	pages, err := RESTPages(ctx, client, "/repos/"+repo+"/milestones?state=all&per_page=100")
+	if err != nil {
+		return 0, fmt.Errorf("resolve milestone %q: %w", title, err)
+	}
+	for _, page := range pages {
+		var milestones []struct {
+			Number int    `json:"number"`
+			Title  string `json:"title"`
+		}
+		if err := json.Unmarshal(page, &milestones); err != nil {
+			return 0, fmt.Errorf("decode milestones: %w", err)
+		}
+		for _, milestone := range milestones {
+			if milestone.Title == title {
+				return milestone.Number, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("milestone %q does not exist in %s", title, repo)
 }
