@@ -20,11 +20,18 @@ Options:
 
 Environment:
   PROJECTS_BIN          projects binary to test (default: `projects` on PATH)
-  SMOKE_REPO            sandbox repository   (default: MiguelRodo/projects-cli-sandbox)
-  SMOKE_PROJECT_OWNER   sandbox Project owner (default: MiguelRodo)
-  SMOKE_PROJECT_NUMBER  sandbox Project number (default: 44)
+  SMOKE_REPO            sandbox repository, OWNER/NAME (required)
+  SMOKE_PROJECT_OWNER   sandbox Project owner (required)
+  SMOKE_PROJECT_NUMBER  sandbox Project number (required)
   SMOKE_ROOT            existing sandbox checkout to use as --root (default: temp clone)
   SMOKE_SETTLE          seconds to wait before re-reading workflow-affected state (default: 8)
+  SMOKE_CONFIG          file holding the SMOKE_* settings
+                        (default: ${XDG_CONFIG_HOME:-$HOME/.config}/projects/live-smoke.env)
+
+SMOKE_REPO, SMOKE_PROJECT_OWNER and SMOKE_PROJECT_NUMBER are required. Set them
+in the environment, or in the config file at SMOKE_CONFIG. The config file is
+read line by line and only KEY=VALUE lines for the SMOKE_* settings are used;
+values already set in the environment win.
 
 The repository name must end in "-sandbox", and the checkout's contract must
 name exactly SMOKE_REPO and SMOKE_PROJECT_OWNER/SMOKE_PROJECT_NUMBER.
@@ -42,10 +49,36 @@ for arg in "$@"; do
   esac
 done
 
-REPO=${SMOKE_REPO:-MiguelRodo/projects-cli-sandbox}
-PROJECT_OWNER=${SMOKE_PROJECT_OWNER:-MiguelRodo}
-PROJECT_NUMBER=${SMOKE_PROJECT_NUMBER:-44}
+# --- Settings. --------------------------------------------------------------
+# Values may come from the environment or from a small config file; the file is
+# parsed explicitly (never sourced) so it cannot execute code.
+CONFIG_FILE=${SMOKE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/projects/live-smoke.env}
+if [[ -f "$CONFIG_FILE" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ "$line" == *=* ]] || continue
+    key=${line%%=*}
+    value=${line#*=}
+    case "$key" in
+      SMOKE_REPO | SMOKE_PROJECT_OWNER | SMOKE_PROJECT_NUMBER | SMOKE_ROOT | SMOKE_SETTLE)
+        # The environment wins over the file.
+        if [[ -z "${!key:-}" ]]; then
+          export "$key=$value"
+        fi
+        ;;
+    esac
+  done <"$CONFIG_FILE"
+fi
+
+REPO=${SMOKE_REPO:-}
+PROJECT_OWNER=${SMOKE_PROJECT_OWNER:-}
+PROJECT_NUMBER=${SMOKE_PROJECT_NUMBER:-}
 SETTLE=${SMOKE_SETTLE:-8}
+
+if [[ -z "$REPO" || -z "$PROJECT_OWNER" || -z "$PROJECT_NUMBER" ]]; then
+  echo "live-smoke: set SMOKE_REPO, SMOKE_PROJECT_OWNER and SMOKE_PROJECT_NUMBER in the environment or in $CONFIG_FILE" >&2
+  exit 2
+fi
 
 # --- Guard: never point this at real work. --------------------------------
 if [[ ! "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then

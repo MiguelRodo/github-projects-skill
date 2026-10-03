@@ -55,11 +55,25 @@ scripts/live-smoke.sh --build       # go build this checkout into a temp dir
 
 | Variable | Default |
 | --- | --- |
-| `SMOKE_REPO` | `MiguelRodo/projects-cli-sandbox` |
-| `SMOKE_PROJECT_OWNER` | `MiguelRodo` |
-| `SMOKE_PROJECT_NUMBER` | `44` |
+| `SMOKE_REPO` | required |
+| `SMOKE_PROJECT_OWNER` | required |
+| `SMOKE_PROJECT_NUMBER` | required |
 | `SMOKE_ROOT` | a temporary clone of `SMOKE_REPO` |
 | `SMOKE_SETTLE` | `8` seconds before re-reading workflow-affected state |
+
+`SMOKE_REPO`, `SMOKE_PROJECT_OWNER` and `SMOKE_PROJECT_NUMBER` have no
+defaults: set them in the environment, or in a config file. Values already set
+in the environment win over the file. The default config path is
+`${XDG_CONFIG_HOME:-$HOME/.config}/projects/live-smoke.env`, overridden by
+`SMOKE_CONFIG`. The file is read line by line and only `KEY=VALUE` lines for the
+settings above are used; blank lines and lines starting with `#` are ignored.
+
+```bash
+# ~/.config/projects/live-smoke.env
+SMOKE_REPO=OWNER/projects-cli-sandbox
+SMOKE_PROJECT_OWNER=OWNER
+SMOKE_PROJECT_NUMBER=1
+```
 
 Each step prints PASS, FAIL or SKIP (an earlier step it depends on failed) with
 its duration. A failure prints the CLI command, exit status, stdout and stderr.
