@@ -102,12 +102,7 @@ type projectViewsData struct {
 
 type projectViewsResponse struct {
 	Data struct {
-		User struct {
-			ProjectV2 *projectViewsData `json:"projectV2"`
-		} `json:"user"`
-		Organization struct {
-			ProjectV2 *projectViewsData `json:"projectV2"`
-		} `json:"organization"`
+		Owner *graphQLProjectOwner[projectViewsData] `json:"owner"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
@@ -140,70 +135,82 @@ func queryRESTProjectFields(ctx context.Context, client Client, project contract
 	return fields, nil
 }
 
-func queryProjectViews(ctx context.Context, client Client, project contract.Project, ownerType string) ([]projectViewNode, error) {
-	query := fmt.Sprintf(`query($login: String!, $number: Int!) {
-  %s(login: $login) {
-    projectV2(number: $number) {
-      number title
-      views(first: 100) {
-        nodes {
-          id number name layout filter
-          configuration {
-            visibleFields(first: 100) {
+// queryProjectViews reads the Project views through the repositoryOwner root,
+// which resolves both users and organizations in one request, and returns the
+// observed owner type.
+func queryProjectViews(ctx context.Context, client Client, project contract.Project) ([]projectViewNode, string, error) {
+	query := `query($login: String!, $number: Int!) {
+  owner: repositoryOwner(login: $login) {
+    __typename
+    login
+    ... on ProjectV2Owner {
+      projectV2(number: $number) {
+        number title
+        views(first: 100) {
+          nodes {
+            id number name layout filter
+            configuration {
+              visibleFields(first: 100) {
+                nodes { ... on ProjectV2FieldCommon { id name } }
+                pageInfo { hasNextPage }
+              }
+            }
+            groupByFields(first: 10) {
               nodes { ... on ProjectV2FieldCommon { id name } }
               pageInfo { hasNextPage }
             }
+            verticalGroupByFields(first: 10) {
+              nodes { ... on ProjectV2FieldCommon { id name } }
+              pageInfo { hasNextPage }
+            }
+            sortByFields(first: 10) {
+              nodes { direction field { ... on ProjectV2FieldCommon { id name } } }
+              pageInfo { hasNextPage }
+            }
           }
-          groupByFields(first: 10) {
-            nodes { ... on ProjectV2FieldCommon { id name } }
-            pageInfo { hasNextPage }
-          }
-          verticalGroupByFields(first: 10) {
-            nodes { ... on ProjectV2FieldCommon { id name } }
-            pageInfo { hasNextPage }
-          }
-          sortByFields(first: 10) {
-            nodes { direction field { ... on ProjectV2FieldCommon { id name } } }
-            pageInfo { hasNextPage }
-          }
+          pageInfo { hasNextPage }
         }
-        pageInfo { hasNextPage }
       }
     }
   }
-}`, ownerType)
+}`
 	out, err := graphQLBytes(ctx, client, query, map[string]any{"login": project.Owner, "number": project.Number})
 	if err != nil {
-		return nil, fmt.Errorf("query Project views: %w", err)
+		return nil, "", fmt.Errorf("query Project views: %w", err)
 	}
 	var resp projectViewsResponse
 	if err := json.Unmarshal(out, &resp); err != nil {
-		return nil, fmt.Errorf("decode Project views: %w", err)
+		return nil, "", fmt.Errorf("decode Project views: %w", err)
 	}
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("GraphQL error querying Project views: %s", resp.Errors[0].Message)
+		return nil, "", fmt.Errorf("GraphQL error querying Project views: %s", resp.Errors[0].Message)
 	}
-	var data *projectViewsData
-	if ownerType == "organization" {
-		data = resp.Data.Organization.ProjectV2
-	} else {
-		data = resp.Data.User.ProjectV2
+	if resp.Data.Owner == nil {
+		return nil, "", fmt.Errorf("Project owner %s was not found or is not accessible", project.Owner)
 	}
+	if err := verifyProjectOwner(project, resp.Data.Owner.Typename, resp.Data.Owner.Login); err != nil {
+		return nil, "", err
+	}
+	ownerType, err := ownerTypeFromTypename(resp.Data.Owner.Typename)
+	if err != nil {
+		return nil, "", err
+	}
+	data := resp.Data.Owner.ProjectV2
 	if data == nil {
-		return nil, fmt.Errorf("Project %s/%d not found at %s root", project.Owner, project.Number, ownerType)
+		return nil, "", fmt.Errorf("Project %s/%d not found at %s root", project.Owner, project.Number, ownerType)
 	}
 	if data.Number != project.Number || data.Title != project.Title {
-		return nil, fmt.Errorf("Project identity changed: got %s/%d %q, expected %s/%d %q", project.Owner, data.Number, data.Title, project.Owner, project.Number, project.Title)
+		return nil, "", fmt.Errorf("Project identity changed: got %s/%d %q, expected %s/%d %q", project.Owner, data.Number, data.Title, project.Owner, project.Number, project.Title)
 	}
 	if data.Views.PageInfo.HasNextPage {
-		return nil, fmt.Errorf("Project %s/%d has more than 100 views; refusing an incomplete read", project.Owner, project.Number)
+		return nil, "", fmt.Errorf("Project %s/%d has more than 100 views; refusing an incomplete read", project.Owner, project.Number)
 	}
 	for _, view := range data.Views.Nodes {
 		if view.Configuration.VisibleFields.PageInfo.HasNextPage || view.GroupByFields.PageInfo.HasNextPage || view.VerticalGroupByFields.PageInfo.HasNextPage || view.SortByFields.PageInfo.HasNextPage {
-			return nil, fmt.Errorf("Project view %q has paginated configuration; refusing an incomplete read", view.Name)
+			return nil, "", fmt.Errorf("Project view %q has paginated configuration; refusing an incomplete read", view.Name)
 		}
 	}
-	return data.Views.Nodes, nil
+	return data.Views.Nodes, ownerType, nil
 }
 
 func buildBacklogViewSpec(project contract.Project, ownerType string, fields []restProjectField) (backlogViewSpec, error) {
@@ -299,26 +306,15 @@ func buildBacklogViewSpec(project contract.Project, ownerType string, fields []r
 }
 
 func inspectStandardBacklogView(ctx context.Context, client Client, project contract.Project) (backlogViewState, error) {
-	ownerType := project.OwnerType
-	if ownerType == "" {
-		var err error
-		ownerType, err = discoverOwnerType(ctx, client, project.Owner)
-		if err != nil {
-			return backlogViewState{}, fmt.Errorf("discover Project owner type: %w", err)
-		}
-	}
-	if ownerType != "user" && ownerType != "organization" {
-		return backlogViewState{}, fmt.Errorf("unsupported Project owner type %q", ownerType)
+	views, ownerType, err := queryProjectViews(ctx, client, project)
+	if err != nil {
+		return backlogViewState{}, err
 	}
 	fields, err := queryRESTProjectFields(ctx, client, project, ownerType)
 	if err != nil {
 		return backlogViewState{}, err
 	}
 	spec, err := buildBacklogViewSpec(project, ownerType, fields)
-	if err != nil {
-		return backlogViewState{}, err
-	}
-	views, err := queryProjectViews(ctx, client, project, ownerType)
 	if err != nil {
 		return backlogViewState{}, err
 	}
@@ -644,9 +640,11 @@ func replaceBacklogView(ctx context.Context, client Client, project contract.Pro
 		return fmt.Errorf("old %s was preserved: %w", oldLabel, err)
 	}
 	createdLabel := "replacement Backlog (" + createdID + ")"
-	views, verifyErr := queryProjectViews(ctx, client, project, state.ownerType)
+	views, observedOwnerType, verifyErr := queryProjectViews(ctx, client, project)
 	if verifyErr != nil {
 		verifyErr = fmt.Errorf("re-read Project views: %w", verifyErr)
+	} else if observedOwnerType != state.ownerType {
+		verifyErr = fmt.Errorf("Project owner type changed from %s to %s while replacing the Backlog view", state.ownerType, observedOwnerType)
 	} else {
 		if created, ok := findViewByID(views, createdID); ok {
 			createdLabel = "replacement " + viewLabel(created)
