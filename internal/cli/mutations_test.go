@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -33,32 +34,79 @@ func cliMissingProjectItemQueryJSON() string {
 	return `{"data":{` + cliProjectOwnerJSON + `,"repository":{"target":{"id":"I_55","url":"https://github.com/octo-org/example/issues/55","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`
 }
 
-func exactTitleScanArgs(repo, title string) []string {
-	encodedTitle, err := json.Marshal(strings.TrimSpace(title))
-	if err != nil {
-		panic(err)
-	}
-	filter := fmt.Sprintf(
-		`.[] | select((.pull_request == null) and (.title == %s)) | {number, title, state, url: .html_url}`,
-		encodedTitle,
-	)
+// exactTitleRecentQuery mirrors the titles-only GraphQL query used by the
+// duplicate check.
+const exactTitleRecentQuery = `query($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: DESC}, states: [OPEN]) {
+      nodes { number title state url createdAt }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`
+
+func exactTitleSearchArgs(repo, title string) []string {
 	return []string{
-		"api", "--paginate",
+		"api", "-X", "GET",
 		"-H", "Accept: application/vnd.github+json",
 		"-H", "X-GitHub-Api-Version: 2026-03-10",
-		fmt.Sprintf("repos/%s/issues?state=all&per_page=100", repo),
-		"--jq", filter,
+		"search/issues",
+		"-f", fmt.Sprintf(`q=repo:%s is:issue in:title "%s"`, repo, strings.TrimSpace(title)),
+		"-f", "per_page=100",
+		"-f", "page=1",
+		"--jq", `{total_count, incomplete_results, items: [.items[] | {number, title, state, url: .html_url, pull_request: (.pull_request != null)}]}`,
 	}
+}
+
+// exactTitleTitlesPage returns the fake response for one titles-only page of
+// the newest open issues in repo, requested after cursor ("" for the first page).
+func exactTitleTitlesPage(repo, cursor string, hasNext bool, endCursor, nodes string) response {
+	owner, name, _ := strings.Cut(repo, "/")
+	args := []string{"api", "graphql", "-f", "query=" + exactTitleRecentQuery, "-f", "owner=" + owner, "-f", "name=" + name}
+	if cursor != "" {
+		args = append(args, "-f", "cursor="+cursor)
+	}
+	return response{
+		args:   args,
+		output: fmt.Sprintf(`{"data":{"repository":{"issues":{"nodes":[%s],"pageInfo":{"hasNextPage":%t,"endCursor":%q}}}}}`, nodes, hasNext, endCursor),
+	}
+}
+
+// exactTitleCheck returns the fake responses for the search-based duplicate
+// check: one Search API page and one titles-only page of the newest issues.
+func exactTitleCheck(repo, title, searchItems, titleNodes string) []response {
+	count := strings.Count(searchItems, `"number"`)
+	return []response{
+		{
+			args:   exactTitleSearchArgs(repo, title),
+			output: fmt.Sprintf(`{"total_count":%d,"incomplete_results":false,"items":[%s]}`, count, searchItems),
+		},
+		exactTitleTitlesPage(repo, "", false, "", titleNodes),
+	}
+}
+
+// exactTitleCappedFallback returns the fake responses for a failed search
+// followed by the recent-open scan stopping at its 500-issue cap while still
+// inside the window (the issues are dated far in the future).
+func exactTitleCappedFallback(repo, title string) []response {
+	responses := []response{{args: exactTitleSearchArgs(repo, title), err: errors.New("gh: API rate limit exceeded (HTTP 403)")}}
+	cursor := ""
+	for page := 1; page <= 5; page++ {
+		next := fmt.Sprintf("c%d", page)
+		nodes := make([]string, 0, 100)
+		for i := 0; i < 100; i++ {
+			number := 1000 - (page-1)*100 - i
+			nodes = append(nodes, fmt.Sprintf(`{"number":%d,"title":"Other","state":"OPEN","url":"https://github.com/%s/issues/%d","createdAt":"2999-01-01T00:00:00Z"}`, number, repo, number))
+		}
+		responses = append(responses, exactTitleTitlesPage(repo, cursor, true, next, strings.Join(nodes, ",")))
+		cursor = next
+	}
+	return responses
 }
 
 func TestIssueCreatePlanDefault(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: []response{
-		{
-			args:   exactTitleScanArgs("octo-org/example", "Sample Plan Issue"),
-			output: ``,
-		},
-	}}
+	fake := &runner{t: t, responses: exactTitleCheck("octo-org/example", "Sample Plan Issue", "", "")}
 	exitCode := Run(
 		context.Background(),
 		[]string{"issue", "create", "--root", fixture(t, "single"), "--title", "Sample Plan Issue", "--json"},
@@ -71,11 +119,51 @@ func TestIssueCreatePlanDefault(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"action": "create_issue"`) ||
 		!strings.Contains(stdout.String(), `"apply": false`) ||
-		!strings.Contains(stdout.String(), `"title": "Sample Plan Issue"`) {
+		!strings.Contains(stdout.String(), `"title": "Sample Plan Issue"`) ||
+		!strings.Contains(stdout.String(), `"method": "search+recent"`) ||
+		!strings.Contains(stdout.String(), `"complete": true`) {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
 	if !strings.Contains(stderr.String(), "[1/2] Inspecting") || !strings.Contains(stderr.String(), "[2/2] Planning issue creation") {
 		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func TestIssueCreateReportsCappedDuplicateCheck(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	fake := &runner{t: t, responses: exactTitleCappedFallback("octo-org/example", "Capped")}
+	exitCode := Run(context.Background(), []string{
+		"issue", "create", "--root", fixture(t, "single"), "--title", "Capped", "--json",
+	}, &stdout, &stderr, fake)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	var plan struct {
+		DuplicateCheck struct {
+			Method       string `json:"method"`
+			RecentWindow string `json:"recentWindow"`
+			Complete     *bool  `json:"complete"`
+			Unchecked    string `json:"unchecked"`
+		} `json:"duplicateCheck"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatalf("decode plan: %v\n%s", err, stdout.String())
+	}
+	if got := plan.DuplicateCheck; got.Method != "recent-open" || got.RecentWindow != "7d" || got.Complete == nil || *got.Complete || !strings.Contains(got.Unchecked, "closed issues") {
+		t.Fatalf("duplicateCheck = %+v, stdout = %s", got, stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	fake = &runner{t: t, responses: exactTitleCappedFallback("octo-org/example", "Capped")}
+	exitCode = Run(context.Background(), []string{
+		"issue", "create", "--root", fixture(t, "single"), "--title", "Capped",
+	}, &stdout, &stderr, fake)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "covered only recent open issues; closed issues and open issues beyond the newest 500 created in the last 7d were not checked") {
+		t.Fatalf("stdout = %s", stdout.String())
 	}
 }
 
@@ -95,18 +183,14 @@ func TestIssueCreateAllowDuplicateSkipsRepositoryScan(t *testing.T) {
 	if fake.index != 0 {
 		t.Fatalf("GitHub calls = %d, want 0 when duplicate inspection is bypassed", fake.index)
 	}
-	if strings.Contains(stdout.String(), `"exactTitleMatches"`) || !strings.Contains(stderr.String(), "Skipping duplicate inspection") {
+	if strings.Contains(stdout.String(), `"exactTitleMatches"`) || strings.Contains(stdout.String(), `"duplicateCheck"`) || !strings.Contains(stderr.String(), "Skipping duplicate inspection") {
 		t.Fatalf("stdout = %s, stderr = %s", stdout.String(), stderr.String())
 	}
 }
 
 func TestIssueCreateApply(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: []response{
-		{
-			args:   exactTitleScanArgs("octo-org/example", "Created Issue"),
-			output: ``,
-		},
+	fake := &runner{t: t, responses: append(exactTitleCheck("octo-org/example", "Created Issue", "", ""), []response{
 		{
 			args:   []string{"issue", "create", "--repo", "octo-org/example", "--title", "Created Issue", "--body", "Body text", "--label", "bug"},
 			output: "https://github.com/octo-org/example/issues/55\n",
@@ -115,7 +199,7 @@ func TestIssueCreateApply(t *testing.T) {
 			args:   []string{"issue", "view", "55", "--repo", "octo-org/example", "--json", "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"},
 			output: `{"number":55,"title":"Created Issue","body":"Body text","state":"OPEN","url":"https://github.com/octo-org/example/issues/55","labels":[{"name":"bug"}]}`,
 		},
-	}}
+	}...)}
 
 	exitCode := Run(
 		context.Background(),
@@ -128,7 +212,8 @@ func TestIssueCreateApply(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"applied": true`) ||
-		!strings.Contains(stdout.String(), `"number": 55`) {
+		!strings.Contains(stdout.String(), `"number": 55`) ||
+		!strings.Contains(stdout.String(), `"duplicateCheck"`) {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
 	if !strings.Contains(stderr.String(), "[2/3] Creating issue") ||
@@ -293,10 +378,8 @@ func TestProjectItemEditPlan(t *testing.T) {
 
 func TestIssueCreateRejectsExactTitleDuplicate(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: []response{{
-		args:   exactTitleScanArgs("octo-org/example", "Existing"),
-		output: "{\"number\":55,\"title\":\"Existing\",\"state\":\"open\",\"url\":\"https://github.com/octo-org/example/issues/55\"}\n",
-	}}}
+	fake := &runner{t: t, responses: exactTitleCheck("octo-org/example", "Existing",
+		`{"number":55,"title":"Existing","state":"open","url":"https://github.com/octo-org/example/issues/55","pull_request":false}`, "")}
 	exitCode := Run(context.Background(), []string{
 		"issue", "create", "--root", fixture(t, "single"), "--title", "Existing", "--apply",
 	}, &stdout, &stderr, fake)
@@ -331,10 +414,7 @@ func TestProjectMutationTargetsAreMutuallyExclusive(t *testing.T) {
 
 func TestDispatcherIssueCreatePlanIncludesRoutingLabel(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: []response{{
-		args:   exactTitleScanArgs("octo-user/issues", "Routed"),
-		output: ``,
-	}}}
+	fake := &runner{t: t, responses: exactTitleCheck("octo-user/issues", "Routed", "", "")}
 	exitCode := Run(context.Background(), []string{
 		"issue", "create", "--root", fixture(t, "dispatcher"), "--project-key", "alpha", "--title", "Routed", "--json",
 	}, &stdout, &stderr, fake)
@@ -370,10 +450,9 @@ const cliIssueViewJSONFields = "number,title,body,state,stateReason,labels,assig
 
 func TestIssueCreatePlanResolvesSelfAssignee(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fake := &runner{t: t, responses: []response{
-		{args: exactTitleScanArgs("octo-org/example", "Mine"), output: ``},
-		{args: []string{"api", "user", "--jq", ".login"}, output: "octocat\n"},
-	}}
+	fake := &runner{t: t, responses: append(exactTitleCheck("octo-org/example", "Mine", "", ""),
+		response{args: []string{"api", "user", "--jq", ".login"}, output: "octocat\n"},
+	)}
 	exitCode := Run(
 		context.Background(),
 		[]string{"issue", "create", "--root", fixture(t, "single"), "--title", "Mine", "--assignee", "@me", "--json"},
