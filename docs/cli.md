@@ -146,10 +146,25 @@ projects issue create --title "New issue title" --body "Issue description"
 projects issue create --title "New issue title" --body "Issue description" --apply
 ```
 
-Creation scans the complete issue repository for an exact title match and
-stops rather than creating a likely duplicate. If two distinct issues really
-must have the same title, make that choice visible with `--allow-duplicate`;
-the explicit override also skips the otherwise unnecessary repository scan.
+Creation checks the repository for an issue with exactly the same title
+(case-sensitive, after trimming outer whitespace; pull requests are ignored)
+and stops rather than creating a likely duplicate. The check reads titles only,
+never issue bodies, and usually costs two read calls: a title-phrase search
+across open and closed issues, filtered to exact matches, plus one titles-only
+page of the newest open issues created in the last 7 days to cover
+search-index lag. Whenever search cannot be trusted to be complete, for
+example on incomplete or over-capped results, a search error or rate limit, a
+title too long for search or one containing quotes, backslashes, control
+characters or no letters or digits, it instead checks only open issues created
+in the last 7 days, newest first, reading at most 500 (five calls). Closed
+issues and older issues are then not checked, and the plan and result say so:
+JSON reports
+`"duplicateCheck": {"method": "recent-open", "recentWindow": "7d", "complete": true, "unchecked": "..."}`
+(`complete` is false only when the 500-issue cap was reached inside the
+window) and text output adds a one-line note. An exact duplicate that is
+closed or older than 7 days is therefore caught only when search works. If two
+distinct issues really must have the same title, make that choice visible with
+`--allow-duplicate`; the explicit override also skips the duplicate check.
 An explicit `--repo` is an assertion and must agree with the contract; it is
 not an escape hatch to mutate another repository.
 

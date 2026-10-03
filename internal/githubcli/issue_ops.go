@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+	"unicode"
 )
 
 // IssueView represents the inspected state of an issue.
@@ -113,40 +114,257 @@ func ViewIssue(ctx context.Context, runner Runner, repo string, number int) (Iss
 	return view, nil
 }
 
-// FindIssuesByExactTitle scans the complete issue repository and returns
-// issues whose title exactly matches title. REST's issue collection also
-// contains pull requests, which are deliberately excluded.
-func FindIssuesByExactTitle(ctx context.Context, runner Runner, repo, title string) ([]IssueSummary, error) {
+// Exact-title duplicate check methods reported in ExactTitleCheck.Method.
+const (
+	// ExactTitleMethodSearchRecent is a complete search over open and closed
+	// issues plus the newest page of recent open issues for search-index lag.
+	ExactTitleMethodSearchRecent = "search+recent"
+	// ExactTitleMethodRecentOpen is the titles-only scan of open issues created
+	// within ExactTitleRecentWindow, used whenever search cannot be trusted.
+	ExactTitleMethodRecentOpen = "recent-open"
+)
+
+// ExactTitleCheck is the result of an exact-title duplicate check.
+type ExactTitleCheck struct {
+	// Matches are the exact-title issues, sorted by ascending number.
+	Matches []IssueSummary `json:"-"`
+	// Method is ExactTitleMethodSearchRecent or ExactTitleMethodRecentOpen.
+	Method string `json:"method"`
+	// RecentWindow is the creation-time window of the recent-open scan.
+	RecentWindow string `json:"recentWindow"`
+	// Complete is false only when the recent-open scan stopped at
+	// ExactTitleRecentScanLimit while still inside RecentWindow.
+	Complete bool `json:"complete"`
+	// Unchecked names the issues the check did not cover, if any.
+	Unchecked string `json:"unchecked,omitempty"`
+}
+
+// FindIssuesByExactTitle checks for issues whose title exactly matches title
+// after trimming its outer whitespace. Pull requests are excluded.
+//
+// It first asks the Search API for title-phrase candidates across open and
+// closed issues and reads one titles-only GraphQL page of recently created
+// open issues to cover search-index lag, then keeps only exact matches.
+// Whenever search cannot be trusted to be complete, it instead reads the
+// titles of open issues created within ExactTitleRecentWindow, at most
+// ExactTitleRecentScanLimit of them, and reports in Unchecked that older and
+// closed issues were not checked.
+func FindIssuesByExactTitle(ctx context.Context, runner Runner, repo, title string) (ExactTitleCheck, error) {
 	normalizedTitle := strings.TrimSpace(title)
-	encodedTitle, err := json.Marshal(normalizedTitle)
-	if err != nil {
-		return nil, fmt.Errorf("encode exact-title filter: %w", err)
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return ExactTitleCheck{}, fmt.Errorf("invalid repository %q: want OWNER/REPO", repo)
 	}
-	filter := fmt.Sprintf(
-		`.[] | select((.pull_request == null) and (.title == %s)) | {number, title, state, url: .html_url}`,
-		encodedTitle,
-	)
-	args := []string{"api", "--paginate"}
-	args = append(args, apiHeaders()...)
-	args = append(args, fmt.Sprintf("repos/%s/issues?state=all&per_page=100", repo), "--jq", filter)
-	output, err := runner.Run(ctx, args...)
-	if err != nil {
-		return nil, fmt.Errorf("scan issues in %s for an exact-title match: %w", repo, err)
+	byNumber, searchOK := findIssuesByExactTitleViaSearch(ctx, runner, repo, normalizedTitle)
+	if err := ctx.Err(); err != nil {
+		return ExactTitleCheck{}, fmt.Errorf("check %s for an exact-title match: %w", repo, err)
 	}
-	matches := make([]IssueSummary, 0)
-	decoder := json.NewDecoder(strings.NewReader(string(output)))
-	for {
-		var issue IssueSummary
-		if err := decoder.Decode(&issue); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, fmt.Errorf("decode exact-title issue results: %w", err)
+	check := ExactTitleCheck{Method: ExactTitleMethodSearchRecent, RecentWindow: exactTitleRecentWindowLabel}
+	maxPages := 1
+	if !searchOK {
+		byNumber = map[int]IssueSummary{}
+		check.Method = ExactTitleMethodRecentOpen
+		maxPages = ExactTitleRecentScanLimit / exactTitlePageSize
+	}
+	cutoff := exactTitleNow().Add(-ExactTitleRecentWindow)
+	recent, capped, err := recentOpenIssuesByExactTitle(ctx, runner, owner, name, normalizedTitle, cutoff, maxPages)
+	if err != nil {
+		return ExactTitleCheck{}, err
+	}
+	for _, issue := range recent {
+		byNumber[issue.Number] = issue
+	}
+	check.Complete = true
+	if !searchOK {
+		check.Complete = !capped
+		check.Unchecked = "closed issues and issues created more than " + exactTitleRecentWindowLabel + " ago"
+		if capped {
+			check.Unchecked = fmt.Sprintf("closed issues and open issues beyond the newest %d created in the last %s", ExactTitleRecentScanLimit, exactTitleRecentWindowLabel)
 		}
-		matches = append(matches, issue)
 	}
-	sort.Slice(matches, func(i, j int) bool { return matches[i].Number < matches[j].Number })
-	return matches, nil
+	check.Matches = make([]IssueSummary, 0, len(byNumber))
+	for _, issue := range byNumber {
+		check.Matches = append(check.Matches, issue)
+	}
+	sort.Slice(check.Matches, func(i, j int) bool { return check.Matches[i].Number < check.Matches[j].Number })
+	return check, nil
+}
+
+// exactTitleNow is the clock for the recent-open window; tests replace it.
+var exactTitleNow = time.Now
+
+const (
+	// ExactTitleRecentWindow is how far back, by creation time, the titles-only
+	// scan of open issues reaches.
+	ExactTitleRecentWindow      = 7 * 24 * time.Hour
+	exactTitleRecentWindowLabel = "7d"
+	// ExactTitleRecentScanLimit is a backstop: the most open issues, newest
+	// first, whose titles the scan reads even inside ExactTitleRecentWindow.
+	ExactTitleRecentScanLimit = 500
+	// exactTitleSearchQueryLimit is GitHub's documented search query limit.
+	exactTitleSearchQueryLimit = 256
+	// exactTitleSearchResultCap is the most results the Search API will page through.
+	exactTitleSearchResultCap = 1000
+	exactTitlePageSize        = 100
+)
+
+type exactTitleSearchPage struct {
+	TotalCount        int                     `json:"total_count"`
+	IncompleteResults bool                    `json:"incomplete_results"`
+	Items             []exactTitleSearchEntry `json:"items"`
+}
+
+type exactTitleSearchEntry struct {
+	IssueSummary
+	PullRequest bool `json:"pull_request"`
+}
+
+// exactTitleSearchQuery returns the Search API query for title, or false when
+// the title cannot be searched as a single trustworthy quoted phrase.
+func exactTitleSearchQuery(repo, title string) (string, bool) {
+	hasWord := false
+	for _, r := range title {
+		switch {
+		case r == '"' || r == '\\':
+			return "", false
+		case !unicode.IsGraphic(r):
+			return "", false
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			hasWord = true
+		}
+	}
+	// A title made only of punctuation or symbols has no searchable terms.
+	if !hasWord {
+		return "", false
+	}
+	query := fmt.Sprintf(`repo:%s is:issue in:title "%s"`, repo, title)
+	if len(query) > exactTitleSearchQueryLimit {
+		return "", false
+	}
+	return query, true
+}
+
+// findIssuesByExactTitleViaSearch returns the exact matches by number and true
+// only when every search page was complete; otherwise the caller must fall
+// back.
+func findIssuesByExactTitleViaSearch(ctx context.Context, runner Runner, repo, title string) (map[int]IssueSummary, bool) {
+	query, ok := exactTitleSearchQuery(repo, title)
+	if !ok {
+		return nil, false
+	}
+	byNumber := map[int]IssueSummary{}
+	fetched := 0
+	for page := 1; ; page++ {
+		args := []string{"api", "-X", "GET"}
+		args = append(args, apiHeaders()...)
+		args = append(args,
+			"search/issues",
+			"-f", "q="+query,
+			"-f", fmt.Sprintf("per_page=%d", exactTitlePageSize),
+			"-f", fmt.Sprintf("page=%d", page),
+			"--jq", `{total_count, incomplete_results, items: [.items[] | {number, title, state, url: .html_url, pull_request: (.pull_request != null)}]}`,
+		)
+		output, err := runner.Run(ctx, args...)
+		if err != nil {
+			return nil, false
+		}
+		var result exactTitleSearchPage
+		if err := json.Unmarshal(output, &result); err != nil {
+			return nil, false
+		}
+		if result.IncompleteResults || result.TotalCount > exactTitleSearchResultCap {
+			return nil, false
+		}
+		for _, item := range result.Items {
+			if !item.PullRequest && item.Title == title {
+				byNumber[item.Number] = item.IssueSummary
+			}
+		}
+		fetched += len(result.Items)
+		if fetched >= result.TotalCount {
+			return byNumber, true
+		}
+		if len(result.Items) == 0 || page*exactTitlePageSize >= exactTitleSearchResultCap {
+			// total_count promised more than search will return.
+			return nil, false
+		}
+	}
+}
+
+// exactTitleRecentQuery reads only the number, title, state, URL and creation
+// time of the newest open issues. The issues connection excludes pull requests.
+const exactTitleRecentQuery = `query($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: DESC}, states: [OPEN]) {
+      nodes { number title state url createdAt }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`
+
+type exactTitleRecentNode struct {
+	IssueSummary
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type exactTitleRecentResponse struct {
+	Data struct {
+		Repository *struct {
+			Issues struct {
+				Nodes    []exactTitleRecentNode `json:"nodes"`
+				PageInfo struct {
+					HasNextPage bool   `json:"hasNextPage"`
+					EndCursor   string `json:"endCursor"`
+				} `json:"pageInfo"`
+			} `json:"issues"`
+		} `json:"repository"`
+	} `json:"data"`
+}
+
+// recentOpenIssuesByExactTitle reads the titles of open issues, newest first,
+// until one was created before cutoff, there are no more, or maxPages pages
+// were read. It returns the exact matches and whether it stopped at maxPages
+// while still inside the window.
+func recentOpenIssuesByExactTitle(ctx context.Context, runner Runner, owner, name, title string, cutoff time.Time, maxPages int) ([]IssueSummary, bool, error) {
+	repo := owner + "/" + name
+	matches := make([]IssueSummary, 0)
+	cursor := ""
+	for page := 0; page < maxPages; page++ {
+		args := []string{"api", "graphql", "-f", "query=" + exactTitleRecentQuery, "-f", "owner=" + owner, "-f", "name=" + name}
+		if cursor != "" {
+			args = append(args, "-f", "cursor="+cursor)
+		}
+		output, err := runner.Run(ctx, args...)
+		if err != nil {
+			return nil, false, fmt.Errorf("read recent open issue titles in %s for an exact-title match: %w", repo, err)
+		}
+		var response exactTitleRecentResponse
+		if err := json.Unmarshal(output, &response); err != nil {
+			return nil, false, fmt.Errorf("decode recent open issue titles in %s: %w", repo, err)
+		}
+		if response.Data.Repository == nil {
+			return nil, false, fmt.Errorf("read recent open issue titles in %s: repository not found", repo)
+		}
+		issues := response.Data.Repository.Issues
+		for _, node := range issues.Nodes {
+			if node.CreatedAt.Before(cutoff) {
+				return matches, false, nil
+			}
+			if node.Title == title {
+				issue := node.IssueSummary
+				issue.State = strings.ToLower(issue.State)
+				matches = append(matches, issue)
+			}
+		}
+		if !issues.PageInfo.HasNextPage {
+			return matches, false, nil
+		}
+		if issues.PageInfo.EndCursor == "" {
+			return nil, false, fmt.Errorf("read recent open issue titles in %s: next page has no cursor", repo)
+		}
+		cursor = issues.PageInfo.EndCursor
+	}
+	return matches, true, nil
 }
 
 // CreateIssue creates an issue on GitHub and independently verifies it via readback.

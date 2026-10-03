@@ -195,14 +195,16 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		stageCount = 3
 	}
 	var exactTitleMatches []githubcli.IssueSummary
+	var duplicateCheck *githubcli.ExactTitleCheck
 	if *allowDuplicate {
 		progress(stderr, *quiet, "[1/%d] Skipping duplicate inspection by explicit request", stageCount)
 	} else {
 		progress(stderr, *quiet, "[1/%d] Inspecting %s for exact-title duplicates", stageCount, targetRepo)
-		exactTitleMatches, err = githubcli.FindIssuesByExactTitle(ctx, runner, targetRepo, *title)
+		check, err := githubcli.FindIssuesByExactTitle(ctx, runner, targetRepo, *title)
 		if err != nil {
 			return operationError(stderr, "inspect equivalent issues", err)
 		}
+		exactTitleMatches, duplicateCheck = check.Matches, &check
 	}
 	if len(exactTitleMatches) > 0 {
 		locations := make([]string, 0, len(exactTitleMatches))
@@ -226,6 +228,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 		if !*allowDuplicate {
 			plan["exactTitleMatches"] = exactTitleMatches
+			plan["duplicateCheck"] = duplicateCheck
 		}
 		if bodyContent != "" {
 			plan["body"] = bodyContent
@@ -298,6 +301,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 				fmt.Fprintf(stdout, "  TargetDate: %s\n", *targetDate)
 			}
 		}
+		printDuplicateCheckGaps(stdout, duplicateCheck)
 		fmt.Fprintln(stdout, "\nPlan only. Supply --apply to create the issue on GitHub.")
 		return 0
 	}
@@ -350,6 +354,9 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		if projectResult != nil {
 			result["projectItem"] = projectResult
 		}
+		if duplicateCheck != nil {
+			result["duplicateCheck"] = duplicateCheck
+		}
 		if err := writeJSON(stdout, result); err != nil {
 			return operationError(stderr, "write result JSON", err)
 		}
@@ -365,7 +372,16 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 		printAutomationSideEffects(stdout, projectResult.AutomationSideEffects)
 	}
+	printDuplicateCheckGaps(stdout, duplicateCheck)
 	return 0
+}
+
+// printDuplicateCheckGaps notes which issues the exact-title check did
+// not cover.
+func printDuplicateCheckGaps(stdout io.Writer, check *githubcli.ExactTitleCheck) {
+	if check != nil && check.Unchecked != "" {
+		fmt.Fprintf(stdout, "Note: search was unavailable, so the duplicate check covered only recent open issues; %s were not checked.\n", check.Unchecked)
+	}
 }
 
 func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, runner githubcli.Runner) int {
