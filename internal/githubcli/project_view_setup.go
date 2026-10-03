@@ -266,11 +266,14 @@ func buildBacklogViewSpec(project contract.Project, ownerType string, fields []r
 		{dataType: "sub_issues_progress"},
 		{name: "Priority", required: true},
 	}
-	if ownerType == "organization" {
-		wanted = append(wanted, wantedField{dataType: "issue_type", required: true})
-	} else {
+	if ownerType != "organization" {
 		wanted = append(wanted, wantedField{name: "Class", required: true})
 	}
+	// Organisation Projects classify with native Issue Type, but GitHub's public
+	// API cannot make that field visible in a Project view: the REST create
+	// ignores it and the GraphQL update rejects it with "Visible fields must be
+	// available in the view". It is therefore not part of the view spec and is
+	// neither required nor located here.
 
 	var spec backlogViewSpec
 	for _, wantedField := range wanted {
@@ -286,14 +289,6 @@ func buildBacklogViewSpec(project contract.Project, ownerType string, fields []r
 			return backlogViewSpec{}, err
 		}
 		if !ok {
-			continue
-		}
-		if wantedField.dataType == "issue_type" {
-			// GitHub's public API cannot make an organisation Issue Type field
-			// visible in a Project view: the REST create ignores it and the
-			// GraphQL update rejects it with "Visible fields must be available
-			// in the view". The field is still located and used for issue
-			// classification, so it is not required as a view column.
 			continue
 		}
 		spec.Visible = append(spec.Visible, field)
@@ -396,28 +391,121 @@ func findBacklogViews(views []projectViewNode) []projectViewNode {
 	return matches
 }
 
+func viewLabel(view projectViewNode) string {
+	return fmt.Sprintf("Backlog #%d (%s)", view.Number, view.ID)
+}
+
+func fieldRefNames(fields []projectViewFieldRef) []string {
+	names := make([]string, 0, len(fields))
+	for _, field := range fields {
+		names = append(names, field.Name)
+	}
+	return names
+}
+
+func describeGroupSort(view projectViewNode) (string, string) {
+	group := "none"
+	if names := fieldRefNames(view.GroupByFields.Nodes); len(names) > 0 {
+		group = strings.Join(names, ", ")
+	}
+	if names := fieldRefNames(view.VerticalGroupByFields.Nodes); len(names) > 0 {
+		group += " (vertical group " + strings.Join(names, ", ") + ")"
+	}
+	sortBy := "none"
+	if len(view.SortByFields.Nodes) > 0 {
+		parts := make([]string, 0, len(view.SortByFields.Nodes))
+		for _, node := range view.SortByFields.Nodes {
+			parts = append(parts, node.Field.Name+" "+strings.ToLower(node.Direction))
+		}
+		sortBy = strings.Join(parts, ", ")
+	}
+	return group, sortBy
+}
+
+// describeBasicViewDiff lists the layout, filter and visible-field differences
+// between a live view and the standard spec.
+func describeBasicViewDiff(view projectViewNode, spec backlogViewSpec) []string {
+	var parts []string
+	if !strings.EqualFold(view.Layout, "TABLE_LAYOUT") {
+		parts = append(parts, fmt.Sprintf("layout %s->TABLE_LAYOUT", view.Layout))
+	}
+	if view.Filter != nil && strings.TrimSpace(*view.Filter) != "" {
+		parts = append(parts, fmt.Sprintf("filter %q->none", *view.Filter))
+	}
+	current := make(map[string]bool)
+	for _, field := range view.Configuration.VisibleFields.Nodes {
+		current[field.ID] = true
+	}
+	desired := make(map[string]bool)
+	var show []string
+	for _, field := range spec.Visible {
+		desired[field.NodeID] = true
+		if !current[field.NodeID] {
+			show = append(show, field.Name)
+		}
+	}
+	var hide []string
+	for _, field := range view.Configuration.VisibleFields.Nodes {
+		if !desired[field.ID] {
+			hide = append(hide, field.Name)
+		}
+	}
+	if len(show) > 0 {
+		parts = append(parts, "show "+strings.Join(show, ", "))
+	}
+	if len(hide) > 0 {
+		parts = append(parts, "hide "+strings.Join(hide, ", "))
+	}
+	return parts
+}
+
 func planBacklogViewChanges(views []projectViewNode, spec backlogViewSpec) ([]StandardBacklogViewChange, error) {
 	backlogs := findBacklogViews(views)
 	if len(backlogs) == 0 {
-		return []StandardBacklogViewChange{{Action: "create_view", Detail: "table; group Status; sort Priority ascending"}}, nil
+		return []StandardBacklogViewChange{{Action: "create_view", Detail: fmt.Sprintf("table; no filter; group %s; sort %s ascending", spec.Status.Name, spec.Priority.Name)}}, nil
 	}
 	if len(backlogs) > 1 {
-		return nil, fmt.Errorf("Project has %d Backlog views; refusing ambiguous reconciliation", len(backlogs))
+		var matching, other []projectViewNode
+		labels := make([]string, 0, len(backlogs))
+		for _, view := range backlogs {
+			labels = append(labels, viewLabel(view))
+			if backlogViewMatches(view, spec) {
+				matching = append(matching, view)
+			} else {
+				other = append(other, view)
+			}
+		}
+		// Exactly two Backlogs where one is already standard is the state an
+		// interrupted replacement leaves behind; finishing it is unambiguous.
+		if len(backlogs) == 2 && len(matching) == 1 {
+			return []StandardBacklogViewChange{{Action: "delete_view", ViewID: other[0].ID, Detail: fmt.Sprintf("delete non-standard duplicate %s; keep standard %s", viewLabel(other[0]), viewLabel(matching[0]))}}, nil
+		}
+		return nil, fmt.Errorf("Project has %d Backlog views (%s); refusing ambiguous reconciliation: rename or delete all but one Backlog view in the GitHub Project, then rerun", len(backlogs), strings.Join(labels, ", "))
 	}
 	view := backlogs[0]
 	if backlogViewMatches(view, spec) {
-		return nil, nil
+		return []StandardBacklogViewChange{}, nil
 	}
+	basic := describeBasicViewDiff(view, spec)
 	if backlogViewGroupSortMatches(view, spec) {
-		return []StandardBacklogViewChange{{Action: "update_view", ViewID: view.ID, Detail: "table/filter/visible fields"}}, nil
+		return []StandardBacklogViewChange{{Action: "update_view", ViewID: view.ID, Detail: fmt.Sprintf("update %s in place: %s", viewLabel(view), strings.Join(basic, "; "))}}, nil
 	}
-	return []StandardBacklogViewChange{{Action: "replace_view", ViewID: view.ID, Detail: "GitHub API cannot update group/sort configuration in place"}}, nil
+	group, sortBy := describeGroupSort(view)
+	parts := []string{
+		fmt.Sprintf("group %s->%s", group, spec.Status.Name),
+		fmt.Sprintf("sort %s->%s asc", sortBy, spec.Priority.Name),
+	}
+	parts = append(parts, basic...)
+	return []StandardBacklogViewChange{{Action: "replace_view", ViewID: view.ID, Detail: fmt.Sprintf("%s; GitHub API cannot update group/sort configuration in place, so create a standard replacement and delete old %s after verifying the replacement", strings.Join(parts, "; "), viewLabel(view))}}, nil
 }
 
 func planStandardBacklogViewFromState(project contract.Project, state backlogViewState) (StandardBacklogViewPlan, error) {
 	changes, err := planBacklogViewChanges(state.views, state.spec)
 	if err != nil {
 		return StandardBacklogViewPlan{}, err
+	}
+	if changes == nil {
+		changes = []StandardBacklogViewChange{}
 	}
 	visible := make([]string, 0, len(state.spec.Visible))
 	for _, field := range state.spec.Visible {
@@ -539,6 +627,51 @@ func verifyBacklogByID(views []projectViewNode, id string, spec backlogViewSpec)
 	return nil
 }
 
+func viewChangeLabel(change StandardBacklogViewChange) string {
+	if change.ViewID == "" {
+		return change.Action
+	}
+	return change.Action + " " + change.ViewID
+}
+
+func manualViewDeleteStep(viewID string) string {
+	return fmt.Sprintf("delete it in the GitHub Project UI (view tab menu > Delete view) or run: gh api graphql -f query='mutation { deleteProjectV2View(input: {viewId: \"%s\"}) { projectV2View { id } } }'", viewID)
+}
+
+// replaceBacklogView creates a standard replacement, verifies it and only then
+// deletes the old view. A replacement that cannot be verified is removed again
+// so the Project is never left with two Backlog views that block later runs.
+func replaceBacklogView(ctx context.Context, runner Runner, project contract.Project, state backlogViewState, change StandardBacklogViewChange) error {
+	oldLabel := change.ViewID
+	if old, ok := findViewByID(state.views, change.ViewID); ok {
+		oldLabel = viewLabel(old)
+	}
+	createdID, err := createBacklogView(ctx, runner, project, state)
+	if err != nil {
+		return fmt.Errorf("old %s was preserved: %w", oldLabel, err)
+	}
+	createdLabel := "replacement Backlog (" + createdID + ")"
+	views, verifyErr := queryProjectViews(ctx, runner, project, state.ownerType)
+	if verifyErr != nil {
+		verifyErr = fmt.Errorf("re-read Project views: %w", verifyErr)
+	} else {
+		if created, ok := findViewByID(views, createdID); ok {
+			createdLabel = "replacement " + viewLabel(created)
+		}
+		verifyErr = verifyBacklogByID(views, createdID, state.spec)
+	}
+	if verifyErr != nil {
+		if cleanupErr := deleteProjectView(ctx, runner, createdID); cleanupErr != nil {
+			return fmt.Errorf("%s could not be verified (%v) and removing it also failed (%v); the Project now has two Backlog views: original %s and %s. Manually remove the replacement: %s; then rerun setup-backlog-view", createdLabel, verifyErr, cleanupErr, oldLabel, createdLabel, manualViewDeleteStep(createdID))
+		}
+		return fmt.Errorf("%s could not be verified, so it was deleted again and original %s was preserved: %w", createdLabel, oldLabel, verifyErr)
+	}
+	if err := deleteProjectView(ctx, runner, change.ViewID); err != nil {
+		return fmt.Errorf("%s is verified but old %s could not be removed (%w); rerun setup-backlog-view --apply, which will plan deleting the non-standard duplicate, or %s", createdLabel, oldLabel, err, manualViewDeleteStep(change.ViewID))
+	}
+	return nil
+}
+
 func ApplyStandardBacklogView(ctx context.Context, runner Runner, project contract.Project) (StandardBacklogViewResult, error) {
 	state, err := inspectStandardBacklogView(ctx, runner, project)
 	if err != nil {
@@ -549,50 +682,50 @@ func ApplyStandardBacklogView(ctx context.Context, runner Runner, project contra
 		return StandardBacklogViewResult{}, err
 	}
 	beforeUnrelated := unrelatedViewIDs(state.views)
-
-	for _, change := range plan.Changes {
-		switch change.Action {
-		case "create_view":
-			if _, err := createBacklogView(ctx, runner, project, state); err != nil {
-				return StandardBacklogViewResult{}, err
-			}
-		case "update_view":
-			if err := updateBacklogView(ctx, runner, change.ViewID, state.spec); err != nil {
-				return StandardBacklogViewResult{}, err
-			}
-		case "replace_view":
-			createdID, err := createBacklogView(ctx, runner, project, state)
-			if err != nil {
-				return StandardBacklogViewResult{}, err
-			}
-			views, err := queryProjectViews(ctx, runner, project, state.ownerType)
-			if err != nil {
-				return StandardBacklogViewResult{}, fmt.Errorf("verify replacement Backlog view before deleting the old view: %w", err)
-			}
-			if err := verifyBacklogByID(views, createdID, state.spec); err != nil {
-				return StandardBacklogViewResult{}, fmt.Errorf("old Backlog view was preserved: %w", err)
-			}
-			if err := deleteProjectView(ctx, runner, change.ViewID); err != nil {
-				return StandardBacklogViewResult{}, fmt.Errorf("replacement Backlog view %s is verified but old view %s could not be removed; rerun reconciliation: %w", createdID, change.ViewID, err)
-			}
-		default:
-			return StandardBacklogViewResult{}, fmt.Errorf("unsupported Backlog view change %q", change.Action)
-		}
+	result := StandardBacklogViewResult{Project: plan.Project, OwnerType: plan.OwnerType, VisibleFields: plan.VisibleFields, Applied: []StandardBacklogViewChange{}}
+	var appliedLabels []string
+	fail := func(failedAt string, err error) (StandardBacklogViewResult, error) {
+		return result, partialApplyError(appliedLabels, failedAt, err)
 	}
 
-	verified, err := inspectStandardBacklogView(ctx, runner, project)
+	for _, change := range plan.Changes {
+		var err error
+		switch change.Action {
+		case "create_view":
+			_, err = createBacklogView(ctx, runner, project, state)
+		case "update_view":
+			err = updateBacklogView(ctx, runner, change.ViewID, state.spec)
+		case "replace_view":
+			err = replaceBacklogView(ctx, runner, project, state, change)
+		case "delete_view":
+			err = deleteProjectView(ctx, runner, change.ViewID)
+		default:
+			err = fmt.Errorf("unsupported Backlog view change %q", change.Action)
+		}
+		if err != nil {
+			return fail(viewChangeLabel(change), err)
+		}
+		result.Applied = append(result.Applied, change)
+		appliedLabels = append(appliedLabels, viewChangeLabel(change))
+	}
+
+	// The owner type is already known; do not rediscover it during readback.
+	readProject := project
+	readProject.OwnerType = state.ownerType
+	verified, err := inspectStandardBacklogView(ctx, runner, readProject)
 	if err != nil {
-		return StandardBacklogViewResult{}, fmt.Errorf("post-write inspection: %w", err)
+		return fail("readback", fmt.Errorf("post-write inspection: %w", err))
 	}
 	verifiedPlan, err := planStandardBacklogViewFromState(project, verified)
 	if err != nil {
-		return StandardBacklogViewResult{}, fmt.Errorf("post-write verification: %w", err)
+		return fail("readback", fmt.Errorf("post-write verification: %w", err))
 	}
 	if len(verifiedPlan.Changes) != 0 || len(findBacklogViews(verified.views)) != 1 {
-		return StandardBacklogViewResult{}, fmt.Errorf("Backlog view did not read back as one standard view")
+		return fail("readback", fmt.Errorf("Backlog view did not read back as one standard view"))
 	}
 	if err := verifyUnrelatedViews(beforeUnrelated, verified.views); err != nil {
-		return StandardBacklogViewResult{}, err
+		return fail("readback", err)
 	}
-	return StandardBacklogViewResult{Project: plan.Project, OwnerType: plan.OwnerType, VisibleFields: plan.VisibleFields, Applied: plan.Changes, Verified: true}, nil
+	result.Verified = true
+	return result, nil
 }

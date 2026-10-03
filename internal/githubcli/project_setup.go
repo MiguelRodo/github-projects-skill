@@ -459,11 +459,85 @@ func optionIdentity(options []detailedProjectOption) []string {
 	return values
 }
 
-func reconcileOrganizationPriorityOptions(current []organizationIssueFieldOptionDefinition) ([]organizationIssueFieldOptionDefinition, bool, error) {
-	projectCurrent := make([]detailedProjectOption, 0, len(current))
+// describeOptionChanges summarises a reconciliation from the actual diff so a
+// plan shows renames, recolours, additions and reordering before any write.
+func describeOptionChanges(current, reconciled []detailedProjectOption) string {
+	byID := make(map[string]detailedProjectOption, len(current))
 	for _, option := range current {
-		projectCurrent = append(projectCurrent, detailedProjectOption{ID: strconv.Itoa(option.ID), Name: option.Name, Color: strings.ToUpper(option.Color), Description: option.Description})
+		if option.ID != "" {
+			byID[option.ID] = option
+		}
 	}
+	var parts []string
+	kept := make(map[string]bool)
+	var newOrder []string
+	for _, option := range reconciled {
+		if option.ID == "" {
+			parts = append(parts, fmt.Sprintf("add %s (%s)", option.Name, strings.ToUpper(option.Color)))
+			continue
+		}
+		kept[option.ID] = true
+		newOrder = append(newOrder, option.ID)
+		old, ok := byID[option.ID]
+		if !ok {
+			continue
+		}
+		if old.Name != option.Name {
+			parts = append(parts, fmt.Sprintf("rename %s->%s", old.Name, option.Name))
+		}
+		if !strings.EqualFold(old.Color, option.Color) {
+			parts = append(parts, fmt.Sprintf("recolour %s %s->%s", option.Name, strings.ToUpper(old.Color), strings.ToUpper(option.Color)))
+		}
+	}
+	var oldOrder []string
+	for _, option := range current {
+		if kept[option.ID] {
+			oldOrder = append(oldOrder, option.ID)
+		}
+	}
+	if !reflect.DeepEqual(oldOrder, newOrder) {
+		names := make([]string, 0, len(reconciled))
+		for _, option := range reconciled {
+			names = append(names, option.Name)
+		}
+		parts = append(parts, "reorder to "+strings.Join(names, ", "))
+	}
+	if len(parts) == 0 {
+		return "normalise options"
+	}
+	if len(kept) > 0 {
+		parts = append(parts, "existing option IDs kept so item values are preserved")
+	}
+	return strings.Join(parts, "; ")
+}
+
+// keptOptionIDs returns the pre-update option IDs a reconciliation intends to
+// keep. Readback must find every one of them, otherwise GitHub regenerated the
+// options and cleared the corresponding item values.
+func keptOptionIDs(reconciled []detailedProjectOption) []string {
+	var ids []string
+	for _, option := range reconciled {
+		if option.ID != "" {
+			ids = append(ids, option.ID)
+		}
+	}
+	return ids
+}
+
+func organizationOptionsAsProject(current []organizationIssueFieldOptionDefinition) []detailedProjectOption {
+	result := make([]detailedProjectOption, 0, len(current))
+	for _, option := range current {
+		id := ""
+		if option.ID != 0 {
+			id = strconv.Itoa(option.ID)
+		}
+		result = append(result, detailedProjectOption{ID: id, Name: option.Name, Color: strings.ToUpper(option.Color), Description: option.Description})
+	}
+	return result
+}
+
+func reconcileOrganizationPriorityOptions(current []organizationIssueFieldOptionDefinition) ([]organizationIssueFieldOptionDefinition, bool, error) {
+	projectCurrent := organizationOptionsAsProject(current)
 	reconciled, changed, err := reconcileProjectOptions(projectCurrent, standardPriorityOptions)
 	if err != nil {
 		return nil, false, err
@@ -489,20 +563,20 @@ func planProjectField(changes *[]StandardProjectSetupChange, state setupState, n
 		return nil
 	}
 	if field.DataType != dataType {
-		return fmt.Errorf("Project field %q has type %s, want %s", name, field.DataType, dataType)
+		return fmt.Errorf("Project field %q has type %s, want %s; rename or delete the existing field in the Project settings so setup can create the standard %s field (existing values will not be migrated), or declare a deliberate local override in the contract", name, field.DataType, dataType, dataType)
 	}
 	if len(options) == 0 {
 		return nil
 	}
 	if field.Typename != "ProjectV2SingleSelectField" || field.IsIssueField {
-		return fmt.Errorf("Project field %q is not a Project-local single-select field", name)
+		return fmt.Errorf("Project field %q is not a Project-local single-select field; rename or remove it in the Project settings so setup can create the standard Project-local field (existing values will not be migrated)", name)
 	}
-	_, changed, err := reconcileProjectOptions(field.Options, options)
+	reconciled, changed, err := reconcileProjectOptions(field.Options, options)
 	if err != nil {
-		return fmt.Errorf("reconcile Project field %q: %w", name, err)
+		return fmt.Errorf("reconcile Project field %q: %w; rename or remove the duplicate option in the Project settings, then rerun", name, err)
 	}
 	if changed {
-		*changes = append(*changes, StandardProjectSetupChange{Scope: "project", Action: "reconcile_options", Name: name})
+		*changes = append(*changes, StandardProjectSetupChange{Scope: "project", Action: "reconcile_options", Name: name, Detail: describeOptionChanges(field.Options, reconciled)})
 	}
 	return nil
 }
@@ -511,6 +585,7 @@ func planStandardProjectSetupFromState(project contract.Project, state setupStat
 	plan := StandardProjectSetupPlan{
 		Project:   ProjectIdentity{Number: project.Number, Owner: project.Owner, Title: project.Title},
 		OwnerType: state.ownerType,
+		Changes:   []StandardProjectSetupChange{},
 	}
 	if err := planProjectField(&plan.Changes, state, "Due date", "DATE", nil); err != nil {
 		return StandardProjectSetupPlan{}, err
@@ -539,12 +614,19 @@ func planStandardProjectSetupFromState(project contract.Project, state setupStat
 	for _, desired := range standardClassOptions {
 		current, exists := seenTypes[strings.ToLower(desired.Name)]
 		if !exists {
-			plan.Changes = append(plan.Changes, StandardProjectSetupChange{Scope: "organization", Action: "create_issue_type", Name: desired.Name, Detail: desired.Color})
+			plan.Changes = append(plan.Changes, StandardProjectSetupChange{Scope: "organization", Action: "create_issue_type", Name: desired.Name, Detail: "create enabled with colour " + desired.Color})
 			plan.RequiresOrganizationSchema = true
 			continue
 		}
 		if !current.Enabled || !strings.EqualFold(current.Color, desired.Color) {
-			plan.Changes = append(plan.Changes, StandardProjectSetupChange{Scope: "organization", Action: "reconcile_issue_type", Name: desired.Name, Detail: desired.Color})
+			var parts []string
+			if !strings.EqualFold(current.Color, desired.Color) {
+				parts = append(parts, fmt.Sprintf("recolour %s->%s", strings.ToUpper(current.Color), desired.Color))
+			}
+			if !current.Enabled {
+				parts = append(parts, "re-enable (currently disabled)")
+			}
+			plan.Changes = append(plan.Changes, StandardProjectSetupChange{Scope: "organization", Action: "reconcile_issue_type", Name: desired.Name, Detail: strings.Join(parts, "; ")})
 			plan.RequiresOrganizationSchema = true
 		}
 	}
@@ -553,21 +635,23 @@ func planStandardProjectSetupFromState(project contract.Project, state setupStat
 		plan.RequiresOrganizationSchema = true
 	} else {
 		if state.priorityField.DataType != "single_select" {
-			return StandardProjectSetupPlan{}, fmt.Errorf("organization issue field Priority has type %s, want single_select", state.priorityField.DataType)
+			return StandardProjectSetupPlan{}, fmt.Errorf("organization issue field Priority has type %s, want single_select; an organization owner must rename or replace that issue field before setup can continue", state.priorityField.DataType)
 		}
-		_, changed, err := reconcileOrganizationPriorityOptions(state.priorityField.Options)
+		reconciled, changed, err := reconcileOrganizationPriorityOptions(state.priorityField.Options)
 		if err != nil {
-			return StandardProjectSetupPlan{}, fmt.Errorf("reconcile organization Priority: %w", err)
+			return StandardProjectSetupPlan{}, fmt.Errorf("reconcile organization Priority: %w; rename or remove the duplicate option in the organization's issue field settings, then rerun", err)
 		}
 		if changed {
-			plan.Changes = append(plan.Changes, StandardProjectSetupChange{Scope: "organization", Action: "reconcile_issue_field", Name: "Priority", Detail: "P0,P1,P2,P3"})
+			plan.Changes = append(plan.Changes, StandardProjectSetupChange{Scope: "organization", Action: "reconcile_issue_field", Name: "Priority", Detail: describeOptionChanges(organizationOptionsAsProject(state.priorityField.Options), organizationOptionsAsProject(reconciled))})
 			plan.RequiresOrganizationSchema = true
 		}
 	}
 	if field, exists := state.project.Fields["priority"]; !exists {
 		plan.Changes = append(plan.Changes, StandardProjectSetupChange{Scope: "project", Action: "attach_issue_field", Name: "Priority"})
-	} else if !field.IsIssueField || field.DataType != "SINGLE_SELECT" {
-		return StandardProjectSetupPlan{}, fmt.Errorf("organization Project has a non-issue or non-single-select field named Priority")
+	} else if !field.IsIssueField {
+		return StandardProjectSetupPlan{}, fmt.Errorf("organization Project %s/%d has a Project-local field named Priority (type %s), which blocks attaching the organization Priority issue field; rename or remove that Project field in the Project settings, then rerun (its values will not migrate to the issue field)", project.Owner, project.Number, field.DataType)
+	} else if field.DataType != "SINGLE_SELECT" {
+		return StandardProjectSetupPlan{}, fmt.Errorf("organization Project %s/%d has a Priority issue field of type %s, want SINGLE_SELECT; an organization owner must replace that issue field before setup can continue", project.Owner, project.Number, field.DataType)
 	}
 	return plan, nil
 }
@@ -611,13 +695,13 @@ func createProjectField(ctx context.Context, runner Runner, projectID, name, dat
 	return nil
 }
 
-func updateProjectSingleSelect(ctx context.Context, runner Runner, field detailedProjectField, desired []standardOption) error {
+func updateProjectSingleSelect(ctx context.Context, runner Runner, field detailedProjectField, desired []standardOption) ([]string, error) {
 	options, changed, err := reconcileProjectOptions(field.Options, desired)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !changed {
-		return nil
+		return nil, nil
 	}
 	payloadOptions := make([]map[string]any, 0, len(options))
 	for _, option := range options {
@@ -634,9 +718,9 @@ func updateProjectSingleSelect(ctx context.Context, runner Runner, field detaile
 }`
 	body := map[string]any{"query": query, "variables": map[string]any{"fieldId": field.ID, "options": payloadOptions}}
 	if _, err := runJSONInput(ctx, runner, body, "api", "graphql", "--input", "-"); err != nil {
-		return fmt.Errorf("update Project field %q: %w", field.Name, err)
+		return nil, fmt.Errorf("update Project field %q: %w", field.Name, err)
 	}
-	return nil
+	return keptOptionIDs(options), nil
 }
 
 func createOrganizationIssueType(ctx context.Context, runner Runner, organizationID string, desired standardOption) error {
@@ -696,22 +780,22 @@ func createOrganizationPriority(ctx context.Context, runner Runner, owner string
 	return nil
 }
 
-func updateOrganizationPriority(ctx context.Context, runner Runner, owner string, field organizationIssueFieldDefinition) error {
+func updateOrganizationPriority(ctx context.Context, runner Runner, owner string, field organizationIssueFieldDefinition) ([]string, error) {
 	options, changed, err := reconcileOrganizationPriorityOptions(field.Options)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !changed {
-		return nil
+		return nil, nil
 	}
 	body := organizationPriorityBody(options, field.Description)
 	args := []string{"api", "--method", "PATCH"}
 	args = append(args, apiHeaders()...)
 	args = append(args, fmt.Sprintf("orgs/%s/issue-fields/%d", owner, field.ID), "--input", "-")
 	if _, err := runJSONInput(ctx, runner, body, args...); err != nil {
-		return fmt.Errorf("update organization Priority issue field: %w", err)
+		return nil, fmt.Errorf("update organization Priority issue field: %w", err)
 	}
-	return nil
+	return keptOptionIDs(organizationOptionsAsProject(options)), nil
 }
 
 func attachOrganizationIssueField(ctx context.Context, runner Runner, project contract.Project, field organizationIssueFieldDefinition) error {
@@ -725,16 +809,17 @@ func attachOrganizationIssueField(ctx context.Context, runner Runner, project co
 	return nil
 }
 
-func applyProjectFieldChange(ctx context.Context, runner Runner, state setupState, change StandardProjectSetupChange) error {
+func applyProjectFieldChange(ctx context.Context, runner Runner, state setupState, change StandardProjectSetupChange) ([]string, error) {
 	switch change.Action {
 	case "create_field":
 		var options []standardOption
+		dataType := "DATE"
 		if change.Name == "Class" {
-			options = standardClassOptions
+			options, dataType = standardClassOptions, "SINGLE_SELECT"
 		} else if change.Name == "Priority" {
-			options = standardPriorityOptions
+			options, dataType = standardPriorityOptions, "SINGLE_SELECT"
 		}
-		return createProjectField(ctx, runner, state.project.ID, change.Name, change.Detail, options)
+		return nil, createProjectField(ctx, runner, state.project.ID, change.Name, dataType, options)
 	case "reconcile_options":
 		field := state.project.Fields[strings.ToLower(change.Name)]
 		if change.Name == "Class" {
@@ -742,8 +827,40 @@ func applyProjectFieldChange(ctx context.Context, runner Runner, state setupStat
 		}
 		return updateProjectSingleSelect(ctx, runner, field, standardPriorityOptions)
 	default:
-		return fmt.Errorf("unsupported project field setup action %q", change.Action)
+		return nil, fmt.Errorf("unsupported project field setup action %q", change.Action)
 	}
+}
+
+func setupChangeLabel(change StandardProjectSetupChange) string {
+	return change.Scope + ":" + change.Action + ":" + change.Name
+}
+
+// partialApplyError reports exactly which changes reached GitHub before a
+// failure, so an operator never has to guess what a failed apply left behind.
+func partialApplyError(applied []string, failedAt string, err error) error {
+	done := "nothing"
+	if len(applied) > 0 {
+		done = strings.Join(applied, ", ")
+	}
+	return fmt.Errorf("applied: %s; failed at %s: %w; run the plan again to see remaining work", done, failedAt, err)
+}
+
+func missingOptionIDs(kept []string, options []detailedProjectOption) []string {
+	present := make(map[string]bool, len(options))
+	for _, option := range options {
+		present[option.ID] = true
+	}
+	var missing []string
+	for _, id := range kept {
+		if !present[id] {
+			missing = append(missing, id)
+		}
+	}
+	return missing
+}
+
+func optionIDLossError(field string, missing []string) error {
+	return fmt.Errorf("%s option IDs %s disappeared after reconciliation: GitHub regenerated the options, which clears every item's value for them; the schema now has the standard names but existing item values must be checked and restored from history before relying on this field", field, strings.Join(missing, ", "))
 }
 
 // ApplyStandardProjectSetup performs standard setup and independently re-reads
@@ -758,22 +875,35 @@ func ApplyStandardProjectSetup(ctx context.Context, runner Runner, project contr
 		return StandardProjectSetupResult{}, err
 	}
 	if plan.RequiresOrganizationSchema && !allowOrganizationSchema {
-		return StandardProjectSetupResult{}, errors.New("standard setup requires organization-wide Issue Type or Priority changes; rerun with explicit organization-schema authority")
+		return StandardProjectSetupResult{}, errors.New("standard setup requires organization-wide Issue Type or Priority changes; after those organization-wide changes are explicitly authorised, rerun with --apply --allow-organization-schema")
 	}
+	result := StandardProjectSetupResult{Project: plan.Project, OwnerType: plan.OwnerType, Applied: []StandardProjectSetupChange{}}
 	if len(plan.Changes) == 0 {
-		return StandardProjectSetupResult{Project: plan.Project, OwnerType: plan.OwnerType, Verified: true}, nil
+		result.Verified = true
+		return result, nil
 	}
+
+	var appliedLabels []string
+	fail := func(failedAt string, err error) (StandardProjectSetupResult, error) {
+		return result, partialApplyError(appliedLabels, failedAt, err)
+	}
+	record := func(change StandardProjectSetupChange) {
+		result.Applied = append(result.Applied, change)
+		appliedLabels = append(appliedLabels, setupChangeLabel(change))
+	}
+	keptProjectOptions := make(map[string][]string)
+	var keptPriorityOptions []string
+	priorityCreated := false
 
 	for _, change := range plan.Changes {
 		if change.Scope != "organization" {
 			continue
 		}
+		var err error
 		switch change.Action {
 		case "create_issue_type":
 			desired, _ := standardOptionByCurrentName(change.Name, standardClassOptions)
-			if err := createOrganizationIssueType(ctx, runner, state.organizationID, desired); err != nil {
-				return StandardProjectSetupResult{}, err
-			}
+			err = createOrganizationIssueType(ctx, runner, state.organizationID, desired)
 		case "reconcile_issue_type":
 			var current organizationIssueTypeDefinition
 			found := false
@@ -784,75 +914,110 @@ func ApplyStandardProjectSetup(ctx context.Context, runner Runner, project contr
 				}
 			}
 			if !found {
-				return StandardProjectSetupResult{}, fmt.Errorf("organization issue type %q disappeared after preflight", change.Name)
+				err = fmt.Errorf("organization issue type %q disappeared after preflight", change.Name)
+				break
 			}
 			desired, _ := standardOptionByCurrentName(change.Name, standardClassOptions)
-			if err := updateOrganizationIssueType(ctx, runner, current, desired); err != nil {
-				return StandardProjectSetupResult{}, err
-			}
+			err = updateOrganizationIssueType(ctx, runner, current, desired)
 		case "create_issue_field":
-			if err := createOrganizationPriority(ctx, runner, project.Owner); err != nil {
-				return StandardProjectSetupResult{}, err
-			}
+			err = createOrganizationPriority(ctx, runner, project.Owner)
+			priorityCreated = err == nil
 		case "reconcile_issue_field":
 			if state.priorityField == nil {
-				return StandardProjectSetupResult{}, errors.New("organization Priority issue field disappeared after preflight")
+				err = errors.New("organization Priority issue field disappeared after preflight")
+				break
 			}
-			if err := updateOrganizationPriority(ctx, runner, project.Owner, *state.priorityField); err != nil {
-				return StandardProjectSetupResult{}, err
-			}
+			keptPriorityOptions, err = updateOrganizationPriority(ctx, runner, project.Owner, *state.priorityField)
+		default:
+			err = fmt.Errorf("unsupported organization setup action %q", change.Action)
 		}
+		if err != nil {
+			return fail(setupChangeLabel(change), err)
+		}
+		record(change)
 	}
 
 	for _, change := range plan.Changes {
 		if change.Scope != "project" || change.Action == "attach_issue_field" {
 			continue
 		}
-		if err := applyProjectFieldChange(ctx, runner, state, change); err != nil {
-			return StandardProjectSetupResult{}, err
+		kept, err := applyProjectFieldChange(ctx, runner, state, change)
+		if err != nil {
+			return fail(setupChangeLabel(change), err)
 		}
+		if change.Action == "reconcile_options" {
+			keptProjectOptions[change.Name] = kept
+		}
+		record(change)
 	}
 
-	if plan.OwnerType == "organization" {
-		needsAttach := false
-		for _, change := range plan.Changes {
-			if change.Action == "attach_issue_field" && change.Name == "Priority" {
-				needsAttach = true
-				break
-			}
+	for _, change := range plan.Changes {
+		if change.Action != "attach_issue_field" || change.Name != "Priority" {
+			continue
 		}
-		if needsAttach {
+		priority := state.priorityField
+		if priorityCreated || priority == nil {
+			// Only a just-created field needs a fresh listing to learn its ID.
 			fields, err := queryOrganizationIssueFieldDefinitions(ctx, runner, project.Owner)
 			if err != nil {
-				return StandardProjectSetupResult{}, err
+				return fail(setupChangeLabel(change), err)
 			}
-			var priority *organizationIssueFieldDefinition
+			priority = nil
 			for i := range fields {
 				if strings.EqualFold(fields[i].Name, "Priority") {
 					priority = &fields[i]
 					break
 				}
 			}
-			if priority == nil {
-				return StandardProjectSetupResult{}, errors.New("organization Priority issue field is missing after setup")
-			}
-			if err := attachOrganizationIssueField(ctx, runner, project, *priority); err != nil {
-				return StandardProjectSetupResult{}, err
-			}
 		}
+		if priority == nil {
+			return fail(setupChangeLabel(change), errors.New("organization Priority issue field is missing after setup"))
+		}
+		if err := attachOrganizationIssueField(ctx, runner, project, *priority); err != nil {
+			return fail(setupChangeLabel(change), err)
+		}
+		record(change)
 	}
 
-	finalPlan, err := PlanStandardProjectSetup(ctx, runner, project)
+	// The owner type is already known; do not rediscover it during readback.
+	readProject := project
+	readProject.OwnerType = state.ownerType
+	finalState, err := inspectStandardProjectSetup(ctx, runner, readProject)
 	if err != nil {
-		return StandardProjectSetupResult{}, fmt.Errorf("read back standard Project setup: %w", err)
+		return fail("readback", fmt.Errorf("read back standard Project setup: %w", err))
+	}
+	finalPlan, err := planStandardProjectSetupFromState(project, finalState)
+	if err != nil {
+		return fail("readback", fmt.Errorf("read back standard Project setup: %w", err))
 	}
 	if len(finalPlan.Changes) != 0 {
 		names := make([]string, 0, len(finalPlan.Changes))
 		for _, change := range finalPlan.Changes {
-			names = append(names, change.Scope+":"+change.Action+":"+change.Name)
+			names = append(names, setupChangeLabel(change))
 		}
 		sort.Strings(names)
-		return StandardProjectSetupResult{}, fmt.Errorf("standard Project setup readback is incomplete: %s", strings.Join(names, ", "))
+		return fail("readback", fmt.Errorf("standard Project setup readback is incomplete: %s", strings.Join(names, ", ")))
 	}
-	return StandardProjectSetupResult{Project: plan.Project, OwnerType: plan.OwnerType, Applied: plan.Changes, Verified: true}, nil
+	fieldNames := make([]string, 0, len(keptProjectOptions))
+	for name := range keptProjectOptions {
+		fieldNames = append(fieldNames, name)
+	}
+	sort.Strings(fieldNames)
+	for _, name := range fieldNames {
+		field := finalState.project.Fields[strings.ToLower(name)]
+		if missing := missingOptionIDs(keptProjectOptions[name], field.Options); len(missing) > 0 {
+			return fail("readback", optionIDLossError(fmt.Sprintf("Project field %q", name), missing))
+		}
+	}
+	if len(keptPriorityOptions) > 0 {
+		var options []detailedProjectOption
+		if finalState.priorityField != nil {
+			options = organizationOptionsAsProject(finalState.priorityField.Options)
+		}
+		if missing := missingOptionIDs(keptPriorityOptions, options); len(missing) > 0 {
+			return fail("readback", optionIDLossError("organization Priority issue field", missing))
+		}
+	}
+	result.Verified = true
+	return result, nil
 }
