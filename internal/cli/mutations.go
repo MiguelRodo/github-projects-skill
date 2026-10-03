@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/MiguelRodo/github-projects-skill/internal/contract"
 	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
@@ -206,20 +207,53 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		stageCount = 4
 	} else if *apply {
 		stageCount = 3
-	} else if hasProject {
-		stageCount = 3
 	}
+
+	switch {
+	case *allowDuplicate:
+		progress(stderr, *quiet, "[1/%d] Skipping duplicate inspection by explicit request", stageCount)
+	case hasProject:
+		progress(stderr, *quiet, "[1/%d] Inspecting duplicates and Project configuration", stageCount)
+	default:
+		progress(stderr, *quiet, "[1/%d] Inspecting %s for exact-title duplicates", stageCount, targetRepo)
+	}
+
+	var (
+		duplicateCheckResult githubcli.ExactTitleCheck
+		duplicateErr         error
+		selfErr              error
+		preparedProject      *githubcli.PreparedProjectItemMutation
+		preflightErr         error
+	)
+	var reads sync.WaitGroup
+	if !*allowDuplicate {
+		reads.Add(1)
+		go func() {
+			defer reads.Done()
+			duplicateCheckResult, duplicateErr = githubcli.FindIssuesByExactTitle(ctx, client, targetRepo, *title)
+		}()
+	}
+	reads.Add(1)
+	go func() {
+		defer reads.Done()
+		selfErr = githubcli.ResolveSelfAssignees(ctx, client, (*[]string)(&assignees))
+	}()
+	if hasProject {
+		reads.Add(1)
+		go func() {
+			defer reads.Done()
+			preparedProject, preflightErr = githubcli.PrepareProjectItemMutation(ctx, client, projectMutationInput)
+		}()
+	}
+	reads.Wait()
+
 	var exactTitleMatches []githubcli.IssueSummary
 	var duplicateCheck *githubcli.ExactTitleCheck
-	if *allowDuplicate {
-		progress(stderr, *quiet, "[1/%d] Skipping duplicate inspection by explicit request", stageCount)
-	} else {
-		progress(stderr, *quiet, "[1/%d] Inspecting %s for exact-title duplicates", stageCount, targetRepo)
-		check, err := githubcli.FindIssuesByExactTitle(ctx, client, targetRepo, *title)
-		if err != nil {
-			return operationError(stderr, "inspect equivalent issues", err)
-		}
-		exactTitleMatches, duplicateCheck = check.Matches, &check
+	if duplicateErr != nil {
+		return operationError(stderr, "inspect equivalent issues", duplicateErr)
+	}
+	if !*allowDuplicate {
+		exactTitleMatches, duplicateCheck = duplicateCheckResult.Matches, &duplicateCheckResult
 	}
 	if len(exactTitleMatches) > 0 {
 		locations := make([]string, 0, len(exactTitleMatches))
@@ -228,17 +262,14 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 		return operationError(stderr, "inspect equivalent issues", fmt.Errorf("exact-title issue already exists: %s; edit that issue or pass --allow-duplicate deliberately", strings.Join(locations, ", ")))
 	}
-	if err := githubcli.ResolveSelfAssignees(ctx, client, (*[]string)(&assignees)); err != nil {
-		return operationError(stderr, "resolve assignees", err)
+	if selfErr != nil {
+		return operationError(stderr, "resolve assignees", selfErr)
+	}
+	if preflightErr != nil {
+		return operationError(stderr, "preflight Project configuration", preflightErr)
 	}
 
 	if !*apply {
-		if hasProject {
-			progress(stderr, *quiet, "[2/%d] Validating Project fields for %s/%d", stageCount, resolvedProject.Owner, resolvedProject.Number)
-			if _, err := githubcli.PrepareProjectItemMutation(ctx, client, projectMutationInput); err != nil {
-				return operationError(stderr, "preflight Project configuration", err)
-			}
-		}
 		progress(stderr, *quiet, "[%d/%d] Planning issue creation for %s", stageCount, stageCount, targetRepo)
 		plan := map[string]any{
 			"action":         "create_issue",
@@ -327,13 +358,6 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		return 0
 	}
 
-	var preparedProject *githubcli.PreparedProjectItemMutation
-	if hasProject {
-		preparedProject, err = githubcli.PrepareProjectItemMutation(ctx, client, projectMutationInput)
-		if err != nil {
-			return operationError(stderr, "preflight Project configuration", err)
-		}
-	}
 	progress(stderr, *quiet, "[2/%d] Creating issue in %s", stageCount, targetRepo)
 	created, err := githubcli.CreateIssue(ctx, client, githubcli.CreateIssueInput{
 		Repo:      targetRepo,

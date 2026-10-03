@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
 )
@@ -55,6 +57,7 @@ func exactTitleTitlesPage(repo, cursor string, hasNext bool, endCursor, nodes st
 	return response{
 		request: args,
 		output:  fmt.Sprintf(`{"data":{"repository":{"issues":{"nodes":[%s],"pageInfo":{"hasNextPage":%t,"endCursor":%q}}}}}`, nodes, hasNext, endCursor),
+		group:   1,
 	}
 }
 
@@ -66,6 +69,7 @@ func exactTitleCheck(repo, title, searchItems, titleNodes string) []response {
 		{
 			request: exactTitleSearchRequest(repo, title),
 			output:  fmt.Sprintf(`{"total_count":%d,"incomplete_results":false,"items":[%s]}`, count, searchItems),
+			group:   1,
 		},
 		exactTitleTitlesPage(repo, "", false, "", titleNodes),
 	}
@@ -75,7 +79,7 @@ func exactTitleCheck(repo, title, searchItems, titleNodes string) []response {
 // followed by the recent-open scan stopping at its 500-issue cap while still
 // inside the window (the issues are dated far in the future).
 func exactTitleCappedFallback(repo, title string) []response {
-	responses := []response{{request: exactTitleSearchRequest(repo, title), err: errors.New("gh: API rate limit exceeded (HTTP 403)")}}
+	responses := []response{{request: exactTitleSearchRequest(repo, title), err: errors.New("gh: API rate limit exceeded (HTTP 403)"), group: 1}}
 	cursor := ""
 	for page := 1; page <= 5; page++ {
 		next := fmt.Sprintf("c%d", page)
@@ -427,7 +431,7 @@ const cliIssueViewJSONFields = "number,title,body,state,stateReason,labels,assig
 func TestIssueCreatePlanResolvesSelfAssignee(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	fake := &fakeClient{t: t, responses: append(exactTitleCheck("octo-org/example", "Mine", "", ""),
-		response{request: request{method: "GET", path: "/" + "user"}, output: string(objectFixture("login", []byte("octocat\n")))},
+		response{request: request{method: "GET", path: "/" + "user"}, output: string(objectFixture("login", []byte("octocat\n"))), group: 1},
 	)}
 	exitCode := Run(
 		context.Background(),
@@ -585,7 +589,7 @@ func TestIssueCreateWithThreeProjectFieldsUsesTenRequests(t *testing.T) {
 	root := localFieldsFixture(t)
 	steps := exactTitleCheck("octo-org/example", "Created Issue", "", "")
 	steps = append(steps,
-		response{request: request{query: githubcli.ProjectSchemaQuery(), variables: map[string]any{"login": "octo-org", "number": 12}}, output: localFieldsSchema()},
+		response{request: request{query: githubcli.ProjectSchemaQuery(), variables: map[string]any{"login": "octo-org", "number": 12}}, output: localFieldsSchema(), group: 1},
 		response{request: request{method: "POST", path: "/repos/octo-org/example/issues", body: map[string]any{"title": "Created Issue", "body": ""}}, output: `{"html_url":"https://github.com/octo-org/example/issues/55"}`},
 		response{request: request{query: githubcli.IssueViewQuery, variables: map[string]any{"owner": "octo-org", "name": "example", "number": 55}}, output: string(issueFixture([]byte(`{"number":55,"title":"Created Issue","state":"OPEN","url":"https://github.com/octo-org/example/issues/55"}`)))},
 		response{request: cliProjectItemRequest(), output: cliMissingProjectItemQueryJSON()},
@@ -607,7 +611,7 @@ func TestIssueCreateWithThreeProjectFieldsUsesTenRequests(t *testing.T) {
 // duplicate check followed by the Project schema preflight.
 func projectFieldsPlanSteps(title string) []response {
 	steps := exactTitleCheck("octo-org/example", title, "", "")
-	return append(steps, response{request: request{query: githubcli.ProjectSchemaQuery(), variables: map[string]any{"login": "octo-org", "number": 12}}, output: localFieldsSchema()})
+	return append(steps, response{request: request{query: githubcli.ProjectSchemaQuery(), variables: map[string]any{"login": "octo-org", "number": 12}}, output: localFieldsSchema(), group: 1})
 }
 
 func TestIssueCreatePlanValidatesProjectFields(t *testing.T) {
@@ -617,10 +621,10 @@ func TestIssueCreatePlanValidatesProjectFields(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
 	}
-	if client.index != 3 {
-		t.Fatalf("GitHub requests = %d, want 3 (no mutating request)", client.index)
+	if client.usedCount() != 3 {
+		t.Fatalf("GitHub requests = %d, want 3 (no mutating request)", client.usedCount())
 	}
-	if !strings.Contains(stderr.String(), "[2/3] Validating Project fields") || !strings.Contains(stderr.String(), "[3/3] Planning issue creation") {
+	if !strings.Contains(stderr.String(), "[1/2] Inspecting duplicates and Project configuration") || !strings.Contains(stderr.String(), "[2/2] Planning issue creation") {
 		t.Fatalf("stderr = %s", stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"status": "Done"`) {
@@ -638,8 +642,49 @@ func TestIssueCreatePlanRejectsUnknownProjectStatusOption(t *testing.T) {
 	if !strings.Contains(stderr.String(), `option "In review" for Status is absent from Project field "Status"`) {
 		t.Fatalf("stderr = %s", stderr.String())
 	}
-	if client.index != 3 {
-		t.Fatalf("GitHub requests = %d, want 3 (no mutating request)", client.index)
+	if client.usedCount() != 3 {
+		t.Fatalf("GitHub requests = %d, want 3 (no mutating request)", client.usedCount())
+	}
+}
+
+// concurrentReadsClient blocks the duplicate-check search until the Project
+// preflight has been requested; a sequential implementation would time out.
+type concurrentReadsClient struct {
+	*fakeClient
+	preflightOnce    sync.Once
+	preflightArrived chan struct{}
+}
+
+func (c *concurrentReadsClient) GraphQL(ctx context.Context, query string, variables map[string]any) (githubcli.GraphQLResponse, error) {
+	if query == githubcli.ProjectSchemaQuery() {
+		c.preflightOnce.Do(func() { close(c.preflightArrived) })
+	}
+	return c.fakeClient.GraphQL(ctx, query, variables)
+}
+
+func (c *concurrentReadsClient) REST(ctx context.Context, method, path string, body any) (githubcli.RESTResponse, error) {
+	if method == "GET" && strings.HasPrefix(path, "/search/issues") {
+		select {
+		case <-c.preflightArrived:
+		case <-time.After(5 * time.Second):
+			c.fakeClient.t.Errorf("duplicate-check search did not run concurrently with the Project preflight")
+		}
+	}
+	return c.fakeClient.REST(ctx, method, path, body)
+}
+
+func TestIssueCreateReadsRunConcurrently(t *testing.T) {
+	client := &concurrentReadsClient{
+		fakeClient:       &fakeClient{t: t, responses: projectFieldsPlanSteps("Concurrent Issue")},
+		preflightArrived: make(chan struct{}),
+	}
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"issue", "create", "--root", fixture(t, "single"), "--title", "Concurrent Issue", "--status", "Done", "--json"}, &stdout, &stderr, client)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	if client.usedCount() != 3 {
+		t.Fatalf("GitHub requests = %d, want 3", client.usedCount())
 	}
 }
 func TestIssueEditAddLabelUsesFourRequests(t *testing.T) {

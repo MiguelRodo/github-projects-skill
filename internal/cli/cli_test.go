@@ -8,6 +8,7 @@ import (
 	"github.com/MiguelRodo/github-projects-skill/internal/githubcli"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -85,24 +86,73 @@ type response struct {
 	request request
 	output  string
 	err     error
+	// group marks responses that are requested concurrently. Group 0 keeps the
+	// strict positional ordering; a non-zero group lets the fake match any
+	// not-yet-used response in its contiguous run.
+	group int
+	used  bool
 }
 type fakeClient struct {
+	mu        sync.Mutex
 	t         *testing.T
 	responses []response
 	index     int
 }
 
 func (r *fakeClient) next(actual request) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.t.Helper()
-	if r.index >= len(r.responses) {
-		r.t.Fatalf("unexpected GitHub request: %s", canonicalRequest(actual))
+	want := canonicalRequest(actual)
+	for {
+		if r.index >= len(r.responses) {
+			r.t.Fatalf("unexpected GitHub request: %s", want)
+		}
+		current := r.responses[r.index]
+		if current.group == 0 {
+			r.index++
+			if canonicalRequest(current.request) != want {
+				r.t.Fatalf("request = %s, want %s", want, canonicalRequest(current.request))
+			}
+			return []byte(current.output), current.err
+		}
+		end := r.index
+		for end < len(r.responses) && r.responses[end].group == current.group {
+			end++
+		}
+		for i := r.index; i < end; i++ {
+			if !r.responses[i].used && canonicalRequest(r.responses[i].request) == want {
+				r.responses[i].used = true
+				return []byte(r.responses[i].output), r.responses[i].err
+			}
+		}
+		allUsed := true
+		for i := r.index; i < end; i++ {
+			if !r.responses[i].used {
+				allUsed = false
+				break
+			}
+		}
+		if !allUsed {
+			r.t.Fatalf("unexpected GitHub request in group %d: %s", current.group, want)
+		}
+		r.index = end
 	}
-	response := r.responses[r.index]
-	r.index++
-	if canonicalRequest(actual) != canonicalRequest(response.request) {
-		r.t.Fatalf("request = %s, want %s", canonicalRequest(actual), canonicalRequest(response.request))
+}
+
+// usedCount reports how many responses have been consumed. It counts strictly
+// ordered responses already passed plus concurrently matched group responses
+// that may still sit at the current index.
+func (r *fakeClient) usedCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	count := 0
+	for i, response := range r.responses {
+		if i < r.index || response.used {
+			count++
+		}
 	}
-	return []byte(response.output), response.err
+	return count
 }
 func (r *fakeClient) GraphQL(_ context.Context, query string, variables map[string]any) (githubcli.GraphQLResponse, error) {
 	output, err := r.next(request{query: query, variables: variables})
