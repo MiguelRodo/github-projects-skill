@@ -264,4 +264,8 @@ supported Markdown contracts and CLI. Files under `docs/spec/`, `schemas/` and
 `examples/` retain the older `projectctl/v1` design as historical material; they
 are not configuration instructions for `projects`.
 
+The [live smoke test](docs/live-smoke.md) exercises the `projects` CLI against
+a disposable sandbox repository and Project with the maintainer's own `gh`
+login; it is not run in CI.
+
 Changes use GitHub issues and pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md). This project uses the [MIT Licence](LICENSE).
