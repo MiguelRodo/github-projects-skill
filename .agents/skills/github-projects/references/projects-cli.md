@@ -2,11 +2,14 @@
 
 Use this reference when the shell has `projects` installed. The installed
 binary's help is authoritative for its capabilities: check `projects --help`
-once, then `projects <command> --help` for the operation and flags you need.
+once, then `projects <group> --help` or `projects <command> --help` for the
+operation and flags you need. `projects --version` shows the installed build.
 An older binary may support reads but lack mutations. Use the direct provider
 fallback only for the missing operation; continue using its supported commands.
 
-Run from the resolved repository root, or pass `--root REPOSITORY_ROOT`.
+Without `--root`, the CLI uses the nearest `.projects/project.md` from the
+current directory upwards, stopping at the enclosing Git repository. Pass
+`--root REPOSITORY_ROOT` when the resolved repository is elsewhere.
 For Project commands in a dispatcher, pass the exact `--project-key`,
 `--routing-label` or `--project-number` from the checked contract. All supplied
 identifiers must agree. Do not install or upgrade the binary merely to execute
@@ -17,17 +20,20 @@ an ordinary request.
 | Outcome | Command |
 | --- | --- |
 | Validate the complete repository contract | `projects contract validate` |
-| Read the complete Project item set, including for ranking | `projects project item-list --json` |
+| Read the complete Project item set, including for ranking | `projects project item-list --json` (alias `items`) |
 | Create an issue | `projects issue create --title TITLE --body-file FILE` |
 | Change an issue title, body, labels, assignees, milestone or state | `projects issue edit --issue NUMBER` with the requested edit flags |
 | Add an issue to the declared Project | `projects project item-add --issue NUMBER` |
 | Set Priority, Class, Status or Target date | `projects project item-edit --issue NUMBER` with the requested field flags |
 | Clear a declared Project field | `projects project item-edit --issue NUMBER --clear FIELD` |
+| One-time standard field setup, when setup is authorised | `projects project setup-fields`; organisation schema also needs `--allow-organization-schema` |
+| One-time standard `Backlog` view, when setup is authorised | `projects project setup-backlog-view` |
 
 Every mutation above plans by default. Add `--apply` when the user's request
 authorises the change. A plan is not completion. Do not ask for a second
 approval merely because the CLI distinguishes planning from applying; honour
-an explicit proposal-only request by omitting `--apply`.
+an explicit proposal-only request by omitting `--apply`. A selector mistake
+exits 2 and lists the configured routes; choose from them rather than guessing.
 
 For example, after resolving the contract, an authorised request to set issue
 313 to P2 uses:
@@ -45,6 +51,9 @@ uses one invocation:
 projects project item-edit --issue 313 --priority P2 --status "In progress" --apply --json
 ```
 
+In a mutation's `--json` result, `changed` is `true` only when GitHub state was
+actually modified; use it, not `applied`, to tell a real change from a verified no-op.
+
 `item-edit` requires existing Project membership. Add membership separately
 only when it is authorised or necessarily implied and permitted by the
 contract. `item-add` verifies an existing membership as a no-op. For pull
@@ -58,6 +67,11 @@ projects issue edit --issue 313 --add-label needs-review --apply --json
 projects issue edit --issue 313 --body-file /path/to/body.md --apply --json
 projects issue edit --issue 313 --state closed --close-reason completed --apply --json
 ```
+
+`--close-reason` accepts `completed` or `not_planned` and also corrects the
+reason on an already-closed issue. Status changes made by the Project's
+built-in workflows during a command are returned as `automationSideEffects`,
+not failures; report them rather than reverting them.
 
 For creation, supply only grounded text and authorised metadata. The CLI checks
 exact-title collisions. Do not use `--allow-duplicate` to bypass an unresolved
@@ -90,7 +104,8 @@ appropriate for issue details that the CLI does not expose.
 Use direct `gh`, REST, GraphQL or a capable connector when the binary is absent,
 its help does not expose the necessary command/flag, or the operation is outside
 its supported surface. This includes native parent/sub-issue relationships,
-Project field definitions/options, and removing membership. Read
+Project field definitions/options beyond the standard setup commands, and
+removing membership. Read
 [the direct recipes](github-operations.md), retain all inspection and readback
 rules, and report the concrete capability gap briefly.
 
