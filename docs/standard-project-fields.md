@@ -26,4 +26,8 @@ projects project setup-fields --apply --allow-organization-schema
 
 The operation inspects live schema before writing, creates only missing standard pieces, reconciles recognised standard or legacy Priority options, preserves unrelated fields and options, and performs a fresh post-write inspection. A successful apply therefore means the requested standard profile was independently observed after the mutations, not merely that GitHub accepted the write calls.
 
+The plan describes each reconciliation from the live diff, for example `rename High->P1`, `recolour P1 GRAY->ORANGE`, added options, reordering or re-enabling an Issue Type. Reconciliation sends the existing option IDs so item values survive renames. The post-write inspection also requires every option ID the reconciliation kept; if GitHub regenerated them, which clears every item's value for those options, the apply fails loudly instead of reporting success. A failed apply lists the changes already applied and the step that failed; run the plan again to see the remaining work.
+
+On an organisation-owned Project, an existing Project-local field named `Priority` blocks attaching the organisation Priority issue field. Rename or remove that Project field first; its values do not migrate to the issue field.
+
 This setup is deliberately not continuous policy enforcement. Repository contracts may still declare deliberate local overrides, and running ordinary issue or Project administration does not silently rewrite field definitions or organisation schema.

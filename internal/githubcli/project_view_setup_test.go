@@ -61,6 +61,9 @@ func TestPlanBacklogViewUpdatesBasicConfigurationInPlace(t *testing.T) {
 	if len(changes) != 1 || changes[0].Action != "update_view" || changes[0].ViewID != "v1" {
 		t.Fatalf("changes = %#v, want update_view for v1", changes)
 	}
+	if !strings.Contains(changes[0].Detail, "layout BOARD_LAYOUT->TABLE_LAYOUT") {
+		t.Fatalf("detail = %q, want the layout diff", changes[0].Detail)
+	}
 }
 
 func TestPlanBacklogViewReplacesWhenGroupOrSortDiffers(t *testing.T) {
@@ -72,6 +75,11 @@ func TestPlanBacklogViewReplacesWhenGroupOrSortDiffers(t *testing.T) {
 	}
 	if len(changes) != 1 || changes[0].Action != "replace_view" || !strings.Contains(changes[0].Detail, "cannot update group/sort") {
 		t.Fatalf("changes = %#v, want replace_view", changes)
+	}
+	for _, want := range []string{"sort Priority desc->Priority asc", "group Status->Status", "delete old Backlog #1 (v1) after verifying the replacement"} {
+		if !strings.Contains(changes[0].Detail, want) {
+			t.Fatalf("detail = %q, want %q", changes[0].Detail, want)
+		}
 	}
 }
 
@@ -129,15 +137,21 @@ func TestBuildBacklogViewSpecUsesNativeIssueTypeForOrganization(t *testing.T) {
 	}
 }
 
-func TestBuildBacklogViewSpecRequiresNativeIssueTypeForOrganization(t *testing.T) {
+func TestBuildBacklogViewSpecDoesNotRequireIssueTypeColumnForOrganization(t *testing.T) {
 	project := contract.Project{Owner: "octo-org", Number: 12, Title: "Planning"}
 	fields := []restProjectField{
 		{ID: 1, NodeID: "node-title", Name: "Title", DataType: "title"},
 		{ID: 2, NodeID: "node-status", Name: "Status", DataType: "single_select"},
 		{ID: 3, NodeID: "node-priority", Name: "Priority", DataType: "single_select"},
 	}
-	if _, err := buildBacklogViewSpec(project, "organization", fields); err == nil {
-		t.Fatal("syntax: organisation Project without a native Issue Type must fail inspection")
+	// Issue Type can never be a view column, so its absence from the Project
+	// field list must not block the view (setup-fields could not fix it).
+	spec, err := buildBacklogViewSpec(project, "organization", fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Visible) != 3 {
+		t.Fatalf("visible = %#v, want the three standard columns", spec.Visible)
 	}
 }
 
