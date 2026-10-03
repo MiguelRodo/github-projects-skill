@@ -3,9 +3,12 @@ package githubcli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MiguelRodo/github-projects-skill/internal/contract"
 )
@@ -13,7 +16,9 @@ import (
 func projectSchemaJSON() []byte {
 	return []byte(`{
   "data": {
-    "user": {
+    "owner": {
+      "__typename": "User",
+      "login": "octo-user",
       "projectV2": {
         "id": "PVT_123",
         "number": 40,
@@ -74,14 +79,21 @@ func projectItemQueryArgs(owner, repo, kind string, number int) []string {
 		"-f", "owner=" + owner,
 		"-f", "repo=" + repo,
 		"-F", fmt.Sprintf("number=%d", number),
+		"-f", "projectOwner=octo-user",
+		"-F", "projectNumber=40",
 	}
 }
+
+// projectOwnerJSON is the Project identity root of every target-centred read.
+const projectOwnerJSON = `"projectOwner":{"__typename":"User","login":"octo-user","projectV2":{"id":"PVT_123","number":40,"title":"Planning"}}`
 
 func projectItemQueryJSON(status, priority, class string) []byte {
 	return []byte(`{
   "data": {
+    ` + projectOwnerJSON + `,
     "repository": {
       "target": {
+        "id": "I_42",
         "url": "https://github.com/owner/repo/issues/42",
         "projectItems": {
           "nodes": [{
@@ -111,7 +123,7 @@ func projectItemQueryJSON(status, priority, class string) []byte {
 }
 
 func missingProjectItemQueryJSON() []byte {
-	return []byte(`{"data":{"repository":{"target":{"url":"https://github.com/owner/repo/issues/42","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`)
+	return []byte(`{"data":{` + projectOwnerJSON + `,"repository":{"target":{"id":"I_42","url":"https://github.com/owner/repo/issues/42","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`)
 }
 
 func TestQueryProjectSchema(t *testing.T) {
@@ -125,7 +137,7 @@ func TestQueryProjectSchema(t *testing.T) {
 		{
 			args: []string{
 				"api", "graphql",
-				"-f", "query=" + ProjectSchemaQuery("user"),
+				"-f", "query=" + ProjectSchemaQuery(),
 				"-f", "login=octo-user",
 				"-F", "number=40",
 			},
@@ -164,7 +176,7 @@ func TestValidateProjectItemMutationConfigurationNeedsNoIssueTarget(t *testing.T
 	fake := &fakeRunner{t: t, responses: []fakeResponse{{
 		args: []string{
 			"api", "graphql",
-			"-f", "query=" + ProjectSchemaQuery("user"),
+			"-f", "query=" + ProjectSchemaQuery(),
 			"-f", "login=octo-user",
 			"-F", "number=40",
 		},
@@ -206,7 +218,7 @@ func TestMutateProjectItem(t *testing.T) {
 		{
 			args: []string{
 				"api", "graphql",
-				"-f", "query=" + ProjectSchemaQuery("user"),
+				"-f", "query=" + ProjectSchemaQuery(),
 				"-f", "login=octo-user",
 				"-F", "number=40",
 			},
@@ -214,29 +226,9 @@ func TestMutateProjectItem(t *testing.T) {
 		},
 		// 2. One target-centred read before mutation.
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
-		// 3. EditProjectItemField for Priority.
-		{
-			args: []string{
-				"project", "item-edit",
-				"--id", "PVTI_ITEM_42",
-				"--project-id", "PVT_123",
-				"--field-id", "FIELD_PRIORITY",
-				"--single-select-option-id", "OPT_P1",
-			},
-			output: []byte("{}"),
-		},
-		// 4. EditProjectItemField for Status.
-		{
-			args: []string{
-				"project", "item-edit",
-				"--id", "PVTI_ITEM_42",
-				"--project-id", "PVT_123",
-				"--field-id", "FIELD_STATUS",
-				"--single-select-option-id", "OPT_IN_PROGRESS",
-			},
-			output: []byte("{}"),
-		},
-		// 5. One independent readback verifies both edits.
+		// 3. One batched GraphQL write for Priority and Status.
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1"), fieldSet("FIELD_STATUS", "OPT_IN_PROGRESS")), output: fieldWriteOutput("PVTI_ITEM_42", 2)},
+		// 4. One independent readback verifies both edits.
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("In progress", "P1", "Task")},
 	}}
 
@@ -256,8 +248,8 @@ func TestMutateProjectItem(t *testing.T) {
 	if result.Fields["Priority"] != "P1" || result.Fields["Status"] != "In progress" {
 		t.Fatalf("result.Fields = %+v", result.Fields)
 	}
-	if fake.calls != 5 {
-		t.Fatalf("GitHub calls = %d, want 5 for schema + one initial read + two edits + one readback", fake.calls)
+	if fake.calls != 4 {
+		t.Fatalf("GitHub calls = %d, want 4 for schema + one initial read + one batched write + one readback", fake.calls)
 	}
 }
 
@@ -302,7 +294,7 @@ func TestQueryProjectSchemaRejectsIncompleteFields(t *testing.T) {
 	fake := &fakeRunner{t: t, responses: []fakeResponse{{
 		args: []string{
 			"api", "graphql",
-			"-f", "query=" + ProjectSchemaQuery("user"),
+			"-f", "query=" + ProjectSchemaQuery(),
 			"-f", "login=octo-user",
 			"-F", "number=40",
 		},
@@ -322,10 +314,10 @@ func TestEnsureProjectItemRejectsReadbackIDMismatch(t *testing.T) {
 	}
 	fake := &fakeRunner{t: t, responses: []fakeResponse{
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()},
-		{args: []string{"project", "item-add", "40", "--owner", "octo-user", "--url", "https://github.com/owner/repo/issues/42", "--format", "json"}, output: []byte(`{"id":"PVTI_RETURNED"}`)},
+		{args: addItemArgs(), output: addItemOutput("PVTI_RETURNED")},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: []byte(strings.Replace(string(projectItemQueryJSON("Todo", "P2", "Task")), "PVTI_ITEM_42", "PVTI_OBSERVED", 1))},
 	}}
-	_, _, err = EnsureProjectItem(context.Background(), fake, p, target)
+	_, err = EnsureProjectItem(context.Background(), fake, p, target)
 	if err == nil || !strings.Contains(err.Error(), "ID readback disagrees") {
 		t.Fatalf("error = %v, want ID disagreement", err)
 	}
@@ -338,9 +330,9 @@ func TestMutateProjectItemRejectsFieldReadbackMismatch(t *testing.T) {
 		FieldLocations: map[string]contract.FieldLocation{"Priority": {Location: "project field", Field: "Priority"}},
 	}
 	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery("user"), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
-		{args: []string{"project", "item-edit", "--id", "PVTI_ITEM_42", "--project-id", "PVT_123", "--field-id", "FIELD_PRIORITY", "--single-select-option-id", "OPT_P1"}, output: []byte(`{}`)},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
 	}}
 	_, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: p, Repo: "owner/repo", IssueNumber: 42, Priority: "P1"})
@@ -356,9 +348,9 @@ func TestMutateProjectItemRejectsUnrelatedScalarProjectFieldChange(t *testing.T)
 		FieldLocations: map[string]contract.FieldLocation{"Priority": {Location: "project field", Field: "Priority"}},
 	}
 	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery("user"), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
-		{args: []string{"project", "item-edit", "--id", "PVTI_ITEM_42", "--project-id", "PVT_123", "--field-id", "FIELD_PRIORITY", "--single-select-option-id", "OPT_P1"}, output: []byte(`{}`)},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P1", "Bug")},
 	}}
 	_, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: p, Repo: "owner/repo", IssueNumber: 42, Priority: "P1"})
@@ -401,7 +393,7 @@ func TestMutateProjectItemDoesNotAddMembershipImplicitly(t *testing.T) {
 		FieldLocations: map[string]contract.FieldLocation{"Priority": {Location: "project field", Field: "Priority"}},
 	}
 	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery("user"), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()},
 	}}
 	_, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: p, Repo: "owner/repo", IssueNumber: 42, Priority: "P1"})
@@ -593,9 +585,9 @@ func TestPreparedProjectMutationReusesDefinitionsAndBindsTarget(t *testing.T) {
 		FieldLocations: map[string]contract.FieldLocation{"Priority": {Location: "project field", Field: "Priority"}},
 	}
 	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery("user"), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
-		{args: []string{"project", "item-edit", "--id", "PVTI_ITEM_42", "--project-id", "PVT_123", "--field-id", "FIELD_PRIORITY", "--single-select-option-id", "OPT_P1"}, output: []byte(`{}`)},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P1", "Task")},
 	}}
 	prepared, err := PrepareProjectItemMutation(context.Background(), fake, MutateProjectItemInput{Project: p, Repo: "owner/repo", Priority: "P1"})
@@ -621,7 +613,7 @@ func TestPreparedMutationAllowsSameFieldNameAtDifferentProviderLocations(t *test
 		},
 	}
 	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery("user"), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
 		{
 			args:   []string{"api", "--paginate", "--slurp", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2026-03-10", "orgs/owner/issue-fields?per_page=100"},
 			output: []byte(`[[{"id":11,"name":"Priority","data_type":"single_select","options":[{"id":101,"name":"Task"}]}]]`),
@@ -659,9 +651,9 @@ func projectItemWithoutStatusJSON(priority, class string) []byte {
 func TestMutateProjectItemVerifiesStatusAgainstLiveOptionSpelling(t *testing.T) {
 	schema := strings.Replace(string(projectSchemaJSON()), `"In progress"`, `"In Progress"`, 1)
 	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery("user"), "-f", "login=octo-user", "-F", "number=40"}, output: []byte(schema)},
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: []byte(schema)},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
-		{args: []string{"project", "item-edit", "--id", "PVTI_ITEM_42", "--project-id", "PVT_123", "--field-id", "FIELD_STATUS", "--single-select-option-id", "OPT_IN_PROGRESS"}, output: []byte(`{}`)},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_STATUS", "OPT_IN_PROGRESS")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("In Progress", "P2", "Task")},
 	}}
 	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Status: "In Progress"})
@@ -675,11 +667,11 @@ func TestMutateProjectItemVerifiesStatusAgainstLiveOptionSpelling(t *testing.T) 
 
 func TestMutateProjectItemReportsStatusSetByItemAddedWorkflow(t *testing.T) {
 	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery("user"), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()},
-		{args: []string{"project", "item-add", "40", "--owner", "octo-user", "--url", "https://github.com/owner/repo/issues/42", "--format", "json"}, output: []byte(`{"id":"PVTI_ITEM_42"}`)},
+		{args: addItemArgs(), output: addItemOutput("PVTI_ITEM_42")},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemWithoutStatusJSON("P2", "Task")},
-		{args: []string{"project", "item-edit", "--id", "PVTI_ITEM_42", "--project-id", "PVT_123", "--field-id", "FIELD_PRIORITY", "--single-select-option-id", "OPT_P1"}, output: []byte(`{}`)},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P1", "Task")},
 	}}
 	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Priority: "P1", AddIfMissing: true})
@@ -693,13 +685,323 @@ func TestMutateProjectItemReportsStatusSetByItemAddedWorkflow(t *testing.T) {
 
 func TestMutateProjectItemStillRejectsStatusChangeOnExistingItem(t *testing.T) {
 	fake := &fakeRunner{t: t, responses: []fakeResponse{
-		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery("user"), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemWithoutStatusJSON("P2", "Task")},
-		{args: []string{"project", "item-edit", "--id", "PVTI_ITEM_42", "--project-id", "PVT_123", "--field-id", "FIELD_PRIORITY", "--single-select-option-id", "OPT_P1"}, output: []byte(`{}`)},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
 		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P1", "Task")},
 	}}
 	_, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Priority: "P1"})
 	if err == nil || !strings.Contains(err.Error(), "unrelated scalar Project item value changed") {
 		t.Fatalf("error = %v, want preservation failure for an item this command did not add", err)
+	}
+}
+
+func fieldSet(fieldID, optionID string) projectFieldChange {
+	return projectFieldChange{Name: fieldID, Field: ProjectField{ID: fieldID}, OptionID: optionID}
+}
+
+func fieldWriteArgs() []string {
+	return []string{"api", "graphql", "--input", "-"}
+}
+
+func fieldWriteInput(t *testing.T, itemID string, changes ...projectFieldChange) []byte {
+	t.Helper()
+	body, _, err := projectFieldWriteRequest("PVT_123", itemID, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func fieldWriteOutput(itemID string, count int) []byte {
+	data := make(map[string]any, count)
+	for index := 0; index < count; index++ {
+		data[fmt.Sprintf("f%d", index)] = map[string]any{"projectV2Item": map[string]string{"id": itemID}}
+	}
+	encoded, _ := json.Marshal(map[string]any{"data": data})
+	return encoded
+}
+
+func addItemArgs() []string {
+	return []string{"api", "graphql", "-f", "query=" + addProjectItemMutation, "-f", "projectId=PVT_123", "-f", "contentId=I_42"}
+}
+
+func addItemOutput(itemID string) []byte {
+	return []byte(fmt.Sprintf(`{"data":{"addProjectV2ItemById":{"item":{"id":%q}}}}`, itemID))
+}
+
+func unarchiveArgs() []string {
+	return []string{"api", "graphql", "-f", "query=" + unarchiveProjectItemMutation, "-f", "projectId=PVT_123", "-f", "itemId=PVTI_ITEM_42"}
+}
+
+func archivedProjectItemQueryJSON(status, priority, class string) []byte {
+	return []byte(strings.Replace(string(projectItemQueryJSON(status, priority, class)), `"isArchived": false`, `"isArchived": true`, 1))
+}
+
+// stubSettleDelay replaces the automation settle wait and records its use.
+func stubSettleDelay(t *testing.T) *int {
+	t.Helper()
+	waits := 0
+	original := sleepContext
+	sleepContext = func(context.Context, time.Duration) error {
+		waits++
+		return nil
+	}
+	t.Cleanup(func() { sleepContext = original })
+	return &waits
+}
+
+func TestProjectFieldWriteRequestBatchesAliasedMutations(t *testing.T) {
+	t.Parallel()
+	body, aliases, err := projectFieldWriteRequest("PVT_1", "PVTI_1", []projectFieldChange{
+		{Name: "Priority", Field: ProjectField{ID: "F_P"}, OptionID: "OPT_P1"},
+		{Name: "Due date", Field: ProjectField{ID: "F_D"}, Desired: "2026-10-31"},
+		{Name: "clear Size", Field: ProjectField{ID: "F_S"}, Clear: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	wantQuery := "mutation($projectId: ID!, $itemId: ID!, $f0Field: ID!, $f0Value: ProjectV2FieldValue!, $f1Field: ID!, $f1Value: ProjectV2FieldValue!, $f2Field: ID!) {\n" +
+		"  f0: updateProjectV2ItemFieldValue(input: {projectId: $projectId, itemId: $itemId, fieldId: $f0Field, value: $f0Value}) { projectV2Item { id } }\n" +
+		"  f1: updateProjectV2ItemFieldValue(input: {projectId: $projectId, itemId: $itemId, fieldId: $f1Field, value: $f1Value}) { projectV2Item { id } }\n" +
+		"  f2: clearProjectV2ItemFieldValue(input: {projectId: $projectId, itemId: $itemId, fieldId: $f2Field}) { projectV2Item { id } }\n}"
+	if request.Query != wantQuery {
+		t.Fatalf("query =\n%s\nwant\n%s", request.Query, wantQuery)
+	}
+	wantVariables := map[string]any{
+		"projectId": "PVT_1", "itemId": "PVTI_1",
+		"f0Field": "F_P", "f0Value": map[string]any{"singleSelectOptionId": "OPT_P1"},
+		"f1Field": "F_D", "f1Value": map[string]any{"date": "2026-10-31"},
+		"f2Field": "F_S",
+	}
+	if !reflect.DeepEqual(request.Variables, wantVariables) {
+		t.Fatalf("variables = %v, want %v", request.Variables, wantVariables)
+	}
+	if !reflect.DeepEqual(aliases, []string{"f0", "f1", "f2"}) {
+		t.Fatalf("aliases = %v", aliases)
+	}
+}
+
+func TestQueryProjectSchemaWithoutOwnerTypeNeedsOneRequest(t *testing.T) {
+	p := contract.Project{Owner: "octo-org", Number: 40, Title: "Planning", ContractPath: ".projects/project.md"}
+	orgSchema := strings.Replace(strings.Replace(string(projectSchemaJSON()), `"User"`, `"Organization"`, 1), `"octo-user"`, `"octo-org"`, 1)
+	fake := &fakeRunner{t: t, responses: []fakeResponse{{
+		args:   []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-org", "-F", "number=40"},
+		output: []byte(orgSchema),
+	}}}
+	schema, err := QueryProjectSchema(context.Background(), fake, p)
+	if err != nil || schema.ID != "PVT_123" || fake.calls != 1 {
+		t.Fatalf("schema=%+v err=%v calls=%d; want one request and no owner-type lookup", schema, err, fake.calls)
+	}
+
+	p.OwnerType = "user"
+	mismatch := &fakeRunner{t: t, responses: []fakeResponse{{
+		args:   []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-org", "-F", "number=40"},
+		output: []byte(orgSchema),
+	}}}
+	if _, err := QueryProjectSchema(context.Background(), mismatch, p); err == nil || !strings.Contains(err.Error(), "owner type disagrees") {
+		t.Fatalf("error = %v, want declared owner type disagreement", err)
+	}
+}
+
+func TestQueryProjectItemVerifiesProjectIdentityWithoutMembership(t *testing.T) {
+	p := contract.Project{Owner: "octo-user", Number: 40, Title: "Renamed", ContractPath: ".projects/project.md"}
+	target, _ := ResolveGitHubItemTarget("owner/repo", 42, "")
+	fake := &fakeRunner{t: t, responses: []fakeResponse{{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()}}}
+	if _, err := QueryProjectItem(context.Background(), fake, p, target); err == nil || !strings.Contains(err.Error(), "Project identity disagrees") {
+		t.Fatalf("error = %v, want Project identity disagreement", err)
+	}
+}
+
+func TestQueryProjectItemReportsArchivedMembership(t *testing.T) {
+	target, _ := ResolveGitHubItemTarget("owner/repo", 42, "")
+	fake := &fakeRunner{t: t, responses: []fakeResponse{{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: archivedProjectItemQueryJSON("Todo", "P2", "Task")}}}
+	item, err := QueryProjectItem(context.Background(), fake, testProject(), target)
+	if err != nil || item == nil || !item.Archived {
+		t.Fatalf("item=%+v err=%v; want archived membership", item, err)
+	}
+	encoded, _ := json.Marshal(item)
+	if !strings.Contains(string(encoded), `"archived":true`) {
+		t.Fatalf("JSON = %s, want archived:true", encoded)
+	}
+}
+
+func TestEnsureProjectItemAddsByNodeID(t *testing.T) {
+	target, _ := ResolveGitHubItemTarget("owner/repo", 42, "")
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()},
+		{args: addItemArgs(), output: addItemOutput("PVTI_ITEM_42")},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+	}}
+	membership, err := EnsureProjectItem(context.Background(), fake, testProject(), target)
+	if err != nil || !membership.Added || membership.Unarchived || membership.Item.ItemID != "PVTI_ITEM_42" || fake.calls != 3 {
+		t.Fatalf("membership=%+v err=%v calls=%d", membership, err, fake.calls)
+	}
+}
+
+func TestEnsureProjectItemUnarchivesArchivedMember(t *testing.T) {
+	target, _ := ResolveGitHubItemTarget("owner/repo", 42, "")
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: archivedProjectItemQueryJSON("Todo", "P2", "Task")},
+		{args: unarchiveArgs(), output: []byte(`{"data":{"unarchiveProjectV2Item":{"item":{"id":"PVTI_ITEM_42"}}}}`)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+	}}
+	membership, err := EnsureProjectItem(context.Background(), fake, testProject(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if membership.Added || !membership.Unarchived || membership.Item.Archived {
+		t.Fatalf("membership = %+v, want verified unarchive without add", membership)
+	}
+}
+
+func TestEnsureProjectItemRejectsUnverifiedUnarchive(t *testing.T) {
+	target, _ := ResolveGitHubItemTarget("owner/repo", 42, "")
+	for name, readback := range map[string]struct {
+		output []byte
+		want   string
+	}{
+		"still archived": {archivedProjectItemQueryJSON("Todo", "P2", "Task"), "still archived"},
+		"field changed":  {projectItemQueryJSON("Done", "P2", "Task"), "changed while unarchiving"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeRunner{t: t, responses: []fakeResponse{
+				{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: archivedProjectItemQueryJSON("Todo", "P2", "Task")},
+				{args: unarchiveArgs(), output: []byte(`{"data":{"unarchiveProjectV2Item":{"item":{"id":"PVTI_ITEM_42"}}}}`)},
+				{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: readback.output},
+			}}
+			_, err := EnsureProjectItem(context.Background(), fake, testProject(), target)
+			if err == nil || !strings.Contains(err.Error(), readback.want) {
+				t.Fatalf("error = %v, want %q", err, readback.want)
+			}
+		})
+	}
+}
+
+func TestMutateProjectItemEditsArchivedItemWithoutUnarchiving(t *testing.T) {
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: archivedProjectItemQueryJSON("Todo", "P2", "Task")},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: archivedProjectItemQueryJSON("Todo", "P1", "Task")},
+	}}
+	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Priority: "P1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Archived || result.Unarchived || result.Fields["Priority"] != "P1" {
+		t.Fatalf("result = %+v, want an archived item edited in place", result)
+	}
+}
+
+func TestApplyWithAddIfMissingUnarchivesArchivedItem(t *testing.T) {
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: archivedProjectItemQueryJSON("Todo", "P2", "Task")},
+		{args: unarchiveArgs(), output: []byte(`{"data":{"unarchiveProjectV2Item":{"item":{"id":"PVTI_ITEM_42"}}}}`)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P1", "Task")},
+	}}
+	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Priority: "P1", AddIfMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Unarchived || result.Added || result.Archived {
+		t.Fatalf("result = %+v, want unarchived, not added", result)
+	}
+}
+
+func TestMutateProjectItemReportsHonestPartialBatchFailure(t *testing.T) {
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+		{
+			args:  fieldWriteArgs(),
+			input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1"), fieldSet("FIELD_STATUS", "OPT_DONE")),
+			err:   errors.New("gh api graphql: Status option is invalid"),
+		},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P1", "Task")},
+	}}
+	_, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Priority: "P1", Status: "Done"})
+	if err == nil || !strings.Contains(err.Error(), "applied [Priority]") || !strings.Contains(err.Error(), "not applied [Status]") {
+		t.Fatalf("error = %v, want readback naming applied and unapplied fields", err)
+	}
+}
+
+func TestWriteProjectItemFieldsRejectsPartialGraphQLResponse(t *testing.T) {
+	fake := &fakeRunner{t: t, responses: []fakeResponse{{
+		args:   fieldWriteArgs(),
+		input:  fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1"), fieldSet("FIELD_STATUS", "OPT_DONE")),
+		output: []byte(`{"data":{"f0":{"projectV2Item":{"id":"PVTI_ITEM_42"}},"f1":null},"errors":[{"message":"bad option"}]}`),
+	}}}
+	err := writeProjectItemFields(context.Background(), fake, "PVT_123", "PVTI_ITEM_42", []projectFieldChange{
+		{Name: "Priority", Field: ProjectField{ID: "FIELD_PRIORITY"}, OptionID: "OPT_P1"},
+		{Name: "Status", Field: ProjectField{ID: "FIELD_STATUS"}, OptionID: "OPT_DONE"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "bad option") || !strings.Contains(err.Error(), "unconfirmed: Status") {
+		t.Fatalf("error = %v, want GraphQL error and the unconfirmed alias", err)
+	}
+}
+
+func TestApplyReappliesStatusOverwrittenByItemAddedWorkflow(t *testing.T) {
+	waits := stubSettleDelay(t)
+	batch := fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1"), fieldSet("FIELD_STATUS", "OPT_IN_PROGRESS"))
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()},
+		{args: addItemArgs(), output: addItemOutput("PVTI_ITEM_42")},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemWithoutStatusJSON("P2", "Task")},
+		{args: fieldWriteArgs(), input: batch, output: fieldWriteOutput("PVTI_ITEM_42", 2)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P1", "Task")},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_STATUS", "OPT_IN_PROGRESS")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("In progress", "P1", "Task")},
+	}}
+	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Priority: "P1", Status: "In progress", AddIfMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *waits != 1 || result.Fields["Status"] != "In progress" || len(result.AutomationSideEffects) != 1 ||
+		!strings.Contains(result.AutomationSideEffects[0], `"Todo"`) || !strings.Contains(result.AutomationSideEffects[0], "re-applied") {
+		t.Fatalf("waits=%d result=%+v; want one settle wait and a reported re-application", *waits, result)
+	}
+}
+
+func TestApplyFailsWhenWorkflowKeepsOverridingStatus(t *testing.T) {
+	stubSettleDelay(t)
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()},
+		{args: addItemArgs(), output: addItemOutput("PVTI_ITEM_42")},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemWithoutStatusJSON("P2", "Task")},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_STATUS", "OPT_IN_PROGRESS")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_STATUS", "OPT_IN_PROGRESS")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+	}}
+	_, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Status: "In progress", AddIfMissing: true})
+	if err == nil || !strings.Contains(err.Error(), "after re-applying Status once") || !strings.Contains(err.Error(), "item-added workflow") {
+		t.Fatalf("error = %v, want a clear persistent-override failure", err)
+	}
+}
+
+func TestStatusMismatchOnExistingItemIsNotRetried(t *testing.T) {
+	waits := stubSettleDelay(t)
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery(), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+		{args: fieldWriteArgs(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_STATUS", "OPT_DONE")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+	}}
+	_, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Status: "Done"})
+	if err == nil || !strings.Contains(err.Error(), "readback disagrees") || *waits != 0 {
+		t.Fatalf("error=%v waits=%d; want immediate readback failure without retry", err, *waits)
 	}
 }
