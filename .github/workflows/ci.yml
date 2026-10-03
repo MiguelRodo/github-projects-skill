@@ -63,6 +63,20 @@ jobs:
         shell: bash
         run: bash skills/github-projects/tests/run.sh
 
+      - name: Check out the pj launcher for integration coverage
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: MiguelRodo/pj
+          path: .ci-pj
+          persist-credentials: false
+
+      - name: Test semantic queue selection through pj
+        shell: bash
+        run: |
+          PJ_TEST_LAUNCHER="$GITHUB_WORKSPACE/.ci-pj/pj" \
+            python3 skills/github-projects/tests/test-onboarding.py \
+            Onboarding.test_semantic_queue_resolves_implementation_without_repo
+
       - name: Test local implementation queue
         shell: bash
         run: bash skills/github-projects/tests/local-implementation-queue-static.sh

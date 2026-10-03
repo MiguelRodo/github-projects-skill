@@ -180,6 +180,17 @@ class Onboarding(unittest.TestCase):
         self.assertIn('disagrees', result.stderr)
         self.assertEqual(before, self.contracts())
 
+    def test_conflicting_governance_no_partial_rewrite(self):
+        self.success(self.run_init(central=True))
+        path = self.tools / '.projects/project.md'
+        path.write_text(path.read_text().replace('| Governance | collaborative |', '| Governance | personal |'))
+        self.commit(self.tools)
+        before = self.contracts()
+        result = self.run_init(central=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('conflicting Governance', result.stderr)
+        self.assertEqual(before, self.contracts())
+
     def test_cross_checkout_confirmation_cancel(self):
         before = self.contracts()
         result = self.run_init('--subproject', 'tools', central=True, yes=False, input='n\n')

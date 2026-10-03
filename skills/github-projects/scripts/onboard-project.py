@@ -276,6 +276,10 @@ def main():
     elif central and read(child_path):
         raise RuntimeError('conflicting orphan Project child')
     local = read(main_path)
+    declared_governance = {value(text, 'Governance') for text in (local, leaf, dispatcher)
+                           if value(text, 'Governance')}
+    if len(declared_governance) > 1:
+        raise RuntimeError('conflicting Governance across the implementation and issue store')
     existing = leaf or local
     owner = args.project_owner or value(existing, 'Project owner') or identity.split('/')[0]
     number = args.project_number or value(existing, 'Project number')
