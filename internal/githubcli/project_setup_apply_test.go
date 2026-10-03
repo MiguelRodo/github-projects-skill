@@ -78,7 +78,13 @@ func schemaJSON(t *testing.T, root string, project contract.Project, fields ...s
 		"id": "project-node", "number": project.Number, "title": project.Title,
 		"fields": map[string]any{"nodes": fields, "pageInfo": map[string]any{"hasNextPage": false}},
 	}
-	encoded, err := json.Marshal(map[string]any{"data": map[string]any{root: map[string]any{"projectV2": data}}})
+	typename := "User"
+	if root == "organization" {
+		typename = "Organization"
+	}
+	encoded, err := json.Marshal(map[string]any{"data": map[string]any{"owner": map[string]any{
+		"__typename": typename, "login": project.Owner, "projectV2": data,
+	}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +233,7 @@ func orgSchema(t *testing.T) string {
 }
 
 func TestApplyStandardProjectSetupRefusalNamesOrganizationSchemaFlag(t *testing.T) {
-	steps := []seqStep{{request: request{method: "GET", path: "/users/octo-org"}, out: `{"type":"Organization"}`}, {request: detailedSchemaRequest("organization"), out: orgSchema(t)}}
+	steps := []seqStep{{request: detailedSchemaRequest("organization"), out: orgSchema(t)}}
 	steps = append(steps, orgIssueTypeSteps(t)...)
 	steps = append(steps, seqStep{request: request{method: "GET", path: "/orgs/octo-org/issue-fields?per_page=100"}, out: orgPriorityFieldsJSON([]int{11, 12, 13, 14}, legacyPriorityNames)})
 	runner := &seqClient{t: t, steps: steps}
@@ -239,8 +245,8 @@ func TestApplyStandardProjectSetupRefusalNamesOrganizationSchemaFlag(t *testing.
 }
 
 func TestApplyStandardProjectSetupFailsWhenOrganizationPriorityOptionIDsChange(t *testing.T) {
-	// Owner type is discovered once; the readback must reuse it.
-	steps := []seqStep{{request: request{method: "GET", path: "/users/octo-org"}, out: `{"type":"Organization"}`}, {request: detailedSchemaRequest("organization"), out: orgSchema(t)}}
+	// Owner type is discovered once from the schema read; the readback must reuse it.
+	steps := []seqStep{{request: detailedSchemaRequest("organization"), out: orgSchema(t)}}
 	steps = append(steps, orgIssueTypeSteps(t)...)
 	steps = append(steps,
 		seqStep{request: request{method: "GET", path: "/orgs/octo-org/issue-fields?per_page=100"}, out: orgPriorityFieldsJSON([]int{11, 12, 13, 14}, legacyPriorityNames)},
@@ -255,6 +261,34 @@ func TestApplyStandardProjectSetupFailsWhenOrganizationPriorityOptionIDsChange(t
 		t.Fatalf("error = %v, want organization option-ID loss", err)
 	}
 	runner.done()
+}
+
+func TestInspectStandardProjectSetupWithoutDeclaredOwnerTypeMakesNoUsersRequest(t *testing.T) {
+	project := testProject() // no declared owner type
+	runner := &seqClient{t: t, steps: []seqStep{
+		{request: detailedSchemaRequest("user"), out: schemaJSON(t, "user", project, singleSelectFixture("status-field", "Status"))},
+	}}
+	state, err := inspectStandardProjectSetup(context.Background(), runner, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// done() proves the schema query was the only request: no GET /users/... lookup.
+	runner.done()
+	if state.ownerType != "user" {
+		t.Fatalf("ownerType = %q, want user", state.ownerType)
+	}
+}
+
+func TestInspectStandardProjectSetupRejectsDeclaredOwnerTypeMismatch(t *testing.T) {
+	project := testProject()
+	project.OwnerType = "organization"
+	runner := &seqClient{t: t, steps: []seqStep{
+		{request: detailedSchemaRequest("user"), out: schemaJSON(t, "user", project, singleSelectFixture("status-field", "Status"))},
+	}}
+	_, err := inspectStandardProjectSetup(context.Background(), runner, project)
+	if err == nil || !strings.Contains(err.Error(), "owner type disagrees") || !strings.Contains(err.Error(), "organization") {
+		t.Fatalf("error = %v, want an owner-type disagreement naming both", err)
+	}
 }
 
 func TestPlanStandardProjectSetupRejectsProjectLocalPriorityOnOrganizationWithRemedy(t *testing.T) {
@@ -351,56 +385,64 @@ func detailedSchemaRequest(root string) request {
 	if root == "organization" {
 		login, number = "octo-org", 12
 	}
-	return request{query: fmt.Sprintf(`query($login: String!, $number: Int!) {
-  %s(login: $login) {
-    projectV2(number: $number) {
-      id
-      number
-      title
-      fields(first: 100) {
-        nodes {
-          __typename
-          ... on ProjectV2FieldCommon { id name dataType isIssueField }
-          ... on ProjectV2SingleSelectField { options { id name color description } }
+	return request{query: `query($login: String!, $number: Int!) {
+  owner: repositoryOwner(login: $login) {
+    __typename
+    login
+    ... on ProjectV2Owner {
+      projectV2(number: $number) {
+        id
+        number
+        title
+        fields(first: 100) {
+          nodes {
+            __typename
+            ... on ProjectV2FieldCommon { id name dataType isIssueField }
+            ... on ProjectV2SingleSelectField { options { id name color description } }
+          }
+          pageInfo { hasNextPage }
         }
-        pageInfo { hasNextPage }
       }
     }
   }
-}`, root), variables: map[string]any{"login": login, "number": number}}
+}`, variables: map[string]any{"login": login, "number": number}}
 }
 func viewsRequest() request {
-	return request{query: fmt.Sprintf(`query($login: String!, $number: Int!) {
-  %s(login: $login) {
-    projectV2(number: $number) {
-      number title
-      views(first: 100) {
-        nodes {
-          id number name layout filter
-          configuration {
-            visibleFields(first: 100) {
+	return request{query: `query($login: String!, $number: Int!) {
+  owner: repositoryOwner(login: $login) {
+    __typename
+    login
+    ... on ProjectV2Owner {
+      projectV2(number: $number) {
+        number title
+        views(first: 100) {
+          nodes {
+            id number name layout filter
+            configuration {
+              visibleFields(first: 100) {
+                nodes { ... on ProjectV2FieldCommon { id name } }
+                pageInfo { hasNextPage }
+              }
+            }
+            groupByFields(first: 10) {
               nodes { ... on ProjectV2FieldCommon { id name } }
               pageInfo { hasNextPage }
             }
+            verticalGroupByFields(first: 10) {
+              nodes { ... on ProjectV2FieldCommon { id name } }
+              pageInfo { hasNextPage }
+            }
+            sortByFields(first: 10) {
+              nodes { direction field { ... on ProjectV2FieldCommon { id name } } }
+              pageInfo { hasNextPage }
+            }
           }
-          groupByFields(first: 10) {
-            nodes { ... on ProjectV2FieldCommon { id name } }
-            pageInfo { hasNextPage }
-          }
-          verticalGroupByFields(first: 10) {
-            nodes { ... on ProjectV2FieldCommon { id name } }
-            pageInfo { hasNextPage }
-          }
-          sortByFields(first: 10) {
-            nodes { direction field { ... on ProjectV2FieldCommon { id name } } }
-            pageInfo { hasNextPage }
-          }
+          pageInfo { hasNextPage }
         }
-        pageInfo { hasNextPage }
       }
     }
   }
-}`, "user"), variables: map[string]any{"login": "octo-user", "number": 40}}
+}`, variables: map[string]any{"login": "octo-user", "number": 40}}
 }
 func priorityOptionsRequest() request {
 	options := []map[string]any{}

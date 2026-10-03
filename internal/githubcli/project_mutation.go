@@ -226,28 +226,6 @@ func QueryProjectSchema(ctx context.Context, client Client, project contract.Pro
 	return schema, nil
 }
 
-func discoverOwnerType(ctx context.Context, client Client, owner string) (string, error) {
-	output, err := restBytes(ctx, client, "GET", "/users/"+url.PathEscape(owner), nil)
-	if err != nil {
-		return "", err
-	}
-	var result struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return "", fmt.Errorf("decode owner type: %w", err)
-	}
-	trimmed := result.Type
-	switch trimmed {
-	case "User":
-		return "user", nil
-	case "Organization":
-		return "organization", nil
-	default:
-		return "", fmt.Errorf("unsupported owner type %q for %s", trimmed, owner)
-	}
-}
-
 // GitHubItemTarget is a canonical issue or pull-request target.
 type GitHubItemTarget struct {
 	Repository string `json:"repository"`
