@@ -632,3 +632,74 @@ func TestPreparedMutationAllowsSameFieldNameAtDifferentProviderLocations(t *test
 		t.Fatal(err)
 	}
 }
+
+func statusTestProject() contract.Project {
+	return contract.Project{
+		Owner: "octo-user", OwnerType: "user", Number: 40, Title: "Planning",
+		Priority: map[string]string{"P0": "P0", "P1": "P1", "P2": "P2", "P3": "P3"},
+		FieldLocations: map[string]contract.FieldLocation{
+			"Priority": {Location: "project field", Field: "Priority"},
+			"Status":   {Location: "project field", Field: "Status"},
+		},
+	}
+}
+
+// projectItemWithoutStatusJSON is a freshly added item whose Status is unset.
+func projectItemWithoutStatusJSON(priority, class string) []byte {
+	lines := strings.Split(string(projectItemQueryJSON("", priority, class)), "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if !strings.Contains(line, "FIELD_STATUS") {
+			kept = append(kept, line)
+		}
+	}
+	return []byte(strings.Join(kept, "\n"))
+}
+
+func TestMutateProjectItemVerifiesStatusAgainstLiveOptionSpelling(t *testing.T) {
+	schema := strings.Replace(string(projectSchemaJSON()), `"In progress"`, `"In Progress"`, 1)
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery("user"), "-f", "login=octo-user", "-F", "number=40"}, output: []byte(schema)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+		{args: []string{"project", "item-edit", "--id", "PVTI_ITEM_42", "--project-id", "PVT_123", "--field-id", "FIELD_STATUS", "--single-select-option-id", "OPT_IN_PROGRESS"}, output: []byte(`{}`)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("In Progress", "P2", "Task")},
+	}}
+	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Status: "In Progress"})
+	if err != nil {
+		t.Fatalf("MutateProjectItem error = %v", err)
+	}
+	if result.Fields["Status"] != "In Progress" {
+		t.Fatalf("Status = %q, want live spelling In Progress", result.Fields["Status"])
+	}
+}
+
+func TestMutateProjectItemReportsStatusSetByItemAddedWorkflow(t *testing.T) {
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery("user"), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()},
+		{args: []string{"project", "item-add", "40", "--owner", "octo-user", "--url", "https://github.com/owner/repo/issues/42", "--format", "json"}, output: []byte(`{"id":"PVTI_ITEM_42"}`)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemWithoutStatusJSON("P2", "Task")},
+		{args: []string{"project", "item-edit", "--id", "PVTI_ITEM_42", "--project-id", "PVT_123", "--field-id", "FIELD_PRIORITY", "--single-select-option-id", "OPT_P1"}, output: []byte(`{}`)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P1", "Task")},
+	}}
+	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Priority: "P1", AddIfMissing: true})
+	if err != nil {
+		t.Fatalf("MutateProjectItem error = %v", err)
+	}
+	if len(result.AutomationSideEffects) != 1 || !strings.Contains(result.AutomationSideEffects[0], `"Todo"`) {
+		t.Fatalf("AutomationSideEffects = %v, want the workflow-set Status", result.AutomationSideEffects)
+	}
+}
+
+func TestMutateProjectItemStillRejectsStatusChangeOnExistingItem(t *testing.T) {
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"api", "graphql", "-f", "query=" + ProjectSchemaQuery("user"), "-f", "login=octo-user", "-F", "number=40"}, output: projectSchemaJSON()},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemWithoutStatusJSON("P2", "Task")},
+		{args: []string{"project", "item-edit", "--id", "PVTI_ITEM_42", "--project-id", "PVT_123", "--field-id", "FIELD_PRIORITY", "--single-select-option-id", "OPT_P1"}, output: []byte(`{}`)},
+		{args: projectItemQueryArgs("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P1", "Task")},
+	}}
+	_, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Priority: "P1"})
+	if err == nil || !strings.Contains(err.Error(), "unrelated scalar Project item value changed") {
+		t.Fatalf("error = %v, want preservation failure for an item this command did not add", err)
+	}
+}

@@ -357,6 +357,7 @@ func runIssueCreate(ctx context.Context, args []string, stdout, stderr io.Writer
 		for _, name := range sortedFieldNames(projectResult.Fields) {
 			fmt.Fprintf(stdout, "  %s: %s\n", name, projectResult.Fields[name])
 		}
+		printAutomationSideEffects(stdout, projectResult.AutomationSideEffects)
 	}
 	return 0
 }
@@ -380,7 +381,7 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	flags.Var(&removeAssignees, "remove-assignee", "assignee to remove (may be repeated or comma-separated)")
 	milestone := flags.String("milestone", "", "milestone name (empty string removes milestone)")
 	state := flags.String("state", "", "target state: open or closed")
-	closeReason := flags.String("close-reason", "completed", "reason when closing: completed or not_planned")
+	closeReason := flags.String("close-reason", "", "reason when closing: completed or not_planned (closing an open issue defaults to completed; a closed issue keeps its reason unless one is given)")
 
 	apply := flags.Bool("apply", false, "execute the edit on GitHub (default plans only)")
 	jsonOutput := flags.Bool("json", false, "output result as JSON")
@@ -428,7 +429,7 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		if !hasState || !strings.EqualFold(strings.TrimSpace(*state), "closed") {
 			return usageError(stderr, "--close-reason requires --state closed")
 		}
-		switch strings.ToLower(strings.TrimSpace(*closeReason)) {
+		switch strings.ReplaceAll(strings.ToLower(strings.TrimSpace(*closeReason)), " ", "_") {
 		case "completed", "not_planned":
 		default:
 			return usageError(stderr, "--close-reason must be completed or not_planned")
@@ -496,6 +497,9 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 				"state":           newState,
 			},
 		}
+		if *closeReason != "" {
+			plan["delta"].(map[string]any)["closeReason"] = *closeReason
+		}
 		if *jsonOutput {
 			if err := writeJSON(stdout, plan); err != nil {
 				return operationError(stderr, "write plan JSON", err)
@@ -525,6 +529,9 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		}
 		if newState != nil {
 			fmt.Fprintf(stdout, "  Target State:  %s\n", *newState)
+		}
+		if *closeReason != "" {
+			fmt.Fprintf(stdout, "  Close Reason:  %s\n", *closeReason)
 		}
 		fmt.Fprintln(stdout, "\nPlan only. Supply --apply to apply edits on GitHub.")
 		return 0
@@ -564,6 +571,10 @@ func runIssueEdit(ctx context.Context, args []string, stdout, stderr io.Writer, 
 
 	fmt.Fprintf(stdout, "Updated issue %s#%d: %s\n", targetRepo, edited.Number, edited.URL)
 	fmt.Fprintf(stdout, "Title: %s\nState: %s\n", edited.Title, edited.State)
+	if edited.StateReason != "" {
+		fmt.Fprintf(stdout, "State reason: %s\n", edited.StateReason)
+	}
+	printAutomationSideEffects(stdout, edited.AutomationSideEffects)
 	return 0
 }
 
@@ -895,7 +906,14 @@ func runProjectItemEdit(ctx context.Context, args []string, stdout, stderr io.Wr
 	for _, name := range sortedFieldNames(result.Fields) {
 		fmt.Fprintf(stdout, "  %s: %s\n", name, result.Fields[name])
 	}
+	printAutomationSideEffects(stdout, result.AutomationSideEffects)
 	return 0
+}
+
+func printAutomationSideEffects(stdout io.Writer, effects []string) {
+	for _, effect := range effects {
+		fmt.Fprintf(stdout, "Observed automation: %s\n", effect)
+	}
 }
 
 func isFlagSet(fs *flag.FlagSet, name string) bool {

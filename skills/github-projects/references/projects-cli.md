@@ -59,6 +59,11 @@ projects issue edit --issue 313 --body-file /path/to/body.md --apply --json
 projects issue edit --issue 313 --state closed --close-reason completed --apply --json
 ```
 
+`--close-reason` accepts `completed` or `not_planned` and also corrects the
+reason on an already-closed issue. Status changes made by the Project's
+built-in workflows during a command are returned as `automationSideEffects`,
+not failures; report them rather than reverting them.
+
 For creation, supply only grounded text and authorised metadata. The CLI checks
 exact-title collisions. Do not use `--allow-duplicate` to bypass an unresolved
 collision.

@@ -29,6 +29,8 @@ type ProjectField struct {
 	Name     string
 	DataType string
 	Options  map[string]string // lowercased option name -> option ID
+	// OptionNames maps a lowercased option name to its exact live spelling.
+	OptionNames map[string]string
 }
 
 // FindField looks up a field by name (case-insensitive).
@@ -44,6 +46,16 @@ func (f ProjectField) FindOptionID(name string) (string, bool) {
 	}
 	id, ok := f.Options[strings.ToLower(strings.TrimSpace(name))]
 	return id, ok
+}
+
+// FindOptionName returns the exact live spelling of a single-select option
+// matched case-insensitively, so readback compares against the provider value.
+func (f ProjectField) FindOptionName(name string) string {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if exact, ok := f.OptionNames[key]; ok {
+		return exact
+	}
+	return name
 }
 
 // ProjectItemState contains the inspected fields for an item in a Project.
@@ -176,13 +188,16 @@ func QueryProjectSchema(ctx context.Context, runner Runner, project contract.Pro
 	}
 	for _, node := range data.Fields.Nodes {
 		f := ProjectField{
-			ID:       node.ID,
-			Name:     node.Name,
-			DataType: node.DataType,
-			Options:  make(map[string]string),
+			ID:          node.ID,
+			Name:        node.Name,
+			DataType:    node.DataType,
+			Options:     make(map[string]string),
+			OptionNames: make(map[string]string),
 		}
 		for _, opt := range node.Options {
-			f.Options[strings.ToLower(strings.TrimSpace(opt.Name))] = opt.ID
+			key := strings.ToLower(strings.TrimSpace(opt.Name))
+			f.Options[key] = opt.ID
+			f.OptionNames[key] = opt.Name
 		}
 		schema.Fields[strings.ToLower(strings.TrimSpace(node.Name))] = f
 	}
@@ -926,6 +941,9 @@ type MutateProjectItemResult struct {
 	URL     string            `json:"url"`
 	Added   bool              `json:"added"`
 	Fields  map[string]string `json:"fields"`
+	// AutomationSideEffects lists changes made by the Project's own built-in
+	// workflows during the command, reported rather than treated as failures.
+	AutomationSideEffects []string `json:"automationSideEffects,omitempty"`
 }
 
 // PreparedProjectItemMutation holds live definitions for one command invocation.
@@ -1121,6 +1139,7 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, runner R
 	}
 
 	finalItem := current
+	var sideEffects []string
 	if projectMutationApplied {
 		finalItem, err = QueryProjectItem(ctx, runner, input.Project, target)
 		if err != nil {
@@ -1140,6 +1159,12 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, runner R
 		for _, change := range projectChanges {
 			changedFields = append(changedFields, change.Field.Name)
 		}
+		if added {
+			if effect, ok := addedItemStatusAutomation(input.Project, baseline, *finalItem, changedFields); ok {
+				sideEffects = append(sideEffects, effect)
+				changedFields = append(changedFields, input.Project.FieldLocations["Status"].Field)
+			}
+		}
 		if !projectItemPreserved(baseline, *finalItem, changedFields...) {
 			return MutateProjectItemResult{}, partialProjectMutationError("final Project readback", errors.New("an unrelated scalar Project item value changed"))
 		}
@@ -1158,7 +1183,33 @@ func (prepared *PreparedProjectItemMutation) Apply(ctx context.Context, runner R
 		URL:     target.URL,
 		Added:   added,
 		Fields:  resultFields,
+
+		AutomationSideEffects: sideEffects,
 	}, nil
+}
+
+// addedItemStatusAutomation recognises the built-in "Item added to project"
+// workflow: on an item this command has just added, an unrequested Status that
+// was unset at the post-add read and is now set is the Project's automation,
+// not collateral damage. Any other unrequested change still fails preservation.
+func addedItemStatusAutomation(project contract.Project, before, after ProjectItemState, changedFields []string) (string, bool) {
+	location, ok := project.FieldLocations["Status"]
+	if !ok || location.Location != "project field" || location.Field == "" {
+		return "", false
+	}
+	for _, name := range changedFields {
+		if strings.EqualFold(name, location.Field) {
+			return "", false
+		}
+	}
+	if previous, present := projectItemFieldValue(before, location.Field); present && previous != "" {
+		return "", false
+	}
+	current, present := projectItemFieldValue(after, location.Field)
+	if !present || current == "" {
+		return "", false
+	}
+	return fmt.Sprintf("Project automation set %s to %q after the item was added", location.Field, current), true
 }
 
 func validateProjectMutationInput(input MutateProjectItemInput) (GitHubItemTarget, error) {
@@ -1240,6 +1291,7 @@ func prepareProjectChanges(ctx context.Context, runner Runner, input MutateProje
 			if !ok {
 				return fmt.Errorf("option %q for %s is absent from Project field %q", desired, dimension, field.Name)
 			}
+			desired = field.FindOptionName(desired)
 			destination := "project:" + field.ID
 			if setDestinations[destination] {
 				return fmt.Errorf("Project field %q is requested by more than one dimension", field.Name)

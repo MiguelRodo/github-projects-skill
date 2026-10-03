@@ -233,3 +233,88 @@ func TestEditIssueNoOpNeedsOnlyOneRead(t *testing.T) {
 		t.Fatalf("calls=%d, want only the initial read for an unchanged issue", fake.calls)
 	}
 }
+
+const issueViewJSONFields = "number,title,body,state,stateReason,labels,assignees,milestone,issueType,projectItems,url"
+
+func TestEditIssueMapsNotPlannedForGhClose(t *testing.T) {
+	state := "closed"
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42"}`)},
+		{args: []string{"issue", "close", "42", "--repo", "owner/repo", "--reason", "not planned"}, output: []byte("Closed\n")},
+		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"NOT_PLANNED","url":"https://github.com/owner/repo/issues/42"}`)},
+	}}
+	if _, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state, CloseReason: "not_planned"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEditIssueChangesReasonOnAlreadyClosedIssue(t *testing.T) {
+	state := "closed"
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42"}`)},
+		{args: []string{
+			"api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2026-03-10",
+			"repos/owner/repo/issues/42", "-f", "state=closed", "-f", "state_reason=not_planned", "--jq", ".state_reason",
+		}, output: []byte("not_planned\n")},
+		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"NOT_PLANNED","url":"https://github.com/owner/repo/issues/42"}`)},
+	}}
+	view, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state, CloseReason: "not_planned"})
+	if err != nil || view.StateReason != "NOT_PLANNED" {
+		t.Fatalf("view=%+v err=%v", view, err)
+	}
+}
+
+func TestEditIssueRejectsUnappliedCloseReason(t *testing.T) {
+	state := "closed"
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42"}`)},
+		{args: []string{
+			"api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2026-03-10",
+			"repos/owner/repo/issues/42", "-f", "state=closed", "-f", "state_reason=not_planned", "--jq", ".state_reason",
+		}, output: []byte("completed\n")},
+		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42"}`)},
+	}}
+	_, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state, CloseReason: "not_planned"})
+	if err == nil || !strings.Contains(err.Error(), "close reason readback disagrees") {
+		t.Fatalf("error = %v, want close reason disagreement", err)
+	}
+}
+
+func TestEditIssueKeepsExistingReasonWhenNoneRequested(t *testing.T) {
+	state := "closed"
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"NOT_PLANNED","url":"https://github.com/owner/repo/issues/42"}`)},
+	}}
+	if _, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEditIssueReportsStatusSetByItemClosedWorkflow(t *testing.T) {
+	state := "closed"
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42","projectItems":[{"title":"Planning","status":{"name":"In Progress","optionId":"2"}}]}`)},
+		{args: []string{"issue", "close", "42", "--repo", "owner/repo", "--reason", "completed"}, output: []byte("Closed\n")},
+		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42","projectItems":[{"title":"Planning","status":{"name":"Done","optionId":"3"}}]}`)},
+	}}
+	view, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state, CloseReason: "completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.AutomationSideEffects) != 1 || !strings.Contains(view.AutomationSideEffects[0], `"Done"`) {
+		t.Fatalf("AutomationSideEffects = %v", view.AutomationSideEffects)
+	}
+}
+
+func TestEditIssueStillRejectsProjectMembershipChangeOnClose(t *testing.T) {
+	state := "closed"
+	fake := &fakeRunner{t: t, responses: []fakeResponse{
+		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"OPEN","url":"https://github.com/owner/repo/issues/42","projectItems":[{"title":"Planning","status":{"name":"Todo","optionId":"1"}}]}`)},
+		{args: []string{"issue", "close", "42", "--repo", "owner/repo"}, output: []byte("Closed\n")},
+		{args: []string{"issue", "view", "42", "--repo", "owner/repo", "--json", issueViewJSONFields}, output: []byte(`{"number":42,"title":"T","state":"CLOSED","stateReason":"COMPLETED","url":"https://github.com/owner/repo/issues/42","projectItems":[]}`)},
+	}}
+	_, err := EditIssue(context.Background(), fake, EditIssueInput{Repo: "owner/repo", Number: 42, State: &state})
+	if err == nil || !strings.Contains(err.Error(), "Project membership") {
+		t.Fatalf("error = %v, want membership preservation failure", err)
+	}
+}
