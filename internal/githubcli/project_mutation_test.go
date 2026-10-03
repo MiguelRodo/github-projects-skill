@@ -87,6 +87,7 @@ func projectItemQueryJSON(status, priority, class string) []byte {
       "target": {
         "id": "I_42",
         "url": "https://github.com/owner/repo/issues/42",
+        "state": "OPEN",
         "projectItems": {
           "nodes": [{
             "id": "PVTI_ITEM_42",
@@ -115,7 +116,7 @@ func projectItemQueryJSON(status, priority, class string) []byte {
 }
 
 func missingProjectItemQueryJSON() []byte {
-	return []byte(`{"data":{` + projectOwnerJSON + `,"repository":{"target":{"id":"I_42","url":"https://github.com/owner/repo/issues/42","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`)
+	return []byte(`{"data":{` + projectOwnerJSON + `,"repository":{"target":{"id":"I_42","url":"https://github.com/owner/repo/issues/42","state":"OPEN","projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`)
 }
 
 func TestQueryProjectSchema(t *testing.T) {
@@ -494,7 +495,7 @@ func TestProjectFieldNamesCannotCollideWithMetadata(t *testing.T) {
 				if err := json.Unmarshal([]byte(payload), &node); err != nil {
 					t.Fatal(err)
 				}
-				state, err := decodeGraphQLProjectItem(node, target)
+				state, err := decodeGraphQLProjectItem(node, target, "OPEN")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -649,6 +650,46 @@ func TestMutateProjectItemReportsStatusSetByItemAddedWorkflow(t *testing.T) {
 	}
 }
 
+// TestMutateProjectItemReportsStatusAlreadySetBeforeAddReadback covers the
+// item-added workflow racing ahead of the post-add read: Status is already
+// "Todo" at baseline, no Project field change is written, and the side effect
+// must still be reported without any extra request.
+func TestMutateProjectItemReportsStatusAlreadySetBeforeAddReadback(t *testing.T) {
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()},
+		{request: addItemRequest(), output: addItemOutput("PVTI_ITEM_42")},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+	}}
+	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, AddIfMissing: true})
+	if err != nil {
+		t.Fatalf("MutateProjectItem error = %v", err)
+	}
+	if len(result.AutomationSideEffects) != 1 || !strings.Contains(result.AutomationSideEffects[0], `"Todo"`) {
+		t.Fatalf("AutomationSideEffects = %v, want the workflow-set Status reported even though baseline already showed it", result.AutomationSideEffects)
+	}
+}
+
+// TestMutateProjectItemReportsStatusAlreadySetWhenWritingFields covers the same
+// race on the field-mutation path: Status is already "Todo" at baseline while an
+// unrequested Status is not part of the write, so it must still be reported.
+func TestMutateProjectItemReportsStatusAlreadySetWhenWritingFields(t *testing.T) {
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{query: ProjectSchemaQuery(), variables: map[string]any{"login": "octo-user", "number": 40}}, output: projectSchemaJSON()},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: missingProjectItemQueryJSON()},
+		{request: addItemRequest(), output: addItemOutput("PVTI_ITEM_42")},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+		{request: fieldWriteRequest(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_PRIORITY", "OPT_P1")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P1", "Task")},
+	}}
+	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Priority: "P1", AddIfMissing: true})
+	if err != nil {
+		t.Fatalf("MutateProjectItem error = %v", err)
+	}
+	if len(result.AutomationSideEffects) != 1 || !strings.Contains(result.AutomationSideEffects[0], `"Todo"`) {
+		t.Fatalf("AutomationSideEffects = %v, want the workflow-set Status reported even though baseline already showed it", result.AutomationSideEffects)
+	}
+}
+
 func TestMutateProjectItemStillRejectsStatusChangeOnExistingItem(t *testing.T) {
 	fake := &fakeClient{t: t, responses: []fakeResponse{
 		{request: request{query: ProjectSchemaQuery(), variables: map[string]any{"login": "octo-user", "number": 40}}, output: projectSchemaJSON()},
@@ -659,6 +700,44 @@ func TestMutateProjectItemStillRejectsStatusChangeOnExistingItem(t *testing.T) {
 	_, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Priority: "P1"})
 	if err == nil || !strings.Contains(err.Error(), "unrelated scalar Project item value changed") {
 		t.Fatalf("error = %v, want preservation failure for an item this command did not add", err)
+	}
+}
+
+// TestMutateProjectItemReportsAutoCloseStateChange covers GitHub's built-in
+// Auto-close issue workflow: setting Status to Done closes the issue, and the
+// command must report that content-state side effect instead of staying silent.
+func TestMutateProjectItemReportsAutoCloseStateChange(t *testing.T) {
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{query: ProjectSchemaQuery(), variables: map[string]any{"login": "octo-user", "number": 40}}, output: projectSchemaJSON()},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+		{request: fieldWriteRequest(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_STATUS", "OPT_DONE")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: projectItemQueryJSONWithState("Done", "P2", "Task", "CLOSED")},
+	}}
+	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Status: "Done"})
+	if err != nil {
+		t.Fatalf("MutateProjectItem error = %v", err)
+	}
+	want := "Project automation changed the issue state from OPEN to CLOSED (for example the built-in Auto-close issue workflow when Status is Done)"
+	if len(result.AutomationSideEffects) != 1 || result.AutomationSideEffects[0] != want {
+		t.Fatalf("AutomationSideEffects = %v, want %q", result.AutomationSideEffects, want)
+	}
+}
+
+// TestMutateProjectItemIgnoresUnchangedContentState verifies the new side effect
+// is only reported when the issue or pull request state actually changed.
+func TestMutateProjectItemIgnoresUnchangedContentState(t *testing.T) {
+	fake := &fakeClient{t: t, responses: []fakeResponse{
+		{request: request{query: ProjectSchemaQuery(), variables: map[string]any{"login": "octo-user", "number": 40}}, output: projectSchemaJSON()},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: projectItemQueryJSON("Todo", "P2", "Task")},
+		{request: fieldWriteRequest(), input: fieldWriteInput(t, "PVTI_ITEM_42", fieldSet("FIELD_STATUS", "OPT_DONE")), output: fieldWriteOutput("PVTI_ITEM_42", 1)},
+		{request: projectItemRequest("owner", "repo", "issues", 42), output: projectItemQueryJSON("Done", "P2", "Task")},
+	}}
+	result, err := MutateProjectItem(context.Background(), fake, MutateProjectItemInput{Project: statusTestProject(), Repo: "owner/repo", IssueNumber: 42, Status: "Done"})
+	if err != nil {
+		t.Fatalf("MutateProjectItem error = %v", err)
+	}
+	if len(result.AutomationSideEffects) != 0 {
+		t.Fatalf("AutomationSideEffects = %v, want none when the content state is unchanged", result.AutomationSideEffects)
 	}
 }
 
@@ -702,6 +781,12 @@ func unarchiveRequest() request {
 
 func archivedProjectItemQueryJSON(status, priority, class string) []byte {
 	return []byte(strings.Replace(string(projectItemQueryJSON(status, priority, class)), `"isArchived": false`, `"isArchived": true`, 1))
+}
+
+// projectItemQueryJSONWithState overrides the target's content state, modelling
+// Project automation (such as Auto-close) closing the issue during the command.
+func projectItemQueryJSONWithState(status, priority, class, state string) []byte {
+	return []byte(strings.Replace(string(projectItemQueryJSON(status, priority, class)), `"state": "OPEN"`, `"state": "`+state+`"`, 1))
 }
 
 // stubSettleDelay replaces the automation settle wait and records its use.

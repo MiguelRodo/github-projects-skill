@@ -210,7 +210,12 @@ Project built-in workflows can change Status while a command runs, for example
 *Item added to project* setting `Todo` on a newly added item, or *Item closed*
 setting `Done` when an issue is closed. These changes are reported as
 `automationSideEffects` (or `Observed automation:` lines) rather than failing
-the command. Any other unrequested Project change still stops it.
+the command. On an item this command just added, an unrequested Status is
+always reported from the final item, even when the workflow set it before the
+post-add read. Issue or pull request state changes made by Project automation
+during the command (such as *Auto-close issue* when Status is set to `Done`)
+are reported too, on a best-effort basis because the workflow may run after the
+final readback. Any other unrequested Project change still stops it.
 
 ## Manage Project items and fields
 
