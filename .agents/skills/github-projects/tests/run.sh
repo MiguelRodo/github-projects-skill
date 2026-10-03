@@ -61,7 +61,10 @@ grep -Fq '| P3 | P3 | PURPLE |' "$skill_dir/SKILL.md"
 grep -Fq 'Priority mapping status: pending' "$skill_dir/SKILL.md"
 grep -Fq 'Deliverable' "$skill_dir/references/issue-types.md"
 grep -Fq 'Treat the GitHub Project as the container.' "$skill_dir/references/issue-types.md"
-grep -Fq 'use body checkboxes for' "$initializer"
+if grep -Fq 'use body checkboxes for' "$initializer"; then
+  echo "ERROR: initializer still carries the removed first-request prompt" >&2
+  exit 1
+fi
 grep -Fq '`Task`, `Bug`, `Enhancement`, `Data`, `Analysis`, `Deliverable`, `Documentation` and `Epic`' \
   "$skill_dir/SKILL.md"
 grep -Fq '| Data | PINK |' "$skill_dir/references/issue-types.md"
@@ -349,9 +352,13 @@ grep -Fq 'I will now show two ways to use the repository' "$test_tmp_dir/init-ou
 grep -Fq 'Use the repository with a chat interface' "$test_tmp_dir/init-output.log"
 grep -Fq 'Use the repository with an execution-capable agent' "$test_tmp_dir/init-output.log"
 grep -Fq 'https://chatgpt.com/codex/settings/environments' "$test_tmp_dir/init-output.log"
-grep -Fq 'organise the issues' "$test_tmp_dir/init-output.log"
-grep -Fq 'do not change' "$test_tmp_dir/init-output.log"
-grep -Fq 'until I approve them' "$test_tmp_dir/init-output.log"
+if grep -Fq 'Would you like a proposal for organising the existing' \
+  "$test_tmp_dir/init-output.log"; then
+  echo "ERROR: initializer still offered the removed first-request proposal" >&2
+  exit 1
+fi
+grep -Fq 'Setup is complete. You can now make ordinary requests when you need them.' \
+  "$test_tmp_dir/init-output.log"
 grep -Fq 'committed and pushed' "$test_tmp_dir/init-output.log"
 grep -Fq 'The files were left uncommitted.' "$test_tmp_dir/init-output.log"
 if grep -Eq 'Current Project fields|following repository contract|Choose the provider.s Priority values|Does Project membership alone|How should the agent proceed|Do this now' \
@@ -434,7 +441,7 @@ mkdir -p "$test_tmp_dir/init-multiple"
 git -C "$test_tmp_dir/init-multiple" init -q
 (
   cd "$test_tmp_dir/init-multiple"
-  printf '%s\n' '' '' n y '' 12 '' '' n n y | \
+  printf '%s\n' '' '' n y '' 12 '' n n y | \
     PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-multiple.log" 2>&1
 )
@@ -474,9 +481,17 @@ grep -Fq 'Added Project octo-org/12 as route example-planning.' \
 grep -Fq '  .projects/projects/.gitkeep' "$test_tmp_dir/init-multiple.log"
 grep -Fq '  .projects/projects/example-planning.md' \
   "$test_tmp_dir/init-multiple.log"
-grep -Fq 'Use the same first request in a chat interface or an execution-capable agent' \
-  "$test_tmp_dir/init-multiple.log"
-grep -Fq 'optional sub-project labels only where they are genuinely useful.' \
+if grep -Fq 'Would you like a proposal for organising the existing' \
+  "$test_tmp_dir/init-multiple.log"; then
+  echo "ERROR: initializer still offered the removed first-request proposal" >&2
+  exit 1
+fi
+if grep -Fq 'Use the same first' \
+  "$test_tmp_dir/init-multiple.log"; then
+  echo "ERROR: initializer still printed the removed first-request prompt" >&2
+  exit 1
+fi
+grep -Fq 'Setup is complete. You can now make ordinary requests when you need them.' \
   "$test_tmp_dir/init-multiple.log"
 if grep -Fq 'Finish the multi-Project routing' "$test_tmp_dir/init-multiple.log"; then
   echo "ERROR: multi-Project onboarding printed the removed handoff" >&2
@@ -508,7 +523,7 @@ grep -Fq 'Project key example-planning is already configured' \
 
 (
   cd "$test_tmp_dir/init-multiple"
-  printf '%s\n' y '' 13 '' '' n n n | \
+  printf '%s\n' y '' 13 '' n n n | \
     PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
     >"$test_tmp_dir/init-multiple-add.log" 2>&1
 )
@@ -641,42 +656,29 @@ grep -Fq 'git push -u origin main' "$test_tmp_dir/init-push-failure.log"
 [[ "$(git -C "$test_tmp_dir/init-push-failure" log -1 --format=%s)" == \
    "Configure GitHub Project administration" ]]
 
-mkdir -p "$test_tmp_dir/init-separate-single"
-git -C "$test_tmp_dir/init-separate-single" init -q
-printf '# Existing guidance\n' >"$test_tmp_dir/init-separate-single/AGENTS.md"
-(
-  cd "$test_tmp_dir/init-separate-single"
-  printf '%s\n' '' 'octo-user/issues' '' '' 12 n n | \
-    PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
-    >"$test_tmp_dir/init-separate-single.log" 2>&1
-)
-bash "$validator" "$test_tmp_dir/init-separate-single"
-grep -Fq '| Issue repository | octo-user/issues |' \
-  "$test_tmp_dir/init-separate-single/.projects/project.md"
-grep -Fq '<!-- github-projects:start -->' \
-  "$test_tmp_dir/init-separate-single/AGENTS.md"
-if grep -Fq 'octo-user/issues' "$test_tmp_dir/init-separate-single/AGENTS.md"; then
-  echo "ERROR: AGENTS.md leaked the separate issue repository destination" >&2
-  exit 1
-fi
-
-mkdir -p "$test_tmp_dir/init-separate-multiple"
-git -C "$test_tmp_dir/init-separate-multiple" init -q
-(
-  cd "$test_tmp_dir/init-separate-multiple"
-  printf '%s\n' '' 'octo-user/issues' n y '' 12 '' '' n n n | \
-    PATH="$test_tmp_dir/bin:$PATH" bash "$initializer" \
-    >"$test_tmp_dir/init-separate-multiple.log" 2>&1
-)
-bash "$validator" "$test_tmp_dir/init-separate-multiple"
-grep -Fq '| Issue repository | octo-user/issues |' \
-  "$test_tmp_dir/init-separate-multiple/.projects/project.md"
-grep -Fq '| Issue repository | octo-user/issues |' \
-  "$test_tmp_dir/init-separate-multiple/.projects/projects/example-planning.md"
-if grep -Fq 'octo-user/issues' "$test_tmp_dir/init-separate-multiple/AGENTS.md"; then
-  echo "ERROR: AGENTS.md leaked the separate issue repository destination" >&2
-  exit 1
-fi
+# Guided separate-store onboarding must delegate the complete topology instead
+# of writing a one-sided local contract. The real helper is exercised below.
+mkdir -p "$test_tmp_dir/semantic-bin"
+cat >"$test_tmp_dir/semantic-bin/python3" <<'EOF'
+#!/usr/bin/env bash
+printf '<%s>' "$@" >"$SEMANTIC_ARGS"
+EOF
+chmod +x "$test_tmp_dir/semantic-bin/python3"
+for grouping in '' tools; do
+  target="$test_tmp_dir/init-separate-${grouping:-overall}"
+  mkdir -p "$target"
+  git -C "$target" init -q
+  (
+    cd "$target"
+    printf '%s\n' '' 'octo-user/issues' work '' 12 "$grouping" | \
+      PATH="$test_tmp_dir/semantic-bin:$test_tmp_dir/bin:$PATH" \
+      SEMANTIC_ARGS="$test_tmp_dir/semantic.args" bash "$initializer" \
+      >"$test_tmp_dir/init-separate.log" 2>&1
+  )
+  grep -Fq '<--project><work><--issue-store><octo-user/issues>' "$test_tmp_dir/semantic.args"
+  [[ -z "$grouping" ]] || grep -Fq '<--subproject><tools>' "$test_tmp_dir/semantic.args"
+  test ! -e "$target/.projects/project.md"
+done
 
 mkdir -p "$test_tmp_dir/init-invalid-issue-repo"
 git -C "$test_tmp_dir/init-invalid-issue-repo" init -q
@@ -721,5 +723,6 @@ bash "$test_dir/queue-preflight.sh"
 bash "$test_dir/queue-classify.sh"
 python3 "$test_dir/test-queue-execute.py"
 python3 "$test_dir/test-queue-review.py"
+python3 "$test_dir/test-onboarding.py"
 
 echo "github-projects tests passed"

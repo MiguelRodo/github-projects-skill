@@ -5,7 +5,7 @@ metadata:
     github-pinned: main
     github-ref: refs/heads/main
     github-repo: https://github.com/MiguelRodo/github-projects-skill
-    github-tree-sha: f46e26a86116e148667d5f85d91f28f9286713de
+    github-tree-sha: a1b68be4d285e78951d7ad74497e6296fd720ea1
 name: github-projects
 ---
 # GitHub Project administration
@@ -127,7 +127,14 @@ Copy-and-paste command handoffs must be safe to paste into an interactive shell.
 
 Run `scripts/setup.sh` when preparing an environment or when `gh` prerequisites are missing. The host must provide credentials and network access. Never print, persist, transform or request a token in a prompt.
 
-When adopting the skill in a repository that does not yet have `.projects/project.md`, run `scripts/init-project.sh` from that repository. It discovers live GitHub facts, asks only for local choices, writes the first minimal single-Project contract or an empty multi-Project dispatcher, and adds a bounded `AGENTS.md` routing section. The shared behavioural defaults above do not need to be copied into a contract. When `projects` is available, onboarding also reconciles the standard Project field profile and Backlog view.
+For setup/adoption, accept managed Project and optional sub-project intent. Run
+`scripts/init-project.sh --project KEY [--issue-store OWNER/REPO] [--subproject KEY]`
+from the implementation repository; it reconciles both sides of a central store,
+derives labels and requires confirmation for cross-checkout changes. Read
+[semantic onboarding](references/onboarding.md) for Project identity options,
+conflicts, local branch/PR publication and live profile setup. No-option guided
+repository-backed setup remains supported. Never hand the user several contracts
+to reconcile manually.
 
 ## Inspect and plan
 

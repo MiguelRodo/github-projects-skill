@@ -8,11 +8,15 @@ set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 skill_dir="$(cd "$script_dir/.." && pwd)"
+
+# Semantic topology reconciliation belongs to the canonical skill.
+if [[ "$#" -gt 0 ]]; then
+  exec python3 "$script_dir/onboard-project.py" "$@"
+fi
 generated_contract=""
 transaction_dir=""
 changed_contract_paths=()
 issue_repository=""
-first_request_project_context=""
 live_setup_state=""
 section_number=0
 colour_reset=""
@@ -256,7 +260,6 @@ discover_project() {
     privacy="$visibility_lower repository"
   fi
 
-  first_request_project_context="GitHub Project $project_owner/$project_number"
   success "Found $project_title, owned by the GitHub $project_owner_type $project_owner."
 }
 
@@ -498,7 +501,6 @@ add_project_to_dispatcher() {
       die "the configured Project owner type no longer matches GitHub"
     [[ "$leaf_title" == "$project_title" ]] ||
       die "the configured Project title no longer matches GitHub"
-    first_request_project_context="Project $project_owner/$project_number"
     note "Project $project_owner/$project_number is already configured; no route was changed."
     setup_standard_project "$project_number"
     return 0
@@ -512,7 +514,7 @@ add_project_to_dispatcher() {
   dispatcher_has_value 2 "$project_key" &&
     die "Project key $project_key is already configured"
 
-  routing_label="$(ask_default "Routing label" "project:$project_key")"
+  routing_label="project:$project_key"
   [[ -n "$routing_label" && "$routing_label" != *"|"* &&
      "$routing_label" != *$'\n'* ]] ||
     die "routing label must be non-empty and contain no table separator"
@@ -543,7 +545,6 @@ add_project_to_dispatcher() {
   transaction_dir=""
   mark_contract_path ".projects/project.md"
   mark_contract_path "$child_contract"
-  first_request_project_context="Project key $project_key ($project_owner/$project_number)"
   success "Added Project $project_owner/$project_number as route $project_key."
   setup_standard_project "$project_number"
 }
@@ -561,31 +562,6 @@ configure_dispatcher_projects() {
       break
     fi
   done
-}
-
-load_first_request_from_dispatcher() {
-  local route project_key project_number child_contract leaf owner
-  route="$(awk -F'|' '
-    function trim(value) {
-      sub(/^[[:space:]]+/, "", value)
-      sub(/[[:space:]]+$/, "", value)
-      return value
-    }
-    /^## Routes[[:space:]]*$/ { in_routes = 1; next }
-    in_routes && /^## / { exit }
-    in_routes && /^\|/ {
-      key = trim($2)
-      if (key != "" && key != "Project key" && key != "---") {
-        print key "\t" trim($4) "\t" trim($5)
-        exit
-      }
-    }
-  ' "$contract_file")"
-  [[ -n "$route" ]] || return 1
-  IFS=$'\t' read -r project_key project_number child_contract <<<"$route"
-  leaf="$repository_root/$child_contract"
-  owner="$(contract_table_value "$leaf" "Project owner")"
-  first_request_project_context="Project key $project_key ($owner/$project_number)"
 }
 
 save_onboarding_files() {
@@ -763,36 +739,6 @@ commands after you approve its proposal.
 EOF
 }
 
-print_first_request() {
-  section "Choose a useful first request"
-  if ! ask_yes_no \
-    "Would you like a proposal for organising the existing issues next?" \
-    yes; then
-    note "Setup is complete. You can now make ordinary requests when you need them."
-    return 0
-  fi
-
-  cat <<EOF
-
-Use the same first request in a chat interface or an execution-capable agent:
-
-  Start from AGENTS.md. Resolve $first_request_project_context and inspect its
-  current issues and GitHub Project. Propose how you would organise the issues
-  using the standard Project fields and useful native parent/sub-issue
-  relationships. Treat the Project itself as the container rather than creating
-  a generic root issue;
-  prefer independently meaningful top-level outcomes, propose retiring generic
-  category or standing wrappers where appropriate, and use body checkboxes for
-  small local steps versus sub-issues for independently trackable work. Suggest
-  optional sub-project labels only where they are genuinely useful. Show me
-  the exact proposed changes and do not change GitHub until I approve them.
-
-After you approve the proposal, an execution-capable agent can apply and verify
-it. A chat interface that cannot write should instead return the smallest safe
-command block for you to run, including independent readback.
-EOF
-}
-
 print_empty_dispatcher_next_step() {
   section "Add a Project before ordinary administration"
   cat <<EOF
@@ -848,6 +794,13 @@ if [[ -e "$contract_file" ]]; then
   section "Check the existing repository setup"
   note "A repository contract already exists at .projects/project.md."
   bash "$script_dir/validate-contract.sh" "$repository_root"
+  existing_issue_store="$(contract_table_value "$contract_file" "Issue repository")"
+  if [[ -n "$existing_issue_store" && "$existing_issue_store" != "$repository" ]]; then
+    existing_key="$(contract_table_value "$contract_file" "Project key")"
+    [[ -n "$existing_key" ]] || existing_key="$(slugify "$(contract_table_value "$contract_file" "Project title")")"
+    [[ -n "$existing_key" ]] || die "rerun with --project KEY to reconcile this separate issue store"
+    exec python3 "$script_dir/onboard-project.py" --project "$existing_key" --issue-store "$existing_issue_store"
+  fi
   append_agents_pointer
   existing_mode="$(contract_table_value "$contract_file" "Mode")"
   if [[ "$existing_mode" != "dispatcher" ]]; then
@@ -875,10 +828,7 @@ if [[ -e "$contract_file" ]]; then
   if [[ "$(dispatcher_route_count)" == "0" ]]; then
     print_empty_dispatcher_next_step
   else
-    if [[ -z "$first_request_project_context" ]]; then
-      load_first_request_from_dispatcher
-    fi
-    print_first_request
+    note "Setup is complete. You can now make ordinary requests when you need them."
   fi
   echo
   report_onboarding_result
@@ -908,6 +858,18 @@ issue_repository="$(ask_default \
   "GitHub repository where issues are tracked" "$repository")"
 issue_repository="$(validate_issue_repository "$issue_repository")"
 
+if [[ "$issue_repository" != "$repository" ]]; then
+  echo "Choose the managed Project and optional sub-project; both checkouts will be reconciled."
+  semantic_key="$(require_text "Project key")"
+  semantic_owner="$(ask_default "Project owner" "$repository_owner")"
+  semantic_number="$(require_text "Project number")"
+  semantic_subproject="$(ask_default "Sub-project key (optional)" "")"
+  semantic_args=(--project "$semantic_key" --issue-store "$issue_repository"
+    --project-owner "$semantic_owner" --project-number "$semantic_number" --governance "$governance")
+  [[ -z "$semantic_subproject" ]] || semantic_args+=(--subproject "$semantic_subproject")
+  exec python3 "$script_dir/onboard-project.py" "${semantic_args[@]}"
+fi
+
 if ! ask_yes_no "Does this repository use one GitHub Project?" yes; then
   create_dispatcher_contract
   append_agents_pointer
@@ -922,10 +884,7 @@ if ! ask_yes_no "Does this repository use one GitHub Project?" yes; then
   if [[ "$(dispatcher_route_count)" == "0" ]]; then
     print_empty_dispatcher_next_step
   else
-    if [[ -z "$first_request_project_context" ]]; then
-      load_first_request_from_dispatcher
-    fi
-    print_first_request
+    note "Setup is complete. You can now make ordinary requests when you need them."
   fi
   echo
   report_onboarding_result
@@ -964,7 +923,7 @@ setup_standard_project "$project_number"
 print_provider_intro
 print_chatgpt_setup
 print_codex_setup
-print_first_request
+note "Setup is complete. You can now make ordinary requests when you need them."
 
 echo
 report_onboarding_result
