@@ -73,7 +73,7 @@ def parse(body: str) -> dict | None:
             key, value = 'project', raw.strip().rstrip('.')
         elif match:
             key, value = match[1].lower(), match[2]
-            key = {'subproject': 'sub-project', 'native parent': 'parent'}.get(key, key)
+            key = {'subproject': 'sub-project', 'native parent': 'parent', 'type': 'class'}.get(key, key)
         else:
             key, value = None, None
         if key is None:
@@ -85,7 +85,12 @@ def parse(body: str) -> dict | None:
             raise ValueError('metadata follows substantive restrictions')
         if key in settings:
             raise ValueError('duplicate administration setting')
-        value = value.strip().strip('`').rstrip('.')
+        value = value.strip().rstrip('.')
+        if '`' in value:
+            wrapped = re.fullmatch(r'(`+)([^`]+)\1', value)
+            if not wrapped:
+                raise ValueError('unmatched or embedded administration backticks')
+            value = wrapped[2]
         if not value or len(value) > 200:
             raise ValueError('malformed administration value')
         settings[key] = value
@@ -105,7 +110,7 @@ def parse(body: str) -> dict | None:
 def profile(gh: str, repository: str, issue: int, contract: str) -> dict:
     owner, number = project_identity(contract)
     repo_owner, repo_name = repository.split('/')
-    data = graphql(gh, '''query($owner:String!,$name:String!,$issue:Int!){
+    payload = graphql(gh, '''query($owner:String!,$name:String!,$issue:Int!){
       repository(owner:$owner,name:$name){issue(number:$issue){
         parent{number repository{nameWithOwner}}
         projectItems(first:100,includeArchived:true){nodes{
@@ -117,21 +122,40 @@ def profile(gh: str, repository: str, issue: int, contract: str) -> dict:
             ...on ProjectV2ItemFieldDateValue{date field{...on ProjectV2FieldCommon{name}}}}
             pageInfo{hasNextPage}}
         }pageInfo{hasNextPage}}
-      }}}''', owner=repo_owner, name=repo_name, issue=issue)['repository']['issue']
-    if not data or data['projectItems']['pageInfo']['hasNextPage']:
-        raise ValueError('incomplete membership read')
-    selected = [v for v in data['projectItems']['nodes'] if v['project']['number'] == number and v['project']['owner']['login'].casefold() == owner.casefold()]
+      }}}''', owner=repo_owner, name=repo_name, issue=issue)
+    repository_data = payload.get('repository')
+    if not isinstance(repository_data, dict) or not isinstance(repository_data.get('issue'), dict):
+        raise ValueError('inaccessible issue profile')
+    data = repository_data['issue']
+    def complete_nodes(connection):
+        if not isinstance(connection, dict) or not isinstance(connection.get('pageInfo'), dict) or connection['pageInfo'].get('hasNextPage') is not False:
+            raise ValueError('incomplete profile connection')
+        nodes = connection.get('nodes')
+        if not isinstance(nodes, list) or any(not isinstance(v, dict) for v in nodes):
+            raise ValueError('unavailable profile node')
+        return nodes
+    members = complete_nodes(data.get('projectItems'))
+    for member in members:
+        project = member.get('project')
+        if not isinstance(project, dict) or not isinstance(project.get('owner'), dict) or not isinstance(project['owner'].get('login'), str):
+            raise ValueError('unavailable membership identity')
+    selected = [v for v in members if v['project'].get('number') == number and v['project']['owner']['login'].casefold() == owner.casefold()]
     if len(selected) != 1:
         raise ValueError('exact target membership required')
     item = selected[0]
-    if item['project']['fields']['pageInfo']['hasNextPage'] or item['fieldValues']['pageInfo']['hasNextPage']:
-        raise ValueError('incomplete field read')
-    fields = [v for v in item['project']['fields']['nodes'] if v]
+    fields = [v for v in complete_nodes(item['project'].get('fields')) if v]
+    values = [v for v in complete_nodes(item.get('fieldValues')) if v]
+    if any(not isinstance(v.get('name'), str) or not isinstance(v.get('dataType'), str) for v in fields):
+        raise ValueError('unavailable field identity')
+    if any(not isinstance(v.get('field'), dict) or not isinstance(v['field'].get('name'), str) or not isinstance(v.get('name', v.get('date')), str) for v in values):
+        raise ValueError('unavailable field value')
     if len({v['name'] for v in fields}) != len(fields):
         raise ValueError('ambiguous field names')
+    if len({v['field']['name'] for v in values}) != len(values):
+        raise ValueError('ambiguous field values')
     return {'fields': {v['name']: v for v in fields},
-            'values': {v['field']['name']: v.get('name', v.get('date')) for v in item['fieldValues']['nodes'] if v},
-            'parent': data['parent']}
+            'values': {v['field']['name']: v.get('name', v.get('date')) for v in values},
+            'parent': data.get('parent')}
 
 
 def fulfilled(settings: dict, contract: str, repository: str, live: dict, current: dict, locations: dict) -> bool:
@@ -219,7 +243,9 @@ def cleanup(gh: str, contract: str, repository: str, issue: int, original: str, 
     endpoint = f'repos/{repository}/issues/{issue}'
     record = None
     def target_matches(value):
-        canonical_repo = value.get('repository_url', '').rsplit('/repos/', 1)[-1]
+        if not isinstance(value, dict) or not isinstance(value.get('repository_url'), str):
+            return False
+        canonical_repo = value['repository_url'].rsplit('/repos/', 1)[-1]
         return expected_id is not None and value.get('id') == expected_id and canonical_repo.casefold() == repository.casefold()
     try:
         live = gh_json(gh, 'api', endpoint)
@@ -242,7 +268,7 @@ def cleanup(gh: str, contract: str, repository: str, issue: int, original: str, 
             return {'status': 'applied_verified', 'recoveryRecord': str(record), 'removedSpans': plan['spans']}
         return {'status': 'retained_write_failed' if after.get('body') == original else 'readback_mismatch',
                 'providerExit': result.returncode, 'recoveryRecord': str(record)}
-    except (RuntimeError, ValueError, KeyError, OSError) as exc:
+    except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
         result = {'status': 'retained_or_uncertain', 'reason': str(exc)}
         if record is not None:
             result['recoveryRecord'] = str(record)

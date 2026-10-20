@@ -106,6 +106,29 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(self.writes, [])
         self.assertIsNone(body.parse('```text\n## Project administration\nPriority: P1\n```\n'))
 
+    def test_semantic_aliases_and_unmatched_backticks_are_rejected(self):
+        for text in ['Class: Task; Type: Task', 'Sub-project: tools; subproject: tools',
+                     'Priority: `P1', 'Priority: P1`', 'Priority: ``P1`']:
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                body.parse('## Project administration\n' + text + '\n')
+        self.assertEqual(body.parse('## Project administration\nType: `Task`\n')['settings'], {'class': 'Task'})
+        self.assertEqual(body.parse('## Project administration\nPriority: ``P1``\n')['settings'], {'priority': 'P1'})
+
+    def test_nullable_profile_nodes_fail_closed(self):
+        values = [{'repository': None}, {'repository': {'issue': None}},
+                  {'repository': {'issue': {'projectItems': None}}},
+                  {'repository': {'issue': {'projectItems': {'nodes': [None], 'pageInfo': {'hasNextPage': False}}}}},
+                  {'repository': {'issue': {'projectItems': {'nodes': [{'project': None}], 'pageInfo': {'hasNextPage': False}}}}}]
+        for value in values:
+            with self.subTest(value=value), patch.object(body, 'graphql', return_value=value), self.assertRaises(ValueError):
+                body.profile('gh', 'octo/issues', 9, CONTRACT)
+        with patch.object(body, 'profile', side_effect=TypeError('nullable provider value')):
+            # Use the normal cleanup boundary without the profile stub in cleanup().
+            with patch.object(body, 'gh_json', self.read):
+                result = body.cleanup('gh', CONTRACT, 'octo/issues', 9, self.original, {}, 900)
+        self.assertEqual(result['status'], 'retained_or_uncertain')
+        self.assertEqual(self.writes, [])
+
     def test_unverified_settings_and_missing_expected_field(self):
         self.current['values']['Priority'] = 'P2'
         self.assertEqual(self.cleanup()['status'], 'retained_unverified_settings')
@@ -118,6 +141,8 @@ class CleanupTests(unittest.TestCase):
         self.state['id'] = 901
         self.assertEqual(self.cleanup()['status'], 'retained_target_changed')
         self.assertEqual(self.writes, [])
+        with patch.object(body, 'gh_json', return_value=None):
+            self.assertEqual(body.cleanup('gh', CONTRACT, 'octo/issues', 9, self.original, {}, 900)['status'], 'retained_target_changed')
 
     def test_recovery_record_failure_prevents_edit(self):
         with patch.object(body, 'recovery_record', side_effect=OSError('disk full')):
