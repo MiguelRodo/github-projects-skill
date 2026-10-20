@@ -18,6 +18,7 @@ python3 "$test_dir/test-agent-cli-choice.py"
 bash "$validator" "$test_dir/fixtures/single"
 bash "$validator" "$test_dir/fixtures/single-user"
 bash "$validator" "$test_dir/fixtures/dispatcher"
+bash "$validator" "$test_dir/fixtures/membership-dispatcher"
 bash "$validator" "$test_dir/fixtures/empty-dispatcher"
 bash "$validator" "$test_dir/fixtures/priority-values"
 bash "$validator" "$test_dir/fixtures/fenced-example"
@@ -420,7 +421,7 @@ grep -Fq 'the standard live Project profile was not applied' \
 
 # A PATH with everything onboarding needs except a projects CLI.
 mkdir -p "$test_tmp_dir/bin-no-projects"
-for tool in awk bash cat cp date dirname find git grep head mkdir mktemp mv rm sed sort tr uniq; do
+for tool in python3 awk bash cat cp date dirname find git grep head mkdir mktemp mv rm sed sort tr uniq; do
   ln -s "$(command -v "$tool")" "$test_tmp_dir/bin-no-projects/$tool"
 done
 ln -s "$test_tmp_dir/bin/gh" "$test_tmp_dir/bin-no-projects/gh"

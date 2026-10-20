@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from queue_common import flatten_pages, gh_json, run, table_value
-from project_context import binding, single_request, authority_identity
+from project_context import binding, single_request, authority_identity, memberships, select_context
 
 MARKER = "PJ implementation authority:"
 VERSION = "github-projects/queue-authority/v1"
@@ -303,6 +303,15 @@ def main() -> int:
     if project["owner"].lower() != project_owner.lower() or project["number"] != int(project_number):
         emit("blocked", "queue.blocked.project_mismatch")
         return 0
+
+    if not any(action.get("kind") == "project.membership.add" for action in spec["actions"]):
+        try:
+            select_context({(project_owner.lower(), int(project_number))},
+                           memberships(args.gh, args.repository, args.issue),
+                           (project_owner.lower(), int(project_number)), envelope)
+        except (ValueError, RuntimeError, KeyError) as exc:
+            emit("blocked", "queue.blocked.membership_context", detail=str(exc))
+            return 0
 
     classes = section_first_column(contract, "Class values") or set(DEFAULT_CLASSES)
     priorities = section_first_column(contract, "Priority mapping") or set(DEFAULT_PRIORITIES)

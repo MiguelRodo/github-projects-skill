@@ -10,6 +10,7 @@ import (
 // discovered from GitHub immediately before a write.
 type SubprojectBinding struct {
 	Storage    string            `json:"storage"`
+	FieldType  string            `json:"fieldType,omitempty"`
 	Field      string            `json:"field,omitempty"`
 	LabelScope string            `json:"labelScope,omitempty"`
 	Vocabulary map[string]string `json:"vocabulary,omitempty"`
@@ -49,6 +50,7 @@ func validateSubproject(doc *document, projectKey string) (SubprojectBinding, er
 		if err != nil {
 			return b, err
 		}
+		b.FieldType = typ
 		if typ != "SINGLE_SELECT" {
 			return b, fmt.Errorf("%s: field storage requires Sub-project field type SINGLE_SELECT", doc.path)
 		}

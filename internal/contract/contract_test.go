@@ -46,7 +46,7 @@ GH_TOKEN=secret-value-that-must-not-be-accepted
 
 func TestLoadMatchesShellFixtureValidity(t *testing.T) {
 	t.Parallel()
-	valid := []string{"single", "single-user", "dispatcher", "empty-dispatcher"}
+	valid := []string{"single", "single-user", "dispatcher", "membership-dispatcher", "empty-dispatcher"}
 	for _, name := range valid {
 		name := name
 		t.Run(name, func(t *testing.T) {
