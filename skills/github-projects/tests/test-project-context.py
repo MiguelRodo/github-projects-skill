@@ -2,7 +2,10 @@
 """Regression coverage for label-free routing, storage authority and reversible migration."""
 import copy
 import importlib.util
+import io
 import json
+import subprocess
+from contextlib import redirect_stdout
 from pathlib import Path
 import sys
 import tempfile
@@ -308,6 +311,123 @@ class Context(unittest.TestCase):
         self.assertNotIn(8,filtered['visible_fields'])
         self.assertEqual(views.spec(LABELS,fields,'user','tools')['filter'],'label:"subproject:work:tools"')
         self.assertIn(9,views.spec(LABELS,fields,'user')['visible_fields'])
+
+
+class ProjectViewsCLI(unittest.TestCase):
+    """Exercise main(), including the provider write and independent readback."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name)/'contract.md'
+        self.fields = [{'id':i, 'node_id':f'N{i}', 'name':name,
+                        'data_type':'single_select' if name == 'Sub-project' else 'text'}
+                       for i,name in enumerate(['Title','Due date','Target date','Priority','Status',
+                                                'Class','Sub-issues progress','Sub-project','Labels'],1)]
+        self.live = [{'id':'ROADMAP','name':'Timeline','layout':'ROADMAP_LAYOUT'}]
+        self.posts = []
+        self.reads = 0
+        self.failure = None
+
+    def provider(self, gh, *args):
+        if args[:2] == ('project','field-list'):
+            return {'totalCount':1,'fields':[{'name':'Sub-project','type':'ProjectV2SingleSelectField',
+                       'options':[{'name':'Tools','id':'TOOLS'},{'name':'Operations','id':'OPS'}]}]}
+        if args[-1].endswith('/fields?per_page=100'):
+            return [self.fields]
+        self.fail(f'unexpected gh read: {args}')
+
+    def current_views(self, *args):
+        self.reads += 1
+        if self.failure == 'readback' and self.reads == 3:
+            raise RuntimeError('simulated readback unavailable after create')
+        return copy.deepcopy(self.live)
+
+    def create(self, args, *, input, text, capture_output):
+        self.assertIn('users/octo/projectsV2/4/views', args)
+        self.assertIn('POST', args)
+        body = json.loads(input)
+        self.assertEqual(body['layout'],'table')
+        self.assertEqual(body['group_by'],[5])
+        self.assertEqual(body['sort_by'],[[4,'asc']])
+        self.posts.append(body)
+        self.live.append(self.expected_view(body['filter']))
+        if self.failure == 'uncertain':
+            return subprocess.CompletedProcess(args,1,'','connection lost after provider committed create')
+        return subprocess.CompletedProcess(args,0,'{}','')
+
+    def expected_view(self, filter_text=''):
+        columns = list(range(1,8))
+        if not self.filtered and self.storage != 'none':
+            columns.append(8 if self.storage == 'field' else 9)
+        return {'id':'VIEW','name':'All','layout':'TABLE_LAYOUT','filter':filter_text,
+                'configuration':{'visibleFields':{'nodes':[{'id':f'N{i}'} for i in columns]}},
+                'groupByFields':{'nodes':[{'id':'N5'}]},
+                'sortByFields':{'nodes':[{'field':{'id':'N4'},'direction':'ASC'}]}}
+
+    def configure(self, storage, filtered=False):
+        self.storage, self.filtered = storage, filtered
+        contract = {'field':FIELD,'labels':LABELS,'none':BASE}[storage]
+        self.path.write_text(contract.replace('| Project key |','| Owner type | user |\n| Project key |'))
+        self.live = self.live[:1]
+        self.posts, self.reads, self.failure = [], 0, None
+
+    def invoke(self, apply=False):
+        args = ['project-views','--contract',str(self.path),'--project-number','4']
+        if self.filtered:
+            args += ['--subproject','tools']
+        if apply:
+            args += ['--apply']
+        output = io.StringIO()
+        with patch.object(sys,'argv',args), patch.object(views,'gh_json',self.provider), \
+             patch.object(views,'read_views',self.current_views), \
+             patch.object(views.subprocess,'run',self.create), redirect_stdout(output):
+            views.main()
+        return json.loads(output.getvalue())
+
+    def test_existing_noop_all_storage_modes(self):
+        for storage in ('none','labels','field'):
+            with self.subTest(storage=storage):
+                self.configure(storage)
+                self.live.append(self.expected_view())
+                self.assertEqual(self.invoke(apply=True)['action'],'no_change')
+                self.assertEqual(self.posts,[])
+
+    def test_plan_apply_readback_and_repeat_all_storage_modes(self):
+        for storage in ('none','labels','field'):
+            with self.subTest(storage=storage):
+                self.configure(storage)
+                self.assertEqual(self.invoke()['action'],'create_view')
+                self.assertEqual(self.posts,[])
+                result = self.invoke(apply=True)
+                self.assertEqual(result['viewId'],'VIEW')
+                self.assertTrue(result['verified'])
+                self.assertEqual(self.invoke(apply=True)['action'],'no_change')
+                self.assertEqual(len(self.posts),1)
+                self.assertEqual(self.live[0]['layout'],'ROADMAP_LAYOUT')
+
+    def test_filtered_apply_and_existing_noop(self):
+        for storage, wanted in [('labels','label:"subproject:work:tools"'),('field','sub-project:"Tools"')]:
+            with self.subTest(storage=storage):
+                self.configure(storage,filtered=True)
+                self.assertTrue(self.invoke(apply=True)['verified'])
+                self.assertEqual(self.posts[0]['filter'],wanted)
+                self.assertNotIn(8,self.posts[0]['visible_fields'])
+                self.assertNotIn(9,self.posts[0]['visible_fields'])
+                self.assertEqual(self.invoke(apply=True)['action'],'no_change')
+
+    def test_uncertain_create_and_failed_readback_recover_without_duplicate_post(self):
+        for storage in ('none','labels','field'):
+            for failure in ('uncertain','readback'):
+                with self.subTest(storage=storage,failure=failure):
+                    self.configure(storage)
+                    self.failure = failure
+                    with self.assertRaises(RuntimeError):
+                        self.invoke(apply=True)
+                    self.assertEqual(len(self.posts),1)
+                    self.failure = None
+                    self.assertEqual(self.invoke(apply=True)['action'],'no_change')
+                    self.assertEqual(len(self.posts),1)
 
 
 if __name__ == '__main__':

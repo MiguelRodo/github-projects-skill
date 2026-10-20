@@ -101,10 +101,10 @@ def main():
         definitions = gh_json(args.gh, 'project', 'field-list', str(number), '--owner', owner, '--format', 'json', '--limit', '100')
         if definitions.get('totalCount', 0) > len(definitions.get('fields', [])):
             raise ValueError('incomplete Project field definitions')
-        matches = [f for f in definitions.get('fields', []) if f['name'] == store.field]
-        if len(matches) != 1 or matches[0].get('type') not in ('ProjectV2SingleSelectField', 'SINGLE_SELECT'):
+        field_matches = [f for f in definitions.get('fields', []) if f['name'] == store.field]
+        if len(field_matches) != 1 or field_matches[0].get('type') not in ('ProjectV2SingleSelectField', 'SINGLE_SELECT'):
             raise ValueError('expected Sub-project field missing or changed')
-        options = [o['name'] for o in matches[0].get('options', [])]
+        options = [o['name'] for o in field_matches[0].get('options', [])]
         if any(options.count(value) != 1 for value in store.vocabulary.values()):
             raise ValueError('Sub-project option mapping missing or ambiguous')
     body = dict(spec(text, fields, owner_type, args.subproject), name=args.name)
