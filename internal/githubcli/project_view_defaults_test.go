@@ -73,3 +73,48 @@ func TestLayoutWidthBoundaryIsExplicit(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyOverviewKeepsEachViewsOwnExtras(t *testing.T) {
+	all := standardBacklogTestView("v1", 1)
+	backlog := standardBacklogTestView("v2", 2)
+	backlog.Name = "Backlog"
+	filter := "status:Todo -is:closed"
+	backlog.Filter = &filter
+	alpha := projectViewFieldRef{ID: "alpha", Name: "All-only"}
+	beta := projectViewFieldRef{ID: "beta", Name: "Backlog-only"}
+	all.Configuration.VisibleFields.Nodes = append(all.Configuration.VisibleFields.Nodes, alpha)
+	backlog.Configuration.VisibleFields.Nodes = append(backlog.Configuration.VisibleFields.Nodes, beta)
+	fields := strings.TrimSuffix(backlogRESTFieldsJSON, "]") + `,{"id":5,"node_id":"alpha","name":"All-only","data_type":"text"},{"id":6,"node_id":"beta","name":"Backlog-only","data_type":"text"}]`
+	inspect := func(views ...projectViewNode) []seqStep {
+		return []seqStep{{request: viewsRequest(), out: viewsJSON(t, views...)}, {request: request{method: "GET", path: "/users/octo-user/projectsV2/40/fields?per_page=100"}, out: fields}}
+	}
+	// Already-standard views with different useful extras are independent no-ops.
+	steps := append(inspect(all, backlog), inspect(all, backlog)...)
+	client := &seqClient{t: t, steps: steps}
+	result, err := ApplyStandardBacklogView(context.Background(), client, userSetupProject())
+	client.done()
+	if err != nil || !result.Verified || len(result.Applied) != 0 {
+		t.Fatalf("independent no-op: %v %v", result, err)
+	}
+
+	// When both need Class, their PATCH payloads and readback still keep extras local.
+	oldAll, oldBacklog := all, backlog
+	oldAll.Configuration.VisibleFields.Nodes = []projectViewFieldRef{{ID: "title", Name: "Title"}, {ID: "priority", Name: "Priority"}, {ID: "status", Name: "Status"}, alpha}
+	oldBacklog.Configuration.VisibleFields.Nodes = []projectViewFieldRef{{ID: "title", Name: "Title"}, {ID: "priority", Name: "Priority"}, {ID: "status", Name: "Status"}, beta}
+	update := func(id, name, query, extra string) request {
+		r := updateViewRequest()
+		input := r.variables["input"].(map[string]any)
+		input["viewId"], input["name"], input["filter"] = id, name, query
+		input["configuration"] = map[string]any{"visibleFieldIds": []string{"title", "priority", "class", "status", extra}}
+		return r
+	}
+	steps = inspect(oldAll, oldBacklog)
+	steps = append(steps, seqStep{request: update("v1", "all", "", "alpha"), out: `{}`}, seqStep{request: update("v2", "Backlog", filter, "beta"), out: `{}`})
+	steps = append(steps, inspect(all, backlog)...)
+	client = &seqClient{t: t, steps: steps}
+	result, err = ApplyStandardBacklogView(context.Background(), client, userSetupProject())
+	client.done()
+	if err != nil || !result.Verified || len(result.Applied) != 2 {
+		t.Fatalf("independent apply: %v %v", result, err)
+	}
+}

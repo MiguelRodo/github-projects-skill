@@ -48,11 +48,12 @@ type backlogField struct {
 }
 
 type backlogViewSpec struct {
-	Visible  []backlogField
-	Status   backlogField
-	Priority backlogField
-	Name     string
-	Filter   string
+	Visible   []backlogField
+	Status    backlogField
+	Priority  backlogField
+	Name      string
+	Filter    string
+	Available map[string]backlogField
 }
 
 type projectViewFieldRef struct {
@@ -286,7 +287,10 @@ func buildBacklogViewSpec(project contract.Project, ownerType string, fields []r
 	// available in the view". It is therefore not part of the view spec and is
 	// neither required nor located here.
 
-	spec := backlogViewSpec{Name: standardBacklogViewName}
+	spec := backlogViewSpec{Name: standardBacklogViewName, Available: make(map[string]backlogField)}
+	for _, field := range fields {
+		spec.Available[field.NodeID] = fromREST(field)
+	}
 	for _, wantedField := range wanted {
 		var field backlogField
 		var ok bool
@@ -328,18 +332,8 @@ func inspectStandardBacklogView(ctx context.Context, client Client, project cont
 	}
 	for _, view := range findBacklogViews(views) {
 		for _, visible := range view.Configuration.VisibleFields.Nodes {
-			found := false
-			for _, wanted := range spec.Visible {
-				if wanted.NodeID == visible.ID {
-					found = true
-				}
-			}
-			if !found {
-				for _, field := range fields {
-					if field.NodeID == visible.ID {
-						spec.Visible = append(spec.Visible, backlogField{Name: field.Name, RESTID: field.ID, NodeID: field.NodeID})
-					}
-				}
+			if _, exists := spec.Available[visible.ID]; !exists {
+				return backlogViewState{}, fmt.Errorf("visible field %q on %s cannot be preserved through the supported field API; configure this view in the browser", visible.Name, viewLabel(view))
 			}
 		}
 	}
@@ -523,6 +517,21 @@ func planOneOverviewChanges(views []projectViewNode, spec backlogViewSpec) ([]St
 }
 
 func overviewSpec(spec backlogViewSpec, view projectViewNode) backlogViewSpec {
+	// Each target keeps only its own extras; never append through the shared
+	// defaults' backing array or copy a sibling overview's configuration.
+	spec.Visible = append([]backlogField(nil), spec.Visible...)
+	for _, visible := range view.Configuration.VisibleFields.Nodes {
+		found := false
+		for _, wanted := range spec.Visible {
+			if wanted.NodeID == visible.ID {
+				found = true
+				break
+			}
+		}
+		if extra, exists := spec.Available[visible.ID]; !found && exists {
+			spec.Visible = append(spec.Visible, extra)
+		}
+	}
 	spec.Name = view.Name
 	spec.Filter = ""
 	if view.Filter != nil {
