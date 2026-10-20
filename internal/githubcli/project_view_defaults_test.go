@@ -84,6 +84,12 @@ func TestApplyOverviewKeepsEachViewsOwnExtras(t *testing.T) {
 	beta := projectViewFieldRef{ID: "beta", Name: "Backlog-only"}
 	all.Configuration.VisibleFields.Nodes = append(all.Configuration.VisibleFields.Nodes, alpha)
 	backlog.Configuration.VisibleFields.Nodes = append(backlog.Configuration.VisibleFields.Nodes, beta)
+	duplicate := backlog
+	duplicate.Name = "all"
+	duplicate.Filter = all.Filter
+	if _, err := planBacklogViewChanges([]projectViewNode{all, duplicate}, backlogTestSpec()); err == nil {
+		t.Fatal("different extras on duplicate all views must not be inferred as interrupted replacement")
+	}
 	fields := strings.TrimSuffix(backlogRESTFieldsJSON, "]") + `,{"id":5,"node_id":"alpha","name":"All-only","data_type":"text"},{"id":6,"node_id":"beta","name":"Backlog-only","data_type":"text"}]`
 	inspect := func(views ...projectViewNode) []seqStep {
 		return []seqStep{{request: viewsRequest(), out: viewsJSON(t, views...)}, {request: request{method: "GET", path: "/users/octo-user/projectsV2/40/fields?per_page=100"}, out: fields}}

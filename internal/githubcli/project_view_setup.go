@@ -542,6 +542,19 @@ func overviewSpec(spec backlogViewSpec, view projectViewNode) backlogViewSpec {
 
 func planBacklogViewChanges(views []projectViewNode, spec backlogViewSpec) ([]StandardBacklogViewChange, error) {
 	var changes []StandardBacklogViewChange
+	defaults := make(map[string]bool)
+	for _, field := range spec.Visible {
+		defaults[field.NodeID] = true
+	}
+	extraIDs := func(view projectViewNode) []string {
+		var ids []string
+		for _, field := range view.Configuration.VisibleFields.Nodes {
+			if !defaults[field.ID] {
+				ids = append(ids, field.ID)
+			}
+		}
+		return ids
+	}
 	for _, name := range []string{standardBacklogViewName, "Backlog"} {
 		var selected []projectViewNode
 		for _, view := range views {
@@ -560,6 +573,9 @@ func planBacklogViewChanges(views []projectViewNode, spec backlogViewSpec) ([]St
 		}
 		wanted := overviewSpec(spec, selected[0])
 		for _, view := range selected[1:] {
+			if !sameFieldSet(extraIDs(selected[0]), extraIDs(view)) {
+				return nil, fmt.Errorf("ambiguous reconciliation: duplicate %s views have different useful extras; preserve both", name)
+			}
 			if overviewSpec(spec, view).Filter != wanted.Filter {
 				return nil, fmt.Errorf("ambiguous reconciliation: duplicate %s views have different filters; preserve both", name)
 			}
