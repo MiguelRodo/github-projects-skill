@@ -2,6 +2,10 @@
 
 # Local Chat-to-pj administration queue
 
+Direct deterministic processing also follows [consumed body-metadata cleanup](direct-body-cleanup.md)
+after verified administration and queue completion. This preserves substantive
+restrictions and documents the provider's body-edit concurrency boundary.
+
 Use this queue when an authorised GitHub issue or Project mutation cannot be completed by the current chat/provider and should be finished later from the trusted local `pj` workspace. The resolved repository contract must declare a `Chat implementation label`.
 
 The standard label remains `pj:implement-chat` for backwards compatibility. Despite that historical name, the queue is **administrative-only**.

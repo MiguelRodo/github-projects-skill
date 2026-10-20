@@ -15,6 +15,7 @@ from queue_agent import build_agent_context
 from queue_common import flatten_pages, gh_json, json_command, run, table_value
 from queue_review import build_review_context, validate_review_result
 from subproject import change as change_subproject
+from admin_body import cleanup as cleanup_admin_body
 
 
 def field_locations(text: str) -> dict[str, tuple[str, str]]:
@@ -55,6 +56,7 @@ def receipt(
     remaining: list[dict[str, Any]] | None = None,
     agent_context: dict[str, Any] | None = None,
     review_context: dict[str, Any] | None = None,
+    body_cleanup: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     planned = classification.get("actions", [])
     value: dict[str, Any] = {
@@ -85,6 +87,8 @@ def receipt(
         value["reviewContext"] = review_context
     if reason is not None:
         value["reason"] = reason
+    if body_cleanup is not None:
+        value["bodyCleanup"] = body_cleanup
     return value
 
 
@@ -745,8 +749,13 @@ def main() -> int:
             },
         )
 
+    body_cleanup = cleanup_admin_body(args.gh, contract, args.repository, args.issue,
+                                      baseline_issue.get("body") or "", locations, baseline_issue.get("id"))
+    if body_cleanup["status"] not in {"not_present", "applied_verified"}:
+        print("pj: administration verified; body metadata cleanup " + body_cleanup["status"] + "; inspect receipt before any retry.", file=sys.stderr)
     return finish(
         "applied_verified",
+        body_cleanup=body_cleanup if body_cleanup["status"] != "not_present" else None,
         completion={
             "comment": comment,
             "queue": {
