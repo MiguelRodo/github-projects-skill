@@ -34,6 +34,14 @@ must agree. Missing, inaccessible or changed expected fields stop the operation.
 Never fall back to labels after a failed field read. Creating a field is a
 separate migration, not an implicit change of authority during an item write.
 
+For a contract bound to field storage, `projects project setup-fields` creates
+the configured single-select field with a `Not assigned` option even when the
+vocabulary is empty. Existing options, IDs, colours and descriptions are
+preserved. This option is schema only: setup never fills blank issue values,
+and clearing a classification still leaves the field blank. It is not a real
+sub-project key unless the contract explicitly declares it. Legacy label-bound
+contracts remain unchanged until their separate migration.
+
 If there is no configured field, use `Sub-project storage: labels` and declare
 `Sub-project label scope: project` with labels such as
 `subproject:work:tools`. Each vocabulary key maps to one exact label. A deliberate
