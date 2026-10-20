@@ -9,7 +9,7 @@ import (
 	"github.com/MiguelRodo/github-projects-skill/internal/contract"
 )
 
-const standardBacklogViewName = "Backlog"
+const standardBacklogViewName = "all"
 
 type StandardBacklogViewChange struct {
 	Action string `json:"action"`
@@ -51,6 +51,8 @@ type backlogViewSpec struct {
 	Visible  []backlogField
 	Status   backlogField
 	Priority backlogField
+	Name     string
+	Filter   string
 }
 
 type projectViewFieldRef struct {
@@ -266,12 +268,13 @@ func buildBacklogViewSpec(project contract.Project, ownerType string, fields []r
 		{name: "Due date"},
 		{name: "Target date"},
 		{name: "Priority", required: true},
-		{name: "Status", required: true},
 	}
-	if ownerType != "organization" {
+	_, hasClass := byName["class"]
+	if ownerType != "organization" || hasClass {
 		wanted = append(wanted, wantedField{name: "Class", required: true})
 	}
 	wanted = append(wanted, wantedField{dataType: "sub_issues_progress"})
+	wanted = append(wanted, wantedField{name: "Status", required: true}, wantedField{dataType: "assignees"}, wantedField{dataType: "linked_pull_requests"})
 	if project.Subproject.Storage == "field" {
 		wanted = append(wanted, wantedField{name: project.Subproject.Field, required: true})
 	} else if project.Subproject.Storage == "labels" {
@@ -283,7 +286,7 @@ func buildBacklogViewSpec(project contract.Project, ownerType string, fields []r
 	// available in the view". It is therefore not part of the view spec and is
 	// neither required nor located here.
 
-	var spec backlogViewSpec
+	spec := backlogViewSpec{Name: standardBacklogViewName}
 	for _, wantedField := range wanted {
 		var field backlogField
 		var ok bool
@@ -387,8 +390,11 @@ func backlogViewGroupSortMatches(view projectViewNode, spec backlogViewSpec) boo
 }
 
 func backlogViewMatchesBasic(view projectViewNode, spec backlogViewSpec) bool {
-	filterEmpty := view.Filter == nil || strings.TrimSpace(*view.Filter) == ""
-	return strings.EqualFold(view.Layout, "TABLE_LAYOUT") && filterEmpty && sameFieldSet(viewFieldNodeIDs(view.Configuration.VisibleFields.Nodes), fieldNodeIDs(spec.Visible))
+	filter := ""
+	if view.Filter != nil {
+		filter = *view.Filter
+	}
+	return strings.EqualFold(view.Layout, "TABLE_LAYOUT") && filter == spec.Filter && sameFieldSet(viewFieldNodeIDs(view.Configuration.VisibleFields.Nodes), fieldNodeIDs(spec.Visible))
 }
 
 func backlogViewMatches(view projectViewNode, spec backlogViewSpec) bool {
@@ -398,7 +404,7 @@ func backlogViewMatches(view projectViewNode, spec backlogViewSpec) bool {
 func findBacklogViews(views []projectViewNode) []projectViewNode {
 	var matches []projectViewNode
 	for _, view := range views {
-		if strings.EqualFold(strings.TrimSpace(view.Name), standardBacklogViewName) {
+		if strings.EqualFold(strings.TrimSpace(view.Name), standardBacklogViewName) || strings.EqualFold(strings.TrimSpace(view.Name), "Backlog") {
 			matches = append(matches, view)
 		}
 	}
@@ -406,7 +412,7 @@ func findBacklogViews(views []projectViewNode) []projectViewNode {
 }
 
 func viewLabel(view projectViewNode) string {
-	return fmt.Sprintf("Backlog #%d (%s)", view.Number, view.ID)
+	return fmt.Sprintf("%s #%d (%s)", view.Name, view.Number, view.ID)
 }
 
 func fieldRefNames(fields []projectViewFieldRef) []string {
@@ -443,9 +449,6 @@ func describeBasicViewDiff(view projectViewNode, spec backlogViewSpec) []string 
 	if !strings.EqualFold(view.Layout, "TABLE_LAYOUT") {
 		parts = append(parts, fmt.Sprintf("layout %s->TABLE_LAYOUT", view.Layout))
 	}
-	if view.Filter != nil && strings.TrimSpace(*view.Filter) != "" {
-		parts = append(parts, fmt.Sprintf("filter %q->none", *view.Filter))
-	}
 	current := make(map[string]bool)
 	for _, field := range view.Configuration.VisibleFields.Nodes {
 		current[field.ID] = true
@@ -473,7 +476,7 @@ func describeBasicViewDiff(view projectViewNode, spec backlogViewSpec) []string 
 	return parts
 }
 
-func planBacklogViewChanges(views []projectViewNode, spec backlogViewSpec) ([]StandardBacklogViewChange, error) {
+func planOneOverviewChanges(views []projectViewNode, spec backlogViewSpec) ([]StandardBacklogViewChange, error) {
 	backlogs := findBacklogViews(views)
 	if len(backlogs) == 0 {
 		return []StandardBacklogViewChange{{Action: "create_view", Detail: fmt.Sprintf("table; no filter; group %s; sort %s ascending", spec.Status.Name, spec.Priority.Name)}}, nil
@@ -507,6 +510,9 @@ func planBacklogViewChanges(views []projectViewNode, spec backlogViewSpec) ([]St
 	if backlogViewGroupSortMatches(view, spec) {
 		return []StandardBacklogViewChange{{Action: "update_view", ViewID: view.ID, Detail: fmt.Sprintf("update %s in place: %s", viewLabel(view), strings.Join(basic, "; "))}}, nil
 	}
+	if strings.EqualFold(strings.TrimSpace(view.Name), "Backlog") {
+		return nil, fmt.Errorf("existing Backlog needs group/sort changes: preserve its name and filter %q and configure Status grouping/Priority ascending in the browser; no replacement Backlog will be created", spec.Filter)
+	}
 	group, sortBy := describeGroupSort(view)
 	parts := []string{
 		fmt.Sprintf("group %s->%s", group, spec.Status.Name),
@@ -516,10 +522,52 @@ func planBacklogViewChanges(views []projectViewNode, spec backlogViewSpec) ([]St
 	return []StandardBacklogViewChange{{Action: "replace_view", ViewID: view.ID, Detail: fmt.Sprintf("%s; GitHub API cannot update group/sort configuration in place, so create a standard replacement and delete old %s after verifying the replacement", strings.Join(parts, "; "), viewLabel(view))}}, nil
 }
 
+func overviewSpec(spec backlogViewSpec, view projectViewNode) backlogViewSpec {
+	spec.Name = view.Name
+	spec.Filter = ""
+	if view.Filter != nil {
+		spec.Filter = *view.Filter
+	}
+	return spec
+}
+
+func planBacklogViewChanges(views []projectViewNode, spec backlogViewSpec) ([]StandardBacklogViewChange, error) {
+	var changes []StandardBacklogViewChange
+	for _, name := range []string{standardBacklogViewName, "Backlog"} {
+		var selected []projectViewNode
+		for _, view := range views {
+			if strings.EqualFold(strings.TrimSpace(view.Name), name) {
+				selected = append(selected, view)
+			}
+		}
+		if len(selected) == 0 {
+			if name == standardBacklogViewName {
+				changes = append(changes, StandardBacklogViewChange{Action: "create_view", Detail: "create all table; no filter; Status grouping; Priority ascending"})
+			}
+			continue
+		}
+		wanted := overviewSpec(spec, selected[0])
+		for _, view := range selected[1:] {
+			if overviewSpec(spec, view).Filter != wanted.Filter {
+				return nil, fmt.Errorf("ambiguous reconciliation: duplicate %s views have different filters; preserve both", name)
+			}
+		}
+		part, err := planOneOverviewChanges(selected, wanted)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, part...)
+	}
+	return changes, nil
+}
+
 func viewManualVerification(ownerType string) []string {
-	checks := []string{"Verify visible column order in the GitHub Project browser; the API reports an unordered set."}
+	checks := []string{
+		"Verify column order in the browser: Title, Due date, Target date, Priority, Class (or native Type), Sub-issues progress, Status, Assignees, Linked pull requests; show Sub-project additionally on all/Backlog and preserve useful extras.",
+		"Set/verify browser column widths in pixels: Title 517; Due date 131; Target date 157; Priority 130; Class/Type 116; Sub-issues progress 174; Status 128; Assignees 135; Linked pull requests 154. The supported API does not configure or verify widths or column order.",
+	}
 	if ownerType == "organization" {
-		checks = append(checks, "Show and verify native Type in the browser; the public API may omit or reject this column.")
+		checks = append(checks, "If Class is absent, show and verify native Type in the browser; the public API may omit or reject this column.")
 	}
 	return checks
 }
@@ -553,7 +601,7 @@ func createBacklogView(ctx context.Context, client Client, project contract.Proj
 		visible = append(visible, field.RESTID)
 	}
 	body := map[string]any{
-		"name": standardBacklogViewName, "layout": "table", "filter": "",
+		"name": standardBacklogViewName, "layout": "table", "filter": state.spec.Filter,
 		"visible_fields": visible,
 		"sort_by":        []any{[]any{state.spec.Priority.RESTID, "asc"}},
 		"group_by":       []int{state.spec.Status.RESTID},
@@ -592,7 +640,7 @@ func updateBacklogView(ctx context.Context, client Client, viewID string, spec b
   updateProjectV2View(input: $input) { projectV2View { id name layout filter } }
 }`
 	body := map[string]any{"query": query, "variables": map[string]any{"input": map[string]any{
-		"viewId": viewID, "name": standardBacklogViewName, "layout": "TABLE_LAYOUT", "filter": "",
+		"viewId": viewID, "name": spec.Name, "layout": "TABLE_LAYOUT", "filter": spec.Filter,
 		"configuration": map[string]any{"visibleFieldIds": fieldNodeIDs(spec.Visible)},
 	}}}
 	if err := graphQLWrite(ctx, client, body); err != nil {
@@ -624,7 +672,7 @@ func findViewByID(views []projectViewNode, id string) (projectViewNode, bool) {
 func unrelatedViewIDs(views []projectViewNode) map[string]string {
 	result := make(map[string]string)
 	for _, view := range views {
-		if !strings.EqualFold(strings.TrimSpace(view.Name), standardBacklogViewName) {
+		if !strings.EqualFold(strings.TrimSpace(view.Name), standardBacklogViewName) && !strings.EqualFold(strings.TrimSpace(view.Name), "Backlog") {
 			result[view.ID] = view.Name
 		}
 	}
@@ -714,13 +762,17 @@ func ApplyStandardBacklogView(ctx context.Context, client Client, project contra
 
 	for _, change := range plan.Changes {
 		var err error
+		target := state
+		if old, ok := findViewByID(state.views, change.ViewID); ok {
+			target.spec = overviewSpec(state.spec, old)
+		}
 		switch change.Action {
 		case "create_view":
 			_, err = createBacklogView(ctx, client, project, state)
 		case "update_view":
-			err = updateBacklogView(ctx, client, change.ViewID, state.spec)
+			err = updateBacklogView(ctx, client, change.ViewID, target.spec)
 		case "replace_view":
-			err = replaceBacklogView(ctx, client, project, state, change)
+			err = replaceBacklogView(ctx, client, project, target, change)
 		case "delete_view":
 			err = deleteProjectView(ctx, client, change.ViewID)
 		default:
@@ -744,8 +796,39 @@ func ApplyStandardBacklogView(ctx context.Context, client Client, project contra
 	if err != nil {
 		return fail("readback", fmt.Errorf("post-write verification: %w", err))
 	}
-	if len(verifiedPlan.Changes) != 0 || len(findBacklogViews(verified.views)) != 1 {
+	if len(verifiedPlan.Changes) != 0 {
 		return fail("readback", fmt.Errorf("Backlog view did not read back as one standard view"))
+	}
+	// Readback must preserve the pre-write criteria, rather than deriving new
+	// expected filters from whatever the provider happened to return.
+	for _, old := range findBacklogViews(state.views) {
+		wanted := overviewSpec(state.spec, old)
+		found := false
+		for _, current := range findBacklogViews(verified.views) {
+			if strings.EqualFold(current.Name, old.Name) && backlogViewMatches(current, wanted) {
+				found = true
+			}
+		}
+		if !found {
+			return fail("readback", fmt.Errorf("overview %q did not preserve its filter %q and configuration", old.Name, wanted.Filter))
+		}
+	}
+	hadAll := false
+	for _, old := range state.views {
+		if strings.EqualFold(old.Name, standardBacklogViewName) {
+			hadAll = true
+		}
+	}
+	if !hadAll {
+		found := false
+		for _, current := range verified.views {
+			if current.Name == standardBacklogViewName && backlogViewMatches(current, state.spec) {
+				found = true
+			}
+		}
+		if !found {
+			return fail("readback", fmt.Errorf("new all view did not preserve its unfiltered default"))
+		}
 	}
 	if err := verifyUnrelatedViews(beforeUnrelated, verified.views); err != nil {
 		return fail("readback", err)

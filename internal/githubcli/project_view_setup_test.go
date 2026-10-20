@@ -24,7 +24,7 @@ func backlogTestSpec() backlogViewSpec {
 
 func standardBacklogTestView(id string, number int) projectViewNode {
 	filter := ""
-	view := projectViewNode{ID: id, Number: number, Name: "Backlog", Layout: "TABLE_LAYOUT", Filter: &filter}
+	view := projectViewNode{ID: id, Number: number, Name: "all", Layout: "TABLE_LAYOUT", Filter: &filter}
 	view.Configuration.VisibleFields.Nodes = []projectViewFieldRef{{ID: "title", Name: "Title"}, {ID: "status", Name: "Status"}, {ID: "priority", Name: "Priority"}, {ID: "class", Name: "Class"}}
 	view.GroupByFields.Nodes = []projectViewFieldRef{{ID: "status", Name: "Status"}}
 	view.SortByFields.Nodes = []projectViewSortNode{{Direction: "ASC", Field: projectViewFieldRef{ID: "priority", Name: "Priority"}}}
@@ -72,7 +72,7 @@ func TestPlanBacklogViewReplacesWhenGroupOrSortDiffers(t *testing.T) {
 	if len(changes) != 1 || changes[0].Action != "replace_view" || !strings.Contains(changes[0].Detail, "cannot update group/sort") {
 		t.Fatalf("changes = %#v, want replace_view", changes)
 	}
-	for _, want := range []string{"sort Priority desc->Priority asc", "group Status->Status", "delete old Backlog #1 (v1) after verifying the replacement"} {
+	for _, want := range []string{"sort Priority desc->Priority asc", "group Status->Status", "delete old all #1 (v1) after verifying the replacement"} {
 		if !strings.Contains(changes[0].Detail, want) {
 			t.Fatalf("detail = %q, want %q", changes[0].Detail, want)
 		}
@@ -103,7 +103,7 @@ func TestBuildBacklogViewSpecUsesStandardOrderAndSkipsUnavailableOptionalFields(
 	for _, field := range spec.Visible {
 		names = append(names, field.Name)
 	}
-	want := []string{"Title", "Priority", "Status", "Class"}
+	want := []string{"Title", "Priority", "Class", "Status", "People"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("visible = %#v, want %#v", names, want)
 	}
