@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""Regression coverage for label-free routing, storage authority and reversible migration."""
+import copy
+import importlib.util
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
+sys.path.insert(0, str(SCRIPTS))
+import project_context as context
+import subproject
+
+
+def load(name, filename):
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS / filename)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+discovery = load('discovery', 'queue-discover.py')
+migration = load('migration', 'migrate-project-storage.py')
+views = load('views', 'project-views.py')
+
+BASE = '''| Contract version | 1 |
+| Mode | single |
+| Project key | work |
+| Issue repository | octo/issues |
+| Project owner | octo |
+| Project number | 4 |
+| Project title | Work |
+| Routing | membership |
+'''
+FIELD = BASE + '''| Sub-project storage | field |
+| Sub-project field | Sub-project |
+| Sub-project field type | SINGLE_SELECT |
+## Sub-project vocabulary
+| Key | Provider value |
+| --- | --- |
+| tools | Tools |
+| ops | Operations |
+'''
+LABELS = BASE + '''| Sub-project storage | labels |
+| Sub-project label scope | project |
+## Sub-project vocabulary
+| Key | Label |
+| --- | --- |
+| tools | subproject:work:tools |
+| ops | subproject:work:ops |
+'''
+LEGACY = BASE.replace('membership', 'label:project:work') + '''## Sub-project vocabulary
+| Key | Label |
+| --- | --- |
+| tools | subproject:tools |
+| ops | subproject:ops |
+'''
+
+
+def intent(number=4, actions=None):
+    return {'apiVersion':'github-projects/queue-authority/v1','kind':'QueueAuthority','spec':{
+        'target':{'repository':'octo/issues','issue':42,'project':{'owner':'octo','number':number}},
+        'shape':'existing_task','actions':actions or [{'kind':'project.membership.add'}]}}
+
+
+def comment(payload, date='2026-01-01', login='octo'):
+    return {'id':1,'user':{'login':login},'created_at':date,'updated_at':date,
+            'body':'PJ implementation authority:\n```json\n'+json.dumps(payload)+'\n```'}
+
+
+class Fake:
+    def __init__(self, field=True):
+        self.labels = {'unrelated', 'project:work', 'subproject:tools'}
+        self.field = field
+        self.value = None
+        self.extra = 'P2'
+        self.writes = []
+        self.fail_remove = False
+        self.tamper = False
+
+    def graphql(self, gh, query, **variables):
+        if 'projectItems' in query:
+            return {'repository':{'issue':{'id':'I','projectItems':{'nodes':[{
+                'id':'ITEM','project':{'id':'P','number':4,'owner':{'login':'octo'}}}],
+                'pageInfo':{'hasNextPage':False}}}}}
+        if 'clearProject' in query or 'updateProject' in query:
+            self.value = None if 'clearProject' in query else {'TOOLS':'Tools','OPS':'Operations'}[variables['option']]
+            self.writes.append(('field', self.value))
+            if self.tamper:
+                self.extra = 'P0'
+            return {}
+        if 'fieldValues' in query:
+            nodes = [{'name':self.extra,'field':{'id':'PRIORITY','name':'Priority'}}]
+            if self.value:
+                nodes.append({'name':self.value,'field':{'id':'SUB','name':'Sub-project'}})
+            return {'node':{'id':'ITEM','fieldValues':{'nodes':nodes,'pageInfo':{'hasNextPage':False}}}}
+        if 'fields(first' in query:
+            fields = [{'id':'SUB','name':'Sub-project','dataType':'SINGLE_SELECT','options':[
+                {'name':'Tools','id':'TOOLS'},{'name':'Operations','id':'OPS'}]}] if self.field else []
+            return {'node':{'id':'P','fields':{'nodes':fields,'pageInfo':{'hasNextPage':False}}}}
+        raise AssertionError(query)
+
+    def gh(self, gh, *args):
+        if args == ('api', 'user'):
+            return {'login':'octo'}
+        if args[:2] == ('issue', 'list'):
+            self.assert_no_route(args)
+            return [{'number':42,'url':'https://github.com/octo/issues/issues/42','labels':[{'name':'pj:implement-chat'}]}]
+        if 'comments?' in args[-1]:
+            return [[comment(intent())]]
+        if '--method' in args:
+            self.writes.append(args)
+            if any(v.startswith('name=') for v in args):
+                return {'name':next(v[5:] for v in args if v.startswith('name='))}
+            label = next(v.removeprefix('labels[]=') for v in args if v.startswith('labels[]='))
+            self.labels.add(label)
+            return {}
+        if args[-1].endswith('/labels?per_page=100'):
+            return [[{'name':v} for v in self.labels]]
+        return {'id':42,'title':'Keep title','body':'Keep body','state':'open','assignees':[],
+                'milestone':None,'labels':[{'name':v} for v in sorted(self.labels)]}
+
+    def assert_no_route(self, args):
+        assert 'project:work' not in args and 'subproject:tools' not in args
+
+    def run(self, *args):
+        from urllib.parse import unquote
+        import subprocess
+        if self.fail_remove:
+            return subprocess.CompletedProcess(args, 1, '', 'simulated network failure')
+        self.labels.discard(unquote(args[-1].split('/labels/')[1]))
+        self.writes.append(('remove', args[-1]))
+        return subprocess.CompletedProcess(args, 0, '', '')
+
+    def patches(self):
+        from contextlib import ExitStack
+        stack = ExitStack()
+        for module in (context, subproject, discovery, migration):
+            if hasattr(module, 'gh_json'):
+                stack.enter_context(patch.object(module, 'gh_json', self.gh))
+        stack.enter_context(patch.object(context, 'graphql', self.graphql))
+        stack.enter_context(patch.object(subproject, 'graphql', self.graphql))
+        stack.enter_context(patch('queue_common.run', self.run))
+        stack.enter_context(patch.object(migration, 'run', self.run))
+        return stack
+
+
+class Context(unittest.TestCase):
+    def test_membership_resolution(self):
+        managed = {('octo',4),('octo',5)}
+        live = [{'owner':'octo','number':4}]
+        self.assertEqual(context.select_context(managed, live, None), ('octo',4))
+        for memberships in ([], live+[{'owner':'octo','number':5}]):
+            with self.assertRaisesRegex(ValueError, 'zero or multiple'):
+                context.select_context(managed, memberships, None)
+        self.assertEqual(context.select_context(managed, [], ('octo',4), intent()), ('octo',4))
+        with self.assertRaisesRegex(ValueError, 'membership missing'):
+            context.select_context(managed, [], ('octo',4))
+        self.assertEqual(context.select_context(managed, live+[{'owner':'octo','number':5}], ('octo',4)), ('octo',4))
+        with self.assertRaisesRegex(ValueError, 'disagrees'):
+            context.select_context(managed, live, ('octo',5), intent())
+
+    def test_one_active_project_request_and_receipt_retry(self):
+        first = comment(intent())
+        second = comment(intent(5), '2026-01-03')
+        with self.assertRaisesRegex(ValueError, 'multiple active'):
+            context.single_request([first, second], 'octo')
+        receipt = {'user':{'login':'octo'},'body':'PJ deterministic administration: verified', 'created_at':'2026-01-02'}
+        self.assertEqual(context.single_request([first, receipt], 'octo'), first)
+        self.assertEqual(context.single_request([first, receipt, second], 'octo'), second)
+        self.assertEqual(context.single_request([first, comment(intent(5), login='intruder')], 'octo'), first)
+
+    def test_binding_old_and_new(self):
+        self.assertEqual(context.binding(LEGACY).storage, 'labels')
+        self.assertEqual(context.binding(FIELD).resolve('tools'), 'Tools')
+        self.assertEqual(context.binding(LABELS).resolve('tools'), 'subproject:work:tools')
+        for invalid in (FIELD.replace('SINGLE_SELECT','TEXT'), LABELS.replace('subproject:work:tools','subproject:tools')):
+            with self.assertRaises(ValueError): context.binding(invalid)
+
+    def test_label_free_discovery_and_unplaced_intent(self):
+        fake = Fake()
+        fake.labels = set()
+        with tempfile.TemporaryDirectory() as directory, fake.patches():
+            path = Path(directory)/'contract.md'
+            path.write_text(FIELD)
+            scope = ['octo/issues','pj:implement-chat','project:work','-','work','-',directory,str(path)]
+            self.assertEqual(discovery.discover('gh',[scope])[0][1], '42')
+            with patch.object(discovery, 'memberships', return_value=[]):
+                self.assertEqual(discovery.discover('gh',[scope])[0][1], '42')
+
+    def test_field_plan_set_clear_preserves_labels(self):
+        fake = Fake()
+        with fake.patches():
+            original = set(fake.labels)
+            self.assertFalse(subproject.change('gh', FIELD, 'octo/issues',42,'tools')['applied'])
+            self.assertFalse(fake.writes)
+            self.assertTrue(subproject.change('gh', FIELD, 'octo/issues',42,'tools',True)['verified'])
+            self.assertEqual(fake.value,'Tools')
+            self.assertEqual(fake.labels,original)
+            subproject.change('gh', FIELD, 'octo/issues',42,None,True)
+            self.assertIsNone(fake.value)
+            self.assertEqual(fake.labels,original)
+
+    def test_missing_expected_field_and_new_field_migration_boundary(self):
+        fake = Fake(False)
+        with fake.patches(), self.assertRaisesRegex(ValueError,'expected Sub-project'):
+            subproject.change('gh', FIELD,'octo/issues',42,'tools',True)
+        self.assertFalse(fake.writes)
+        fake.field = True
+        with fake.patches(), self.assertRaisesRegex(ValueError,'migrate'):
+            subproject.change('gh', LABELS,'octo/issues',42,'tools',True)
+
+    def test_label_fallback_only_owns_exact_vocabulary(self):
+        fake = Fake(False)
+        fake.labels |= {'subproject:work:ops','subproject:another:tools'}
+        with fake.patches():
+            subproject.change('gh', LABELS,'octo/issues',42,'tools',True)
+            self.assertNotIn('subproject:work:ops',fake.labels)
+            self.assertIn('subproject:another:tools',fake.labels)
+            self.assertIn('subproject:tools',fake.labels)
+            subproject.change('gh', LABELS,'octo/issues',42,None,True)
+            self.assertNotIn('subproject:work:tools',fake.labels)
+            self.assertIn('unrelated',fake.labels)
+
+    def test_readback_detects_collateral_field_change(self):
+        fake = Fake()
+        fake.tamper = True
+        with fake.patches(), self.assertRaisesRegex(RuntimeError,'unrequested Project field'):
+            subproject.change('gh',FIELD,'octo/issues',42,'tools',True)
+
+    def test_migration_snapshot_retry_verify_rollback(self):
+        fake = Fake()
+        with fake.patches(), tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'snapshot.json'
+            journal = migration.plan('gh',LEGACY,FIELD,[42],['project:work'])
+            original = copy.deepcopy(journal['entries'][0]['before'])
+            migration.save(path,journal)
+            self.assertFalse(fake.writes)
+            fake.fail_remove = True
+            with self.assertRaisesRegex(RuntimeError,'removal failed'):
+                migration.execute('gh',journal,FIELD,path)
+            self.assertIn('project:work',fake.labels)
+            self.assertEqual(json.loads(path.read_text())['entries'][0]['status'],'apply_pending')
+            fake.fail_remove = False
+            migration.execute('gh',journal,FIELD,path)
+            migration.execute('gh',journal,FIELD,path)
+            self.assertEqual(fake.labels,{'unrelated'})
+            self.assertEqual(fake.value,'Tools')
+            migration.execute('gh',journal,FIELD,path,rollback=True)
+            self.assertEqual(subproject.inspect('gh',FIELD,'octo/issues',42),original)
+            migration.execute('gh',journal,FIELD,path,rollback=True)
+
+    def test_migration_rejects_unowned_routing_label(self):
+        with self.assertRaisesRegex(ValueError,'exact legacy route'):
+            migration.plan('gh', LEGACY,FIELD,[42],['unrelated'])
+
+    def test_view_defaults_and_filtered_classification(self):
+        fields = [{'id':i,'node_id':f'N{i}','name':name,'data_type':'single_select' if name=='Sub-project' else 'text'}
+                  for i,name in enumerate(['Title','Due date','Target date','Priority','Status','Class','Sub-issues progress','Sub-project','Labels'],1)]
+        overall = views.spec(FIELD,fields,'user')
+        self.assertEqual(overall['layout'],'table')
+        self.assertEqual(overall['group_by'],[5])
+        self.assertEqual(overall['sort_by'],[[4,'asc']])
+        self.assertIn(8,overall['visible_fields'])
+        filtered = views.spec(FIELD,fields,'user','tools')
+        self.assertEqual(filtered['filter'],'"Sub-project":"Tools"')
+        self.assertNotIn(8,filtered['visible_fields'])
+        self.assertEqual(views.spec(LABELS,fields,'user','tools')['filter'],'label:"subproject:work:tools"')
+        self.assertIn(9,views.spec(LABELS,fields,'user')['visible_fields'])
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -23,8 +23,13 @@ Read [the repository contract reference](references/repository-contract.md) when
 
 ## Resolve exactly one context
 
+For membership routing, Sub-project set/clear/select, new view defaults, and staged
+label retirement, follow [membership and storage migration](references/membership-storage-migration.md).
+Native membership is routing authority; labels are legacy compatibility only.
+
+
 - A `single` contract resolves directly.
-- A `dispatcher` contract must resolve exactly one row by an explicit Project number, routing label, Project key, or other exact identifier supplied by the request or live issue state. Then read the referenced `.projects/projects/*.md` contract. A zero-route dispatcher is a valid onboarding state, not an operational Project context; for ordinary administration, stop and tell the operator to rerun the initializer and add a Project.
+- A `dispatcher` contract must resolve exactly one row by an explicit Project number or Project key supplied by the request, or exactly one relevant verified managed membership. A label cannot disambiguate memberships. Then read the referenced `.projects/projects/*.md` contract. A zero-route dispatcher is a valid onboarding state, not an operational Project context; for ordinary administration, stop and tell the operator to rerun the initializer and add a Project.
 - All identifiers supplied by the user, contract, issue and Project must agree. Stop on zero matches, multiple matches, or disagreement.
 - Treat live GitHub as authority for current issue, membership, field, option and hierarchy state. Treat `.projects/` as authority for topology, explicit local overrides, governance and source requirements. Shared defaults come from this skill rather than being copied into every contract.
 - Retrieve an external source only when the local contract requires it for this operation. An exact requested change is not a scope-design task.
@@ -64,7 +69,7 @@ The shared default vocabulary is `Task`, `Bug`, `Enhancement`, `Data`, `Analysis
 - `Data` covers source-data acquisition and stewardship as well as transformation, validation and production of derived analysis-ready data.
 - `Deliverable` means one bounded formal output or event that is handed over, submitted, presented, released, assessed or otherwise consumed as an output. It includes reports, manuscripts, presentations, posters, submissions, grant applications, protocols, handovers and software releases.
 - `Epic` is a broad coordination outcome, not a synonym for top-level issue or parent issue. Native parent/sub-issue relationships carry hierarchy independently, so a Task, Deliverable, Analysis or other type may have sub-issues without becoming an Epic.
-- Routing remains separate through repository/Project topology and declared `project:*` or `subproject:*` labels where applicable. Milestones are optional temporal or checkpoint groupings, not a replacement classification dimension.
+- Routing uses native Project membership and explicit target context. Sub-project grouping uses its fixed field-first contract binding, with declared labels only when no field is configured. Milestones are optional temporal or checkpoint groupings, not a replacement classification dimension.
 
 The shared Class palette used by standard setup is:
 

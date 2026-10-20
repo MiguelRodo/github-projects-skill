@@ -1,3 +1,5 @@
+> Current routing/storage: [membership and storage migration](membership-storage-migration.md) supersedes legacy label-only selection below. Queue completion permits one active Project request per issue; Sub-project set/clear actions are supported.
+
 # Local Chat-to-pj administration queue
 
 Use this queue when an authorised GitHub issue or Project mutation cannot be completed by the current chat/provider and should be finished later from the trusted local `pj` workspace. The resolved repository contract must declare a `Chat implementation label`.

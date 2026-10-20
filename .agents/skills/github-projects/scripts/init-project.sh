@@ -306,7 +306,7 @@ EOF
 - This is a $governance Project.
 EOF
   if [[ "$mode" == "project" ]]; then
-    routing_rule="The dispatcher routing label selects this Project; it is not a sub-project label."
+    routing_rule="Native Project membership selects this Project; explicit intent selects new placement."
   else
     routing_rule="Project membership determines Project scope; no routing label is required."
   fi
@@ -514,12 +514,7 @@ add_project_to_dispatcher() {
   dispatcher_has_value 2 "$project_key" &&
     die "Project key $project_key is already configured"
 
-  routing_label="project:$project_key"
-  [[ -n "$routing_label" && "$routing_label" != *"|"* &&
-     "$routing_label" != *$'\n'* ]] ||
-    die "routing label must be non-empty and contain no table separator"
-  dispatcher_has_value 3 "$routing_label" &&
-    die "routing label $routing_label is already configured"
+  routing_label="-"
 
   child_contract=".projects/projects/$project_key.md"
   [[ ! -e "$repository_root/$child_contract" ]] ||
@@ -533,7 +528,7 @@ add_project_to_dispatcher() {
       "$transaction_dir/.projects/projects/"
   fi
   write_project_contract "$transaction_dir/$child_contract" project \
-    "$project_key" "label:$routing_label"
+    "$project_key" "membership"
   route_row="| $project_key | $routing_label | $project_number | $child_contract |"
   append_dispatcher_route "$transaction_dir/.projects/project.md" "$route_row"
   bash "$script_dir/validate-contract.sh" "$transaction_dir"

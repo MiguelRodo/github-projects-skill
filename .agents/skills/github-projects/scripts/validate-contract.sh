@@ -237,7 +237,7 @@ validate_dispatcher() {
     [[ "$project_number" =~ ^[1-9][0-9]*$ ]] || die "$file has an invalid route Project number"
     [[ "$contract" == .projects/projects/*.md && "$contract" != *".."* ]] || die "$file route contract must be under .projects/projects/"
     [[ "$keys" != *$'\n'"$project_key"$'\n'* ]] || die "$file has a duplicate Project key"
-    [[ "$labels" != *$'\n'"$routing_label"$'\n'* ]] || die "$file has a duplicate routing label"
+    [[ "$routing_label" == "-" || "$labels" != *$'\n'"$routing_label"$'\n'* ]] || die "$file has a duplicate routing label"
     [[ "$numbers" != *$'\n'"$project_number"$'\n'* ]] || die "$file has a duplicate Project number"
     keys+="$project_key"$'\n'; labels+="$routing_label"$'\n'; numbers+="$project_number"$'\n'
 
@@ -250,7 +250,7 @@ validate_dispatcher() {
     leaf_number="$(require_table_value "$leaf_content" "Project number" "$leaf")"
     leaf_repository="$(require_table_value "$leaf_content" "Issue repository" "$leaf")"
     [[ "$leaf_key" == "$project_key" ]] || die "$file route key disagrees with $contract"
-    [[ "$leaf_label" == "label:$routing_label" ]] || die "$file route label disagrees with $contract"
+    [[ "$leaf_label" == "membership" || ( "$routing_label" != "-" && "$leaf_label" == "label:$routing_label" ) ]] || die "$file route label disagrees with $contract"
     [[ "$leaf_number" == "$project_number" ]] || die "$file route number disagrees with $contract"
     [[ "$leaf_repository" == "$repository" ]] || die "$file issue repository disagrees with $contract"
     ((route_count += 1))

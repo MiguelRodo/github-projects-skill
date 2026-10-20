@@ -37,6 +37,7 @@ type FieldLocation struct {
 }
 
 type Project struct {
+	Subproject     SubprojectBinding        `json:"subproject"`
 	Key            string                   `json:"key,omitempty"`
 	Owner          string                   `json:"owner"`
 	OwnerType      string                   `json:"ownerType,omitempty"`
@@ -233,7 +234,7 @@ func (c *Configuration) Resolve(selector Selector) (Project, error) {
 		if selector.Key != "" && route.Key != selector.Key {
 			continue
 		}
-		if selector.RoutingLabel != "" && route.RoutingLabel != selector.RoutingLabel {
+		if selector.RoutingLabel != "" && (route.RoutingLabel == "-" || route.RoutingLabel != selector.RoutingLabel) {
 			continue
 		}
 		if selector.Number != 0 && route.Number != selector.Number {
@@ -601,6 +602,10 @@ func validateProjectDocument(doc *document, expectedMode string) (Project, error
 	if err := validateStyle(doc, "Issue prose style", map[string]bool{"": true, "natural-direct": true}); err != nil {
 		return Project{}, err
 	}
+	project.Subproject, err = validateSubproject(doc, project.Key)
+	if err != nil {
+		return Project{}, err
+	}
 	project.FieldLocations = make(map[string]FieldLocation)
 	for _, row := range fieldRows {
 		if len(row) >= 3 {
@@ -801,7 +806,7 @@ func validateDispatcher(root string, doc *document) (*Configuration, error) {
 		if keys[key] {
 			return nil, fmt.Errorf("%s has a duplicate Project key", doc.path)
 		}
-		if labels[label] {
+		if label != "-" && labels[label] {
 			return nil, fmt.Errorf("%s has a duplicate routing label", doc.path)
 		}
 		if numbers[number] {
@@ -820,7 +825,7 @@ func validateDispatcher(root string, doc *document) (*Configuration, error) {
 		if project.Key != key {
 			return nil, fmt.Errorf("%s route key disagrees with %s", doc.path, childRelative)
 		}
-		if project.Routing != "label:"+label {
+		if (label == "-" && project.Routing != "membership") || (label != "-" && project.Routing != "label:"+label && project.Routing != "membership") {
 			return nil, fmt.Errorf("%s route label disagrees with %s", doc.path, childRelative)
 		}
 		if project.Number != number {

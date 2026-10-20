@@ -451,7 +451,7 @@ grep -Fq '| Mode | dispatcher |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
 grep -Fq '| Governance | personal |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
-grep -Fq '| example-planning | project:example-planning | 12 | .projects/projects/example-planning.md |' \
+grep -Fq '| example-planning | - | 12 | .projects/projects/example-planning.md |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
 grep -Fq '| Mode | project |' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
@@ -459,7 +459,7 @@ grep -Fq '| Project key | example-planning |' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
 grep -Fq '| Owner type | organization |' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
-grep -Fq '| Routing | label:project:example-planning |' \
+grep -Fq '| Routing | membership |' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
 if grep -Eq 'Issue write-up style|Issue prose style|Priority mapping status|## Class / Issue Type' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"; then
@@ -528,9 +528,9 @@ grep -Fq 'Project key example-planning is already configured' \
     >"$test_tmp_dir/init-multiple-add.log" 2>&1
 )
 bash "$validator" "$test_tmp_dir/init-multiple"
-grep -Fq '| example-planning | project:example-planning | 12 | .projects/projects/example-planning.md |' \
+grep -Fq '| example-planning | - | 12 | .projects/projects/example-planning.md |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
-grep -Fq '| second-planning | project:second-planning | 13 | .projects/projects/second-planning.md |' \
+grep -Fq '| second-planning | - | 13 | .projects/projects/second-planning.md |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
 grep -Fq '| Project title | Second planning |' \
   "$test_tmp_dir/init-multiple/.projects/projects/second-planning.md"
@@ -724,5 +724,6 @@ bash "$test_dir/queue-classify.sh"
 python3 "$test_dir/test-queue-execute.py"
 python3 "$test_dir/test-queue-review.py"
 python3 "$test_dir/test-onboarding.py"
+python3 "$test_dir/test-project-context.py"
 
 echo "github-projects tests passed"

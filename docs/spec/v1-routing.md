@@ -1,6 +1,8 @@
 # V1 dispatcher and routing specification
 
-Status: normative for `projectctl/v1`.
+Current runtime behaviour is defined in [membership and storage migration](../../skills/github-projects/references/membership-storage-migration.md). Native membership is authoritative; Sub-project storage may be a configured single-select field. Label-only routing and required-label assumptions below describe historical compatibility, not current runtime authority.
+
+Status: archived legacy `projectctl/v1` wire-format specification.
 
 ## Scope
 

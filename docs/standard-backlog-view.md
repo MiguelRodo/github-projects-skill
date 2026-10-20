@@ -1,3 +1,5 @@
+Current view and preservation rules are in [membership and storage migration](../skills/github-projects/references/membership-storage-migration.md#new-view-defaults-and-supported-boundary). Existing boards and roadmaps must not be converted; useful existing table extras survive reconciliation.
+
 # Standard Backlog Project view
 
 `projects project setup-backlog-view` creates or reconciles the shared human-facing GitHub Project view after the standard field profile has been established.
