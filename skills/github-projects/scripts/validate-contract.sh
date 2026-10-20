@@ -204,6 +204,16 @@ validate_project_file() {
   validate_priority_mapping "$content" "$file"
   validate_colour_tables "$content" "$file"
   validate_styles "$content" "$file"
+  python3 - "$file" "$(dirname "${BASH_SOURCE[0]}")" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+from project_context import binding
+try:
+    binding(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except ValueError as error:
+    raise SystemExit(f"ERROR: {sys.argv[1]}: {error}")
+PY
 
   if grep -Eq '(gh[pousr]_[A-Za-z0-9]{20,}|GH_TOKEN[[:space:]]*=|GITHUB_TOKEN[[:space:]]*=)' "$file"; then
     die "$file appears to contain a credential"

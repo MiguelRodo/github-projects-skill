@@ -8,6 +8,8 @@ validator="$skill_dir/scripts/validate-contract.sh"
 setup="$skill_dir/scripts/setup.sh"
 initializer="$skill_dir/scripts/init-project.sh"
 
+python3 "$test_dir/test-project-context.py"
+
 bash -n "$validator"
 bash -n "$setup"
 bash -n "$initializer"
@@ -724,6 +726,5 @@ bash "$test_dir/queue-classify.sh"
 python3 "$test_dir/test-queue-execute.py"
 python3 "$test_dir/test-queue-review.py"
 python3 "$test_dir/test-onboarding.py"
-python3 "$test_dir/test-project-context.py"
 
 echo "github-projects tests passed"
