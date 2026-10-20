@@ -142,9 +142,12 @@ def execute(gh, journal, target, path, rollback=False):
         if rollback:
             change(gh, target, repository, issue, entry['previousKey'], apply=True)
             fresh = inspect(gh, target, repository, issue)
+            check_preservation(entry, fresh, target, final=False)
             fresh_labels = set(fresh['labels'])
-            migration_created_labels = expected_labels(entry, target) - original_labels
-            if not fresh_labels <= original_labels | migration_created_labels:
+            migrated_labels = expected_labels(entry, target)
+            migration_created_labels = migrated_labels - original_labels
+            if (not fresh_labels.issubset(original_labels | migration_created_labels)
+                    or not (original_labels & migrated_labels).issubset(fresh_labels)):
                 raise ValueError('unrelated labels changed during rollback; preserving concurrent labels')
             add = original_labels - fresh_labels
             remove = fresh_labels & migration_created_labels

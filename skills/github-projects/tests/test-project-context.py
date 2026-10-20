@@ -330,6 +330,24 @@ class Context(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'exact legacy route'):
             migration.plan('gh', LEGACY,FIELD,[42],['unrelated'])
 
+    def test_rollback_preserves_concurrent_removal_of_unrelated_label(self):
+        fake = Fake()
+        with fake.patches(), tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'snapshot.json'
+            journal = migration.plan('gh',LEGACY,FIELD,[42],['project:work'])
+            migration.save(path,journal)
+            migration.execute('gh',journal,FIELD,path)
+            original_change = migration.change
+            def concurrent_change(*args, **kwargs):
+                result = original_change(*args, **kwargs)
+                fake.labels.discard('unrelated')
+                return result
+            with patch.object(migration,'change',concurrent_change), \
+                 self.assertRaisesRegex(ValueError,'preserving concurrent labels'):
+                migration.execute('gh',journal,FIELD,path,rollback=True)
+            self.assertNotIn('unrelated',fake.labels)
+            self.assertEqual(json.loads(path.read_text())['entries'][0]['status'],'rollback_pending')
+
     def test_migration_preserves_shared_grouping_for_other_memberships(self):
         fake = Fake()
         native = fake.graphql
