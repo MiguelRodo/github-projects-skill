@@ -281,6 +281,51 @@ class Context(unittest.TestCase):
             self.assertEqual(subproject.inspect('gh',FIELD,'octo/issues',42),original)
             migration.execute('gh',journal,FIELD,path,rollback=True)
 
+    def test_journal_save_recovers_from_orphans_and_cleans_failed_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'journal.json'
+            migration.save(path, {'phase':'snapshot'})
+            # Both the previous fixed-name format and a killed new writer can
+            # leave files behind. Neither must block saving the next phase.
+            orphans = [Path(directory)/'journal.json.tmp', Path(directory)/'journal.json.killed.tmp']
+            for orphan in orphans:
+                orphan.write_text('interrupted write')
+            migration.save(path, {'phase':'apply_pending'})
+            self.assertEqual(json.loads(path.read_text()), {'phase':'apply_pending'})
+            before = set(Path(directory).iterdir())
+            with patch.object(migration.json,'dump',side_effect=OSError('disk full')):
+                with self.assertRaisesRegex(OSError,'disk full'):
+                    migration.save(path, {'phase':'must not commit'})
+            self.assertEqual(json.loads(path.read_text()), {'phase':'apply_pending'})
+            self.assertEqual(set(Path(directory).iterdir()),before)
+            with patch.object(migration.os,'replace',side_effect=OSError('interrupted rename')):
+                with self.assertRaisesRegex(OSError,'interrupted rename'):
+                    migration.save(path, {'phase':'must not commit'})
+            self.assertEqual(set(Path(directory).iterdir()),before)
+            migration.save(path, {'phase':'rolled_back'})
+            self.assertEqual(json.loads(path.read_text()), {'phase':'rolled_back'})
+
+    def test_rollback_preserves_label_added_after_initial_preservation_check(self):
+        fake = Fake()
+        with fake.patches(), tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'snapshot.json'
+            journal = migration.plan('gh',LEGACY,FIELD,[42],['project:work'])
+            migration.save(path,journal)
+            migration.execute('gh',journal,FIELD,path)
+            original_change = migration.change
+            def concurrent_change(*args, **kwargs):
+                result = original_change(*args, **kwargs)
+                fake.labels.add('concurrent-user-label')
+                return result
+            writes_before = len(fake.writes)
+            with patch.object(migration,'change',concurrent_change), \
+                 self.assertRaisesRegex(ValueError,'preserving concurrent labels'):
+                migration.execute('gh',journal,FIELD,path,rollback=True)
+            self.assertIn('concurrent-user-label',fake.labels)
+            self.assertFalse(any('concurrent-user-label' in str(write)
+                                 for write in fake.writes[writes_before:]))
+            self.assertEqual(json.loads(path.read_text())['entries'][0]['status'],'rollback_pending')
+
     def test_migration_rejects_unowned_routing_label(self):
         with self.assertRaisesRegex(ValueError,'exact legacy route'):
             migration.plan('gh', LEGACY,FIELD,[42],['unrelated'])

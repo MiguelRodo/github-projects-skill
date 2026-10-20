@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
@@ -27,13 +28,25 @@ def save(path, journal):
     # Persist intended writes before sending them. Never overwrite via a symlink.
     if path.is_symlink() or path.parent.is_symlink():
         raise ValueError('unsafe migration journal path')
-    temporary = path.with_suffix(path.suffix + '.tmp')
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, 'w') as handle:
-        json.dump(journal, handle, indent=2, sort_keys=True)
-        handle.flush()
-        os.fsync(handle.fileno())
-    temporary.replace(path)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + '.', suffix='.tmp')
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, 'w') as handle:
+            json.dump(journal, handle, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        if hasattr(os, 'O_DIRECTORY'):
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    finally:
+        # A handled disk/write failure removes only this invocation's file.
+        # A killed process may leave an orphan; its unique name never prevents
+        # a later apply/rollback from saving its own journal state.
+        temporary.unlink(missing_ok=True)
 
 
 def plan(gh, source, target, issues, owned_routes):
@@ -129,8 +142,12 @@ def execute(gh, journal, target, path, rollback=False):
         if rollback:
             change(gh, target, repository, issue, entry['previousKey'], apply=True)
             fresh = inspect(gh, target, repository, issue)
-            add = original_labels - set(fresh['labels'])
-            remove = set(fresh['labels']) - original_labels
+            fresh_labels = set(fresh['labels'])
+            migration_created_labels = expected_labels(entry, target) - original_labels
+            if not fresh_labels <= original_labels | migration_created_labels:
+                raise ValueError('unrelated labels changed during rollback; preserving concurrent labels')
+            add = original_labels - fresh_labels
+            remove = fresh_labels & migration_created_labels
         else:
             change(gh, target, repository, issue, entry['key'], apply=True)
             add, remove = set(), set(entry['removeLabels'])
