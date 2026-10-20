@@ -32,7 +32,11 @@ elif args[:2] == ['api', 'user']:
 elif args[:2] == ['project', 'list']:
     print('[]')
 elif args[:2] == ['project', 'field-list']:
-    print(json.dumps({'fields':[], 'totalCount':0}))
+    fields = []
+    if os.environ.get('FAKE_SUBPROJECT_FIELD'):
+        fields = [{'id':'SUB','name':'Sub-project','type':'ProjectV2SingleSelectField',
+                   'options':[{'id':'TOOLS','name':'Tools'}]}]
+    print(json.dumps({'fields':fields, 'totalCount':len(fields)}))
 elif args[:2] == ['project', 'view']:
     print(json.dumps({'number': int(args[2]), 'title': 'Work'}))
 elif args == ['api', '--paginate', '--slurp', 'repos/octo/issues/labels'] or args == ['api', '--paginate', '--slurp', 'repos/octo/tools/labels']:
@@ -150,6 +154,34 @@ class Onboarding(unittest.TestCase):
             self.assertIn('Preserve this guidance.', (root / 'AGENTS.md').read_text())
             self.assertEqual(self.git(root, 'branch', '--show-current'), 'onboarding/work')
             self.assertEqual((root / 'unrelated').read_text(), 'untouched\n')
+
+    def test_existing_subproject_field_is_authoritative(self):
+        self.success(self.run_init('--subproject', 'tools', central=True,
+                                   env=dict(self.env, FAKE_SUBPROJECT_FIELD='1')))
+        for path in (self.tools / '.projects/project.md', self.issues / '.projects/projects/work.md'):
+            text = path.read_text()
+            self.assertIn('| Sub-project storage | field |', text)
+            self.assertIn('| Sub-project field type | SINGLE_SELECT |', text)
+            self.assertIn('| tools | Tools |', text)
+        self.assertEqual(json.loads((self.state / 'labels').read_text()), [])
+        for root in (self.tools, self.issues):
+            self.commit(root)
+        before = self.contracts()
+        missing = self.run_init('--subproject', 'tools', central=True)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn('expected Sub-project field missing', missing.stderr)
+        self.assertEqual(before, self.contracts())
+
+    def test_new_field_requires_migration_from_label_storage(self):
+        self.success(self.run_init('--subproject', 'tools', central=True))
+        for root in (self.tools, self.issues):
+            self.commit(root)
+        before = self.contracts()
+        result = self.run_init('--subproject', 'tools', central=True,
+                               env=dict(self.env, FAKE_SUBPROJECT_FIELD='1'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('migrate before onboarding', result.stderr)
+        self.assertEqual(before, self.contracts())
 
     def test_central_subproject_grouping(self):
         self.success(self.run_init('--subproject', 'tools', central=True))

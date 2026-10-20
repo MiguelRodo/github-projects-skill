@@ -162,7 +162,12 @@ def authority_payload(comment: dict) -> dict | None:
         project = target['project']
         if value['apiVersion'] != 'github-projects/queue-authority/v1' or value['kind'] != 'QueueAuthority':
             return None
-        if not isinstance(project['owner'], str) or type(project['number']) is not int:
+        if (not isinstance(project['owner'], str) or not project['owner']
+                or type(project['number']) is not int or project['number'] < 1
+                or not isinstance(target['repository'], str)
+                or type(target['issue']) is not int or target['issue'] < 1
+                or not isinstance(value['spec']['actions'], list)
+                or not all(isinstance(action, dict) for action in value['spec']['actions'])):
             return None
         return value
     except (ValueError, KeyError, TypeError):
