@@ -101,7 +101,7 @@ rollout evidence outside public repositories; journals contain issue content.
 7. For rollback, pause writers again, use the same contract digests and journal,
    and run `--mode rollback --rollout-evidence ...`, then `--mode verify`.
    Restore the source contract revision and the snapshotted filters separately.
-   The tool restores only recorded item values and exact labels, refusing
+   A per-Project migration retains legacy shared grouping labels when the issue has other memberships; retire those only after every sharing consumer is independently verified. The tool restores only recorded item values and exact labels, refusing
    unrelated concurrent changes. Retain journals until rollout is accepted.
 
 Evidence JSON must include `targetDigest` from the snapshot, `writersPaused`,

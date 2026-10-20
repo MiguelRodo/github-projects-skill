@@ -282,6 +282,19 @@ class Context(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'exact legacy route'):
             migration.plan('gh', LEGACY,FIELD,[42],['unrelated'])
 
+    def test_migration_preserves_shared_grouping_for_other_memberships(self):
+        fake = Fake()
+        native = fake.graphql
+        def graphql(gh, query, **variables):
+            value = native(gh, query, **variables)
+            if 'projectItems' in query:
+                value['repository']['issue']['projectItems']['nodes'].append({
+                    'id':'OTHER','project':{'id':'OTHER_PROJECT','number':5,'owner':{'login':'octo'}}})
+            return value
+        with fake.patches(), patch.object(context, 'graphql', graphql):
+            journal = migration.plan('gh', LEGACY,FIELD,[42],['project:work'])
+            self.assertEqual(journal['entries'][0]['removeLabels'], ['project:work'])
+
     def test_view_defaults_and_filtered_classification(self):
         fields = [{'id':i,'node_id':f'N{i}','name':name,'data_type':'single_select' if name=='Sub-project' else 'text'}
                   for i,name in enumerate(['Title','Due date','Target date','Priority','Status','Class','Sub-issues progress','Sub-project','Labels'],1)]

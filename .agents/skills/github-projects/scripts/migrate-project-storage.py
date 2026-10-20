@@ -66,7 +66,9 @@ def plan(gh, source, target, issues, owned_routes):
             raise ValueError(f'issue {issue} has conflicting target grouping; reconcile before migration')
         previous_key = next((k for k, value in new.vocabulary.items() if value == before['current']), None)
         remove = set(owned_routes) & set(before['labels'])
-        if old.storage == 'labels':
+        # A shared legacy grouping may still classify this issue in another
+        # Project. A per-Project cutover cannot retire that other consumer.
+        if old.storage == 'labels' and (old.scope == 'project' or len(before['memberships']) == 1):
             remove |= set(old.vocabulary.values()) & set(before['labels'])
         remove -= set(new.vocabulary.values()) if new.storage == 'labels' else set()
         entries.append({'issue': issue, 'key': key, 'previousKey': previous_key, 'before': before,
