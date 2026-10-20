@@ -84,11 +84,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--contract', required=True)
     parser.add_argument('--project-number', type=int, required=True)
-    parser.add_argument('--name', default='all')
+    parser.add_argument('--name', help='defaults to the Sub-project key for filtered views, otherwise all')
     parser.add_argument('--subproject')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--gh', default=os.environ.get('PROJECTS_GH_BIN', 'gh'))
     args = parser.parse_args()
+    if args.name is None:
+        args.name = args.subproject or 'all'
     text = Path(args.contract).read_text()
     owner, number = project_identity(text)
     if number != args.project_number:

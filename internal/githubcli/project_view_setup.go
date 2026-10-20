@@ -546,6 +546,9 @@ func planBacklogViewChanges(views []projectViewNode, spec backlogViewSpec) ([]St
 			}
 			continue
 		}
+		if name == "Backlog" && len(selected) > 1 {
+			return nil, fmt.Errorf("ambiguous reconciliation: preserve duplicate legacy Backlog views and resolve them in the browser")
+		}
 		wanted := overviewSpec(spec, selected[0])
 		for _, view := range selected[1:] {
 			if overviewSpec(spec, view).Filter != wanted.Filter {

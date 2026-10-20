@@ -20,6 +20,9 @@ func TestDefaultAllCreateAndCustomBacklogPreservation(t *testing.T) {
 	if err != nil || len(changes) != 1 || changes[0].Action != "create_view" {
 		t.Fatalf("missing all: %v %v", changes, err)
 	}
+	if _, err := planBacklogViewChanges([]projectViewNode{all, backlog, backlog}, backlogTestSpec()); err == nil {
+		t.Fatal("duplicate legacy Backlogs must be preserved for explicit reconciliation")
+	}
 	client := &captureClient{}
 	if _, err := createBacklogView(context.Background(), client, userSetupProject(), backlogViewState{ownerType: "user", spec: backlogTestSpec()}); err != nil {
 		t.Fatal(err)
