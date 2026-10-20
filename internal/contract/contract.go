@@ -825,7 +825,7 @@ func validateDispatcher(root string, doc *document) (*Configuration, error) {
 		if project.Key != key {
 			return nil, fmt.Errorf("%s route key disagrees with %s", doc.path, childRelative)
 		}
-		if (label == "-" && project.Routing != "membership") || (label != "-" && project.Routing != "label:"+label && project.Routing != "membership") {
+		if (label == "-" && project.Routing != "membership") || (label != "-" && project.Routing != "label:"+label) {
 			return nil, fmt.Errorf("%s route label disagrees with %s", doc.path, childRelative)
 		}
 		if project.Number != number {

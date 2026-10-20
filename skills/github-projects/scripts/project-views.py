@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -23,6 +24,8 @@ def spec(text, fields, owner_type, key=None):
             visible.append(by_name[name]['id'])
         elif name in ['Title', 'Priority', 'Status', 'Class']:
             raise ValueError('missing required view field: ' + name)
+    if store.storage == 'field' and (store.field not in by_name or by_name[store.field]['data_type'].lower() != 'single_select'):
+        raise ValueError('expected Sub-project single-select field missing or changed')
     filter_text = ''
     classification = store.field if store.storage == 'field' else 'Labels'
     if key:
@@ -33,8 +36,10 @@ def spec(text, fields, owner_type, key=None):
             field = by_name[classification]
             if field['data_type'].lower() != 'single_select':
                 raise ValueError('expected Sub-project field type changed')
-            # GitHub filter syntax: quote both field name and exact option.
-            filter_text = json.dumps(classification) + ':' + json.dumps(value)
+            qualifier = table_value(text, 'Sub-project filter qualifier') or classification.lower()
+            if not re.fullmatch(r'[a-z0-9_-]+', qualifier):
+                raise ValueError('configure the exact Sub-project filter qualifier for a field with spaces')
+            filter_text = qualifier + ':' + json.dumps(value)
         else:
             filter_text = 'label:' + json.dumps(value)
     elif store.storage != 'none':
@@ -91,10 +96,23 @@ def main():
     owner_type = table_value(text, 'Owner type') or {'User': 'user', 'Organization': 'organization'}[gh_json(args.gh, 'api', 'users/' + owner)['type']]
     endpoint = ('users/' if owner_type == 'user' else 'orgs/') + f'{owner}/projectsV2/{number}'
     fields = flatten_pages(gh_json(args.gh, 'api', '--paginate', '--slurp', endpoint + '/fields?per_page=100'))
+    store = binding(text)
+    if store.storage == 'field':
+        definitions = gh_json(args.gh, 'project', 'field-list', str(number), '--owner', owner, '--format', 'json', '--limit', '100')
+        if definitions.get('totalCount', 0) > len(definitions.get('fields', [])):
+            raise ValueError('incomplete Project field definitions')
+        matches = [f for f in definitions.get('fields', []) if f['name'] == store.field]
+        if len(matches) != 1 or matches[0].get('type') not in ('ProjectV2SingleSelectField', 'SINGLE_SELECT'):
+            raise ValueError('expected Sub-project field missing or changed')
+        options = [o['name'] for o in matches[0].get('options', [])]
+        if any(options.count(value) != 1 for value in store.vocabulary.values()):
+            raise ValueError('Sub-project option mapping missing or ambiguous')
     body = dict(spec(text, fields, owner_type, args.subproject), name=args.name)
     views = read_views(args.gh, owner, number, owner_type)
     existing = [v for v in views if v['name'] == args.name]
     manual = ['Verify column order in the GitHub Project browser; the API returns visible fields as an unordered set.']
+    if args.subproject:
+        manual.append('Verify visible items match the exact Sub-project classification in the browser.')
     if owner_type == 'organization':
         manual.append('Show native Type in the browser. Public API may reject or omit this column; verify it manually.')
     if existing:

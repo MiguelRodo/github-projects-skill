@@ -15,7 +15,8 @@ from queue_common import flatten_pages, gh_json, table_value
 
 def inspect(gh: str, text: str, repository: str, issue: int) -> dict:
     owner, number = project_identity(text)
-    selected = [v for v in memberships(gh, repository, issue) if (v['owner'], v['number']) == (owner, number)]
+    all_memberships = memberships(gh, repository, issue)
+    selected = [v for v in all_memberships if (v['owner'], v['number']) == (owner, number)]
     if len(selected) != 1:
         raise ValueError('exact target Project membership required; add membership explicitly first')
     member = selected[0]
@@ -28,6 +29,8 @@ def inspect(gh: str, text: str, repository: str, issue: int) -> dict:
     if not schema or schema['fields']['pageInfo']['hasNextPage']:
         raise RuntimeError('incomplete or inaccessible Project field definitions')
     store = binding(text)
+    if store.storage == 'labels' and not store.scope and len(all_memberships) > 1:
+        raise ValueError('legacy label binding with multiple memberships requires declared shared or project scope')
     matches = [f for f in schema['fields']['nodes'] if f.get('name') == store.field]
     field = None
     if store.storage == 'field':
@@ -96,6 +99,8 @@ def change(gh: str, text: str, repository: str, issue: int, key: str | None, app
         endpoint = f'repos/{repository}'
         if desired:
             labels = flatten_pages(gh_json(gh, 'api', '--paginate', '--slurp', endpoint + '/labels?per_page=100'))
+            if any(v['name'].lower() == desired.lower() and v['name'] != desired for v in labels):
+                raise ValueError('case-only label collision; inspect before writing')
             if desired not in {v['name'] for v in labels}:
                 gh_json(gh, 'api', '--method', 'POST', endpoint + '/labels', '-f', 'name=' + desired, '-f', 'color=5319e7')
                 gh_json(gh, 'api', endpoint + '/labels/' + quote(desired, safe=''))

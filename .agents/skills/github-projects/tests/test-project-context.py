@@ -25,6 +25,7 @@ def load(name, filename):
 discovery = load('discovery', 'queue-discover.py')
 migration = load('migration', 'migrate-project-storage.py')
 views = load('views', 'project-views.py')
+classifier = load('classifier', 'queue-classify.py')
 
 BASE = '''| Contract version | 1 |
 | Mode | single |
@@ -180,6 +181,30 @@ class Context(unittest.TestCase):
         for invalid in (FIELD.replace('SINGLE_SELECT','TEXT'), LABELS.replace('subproject:work:tools','subproject:tools')):
             with self.assertRaises(ValueError): context.binding(invalid)
 
+    def test_agentic_subproject_set_clear_and_vocabulary_guard(self):
+        import io
+        import subprocess
+        from contextlib import redirect_stdout
+        fake = Fake()
+        fake.labels.add('pj:implement-chat')
+        for action, outcome in [({'kind':'subproject.value.set','value':'tools'}, 'deterministic'),
+                                ({'kind':'subproject.value.clear'}, 'deterministic'),
+                                ({'kind':'subproject.value.set','value':'unknown'}, 'blocked')]:
+            original = fake.gh
+            def gh(gh, *args):
+                if 'comments?' in args[-1]:
+                    return [[comment(intent(actions=[action]))]]
+                return original(gh, *args)
+            with tempfile.TemporaryDirectory() as directory, fake.patches():
+                path = Path(directory)/'contract.md'
+                path.write_text(FIELD)
+                output = io.StringIO()
+                with patch.object(classifier, 'gh_json', gh), patch.object(classifier, 'run', return_value=subprocess.CompletedProcess([],0,'','')), \
+                     patch.object(sys, 'argv', ['classify','--contract',str(path),'--repository','octo/issues','--issue','42']), redirect_stdout(output):
+                    classifier.main()
+                self.assertEqual(json.loads(output.getvalue())['classification'], outcome)
+                self.assertFalse(fake.writes)
+
     def test_label_free_discovery_and_unplaced_intent(self):
         fake = Fake()
         fake.labels = set()
@@ -266,7 +291,7 @@ class Context(unittest.TestCase):
         self.assertEqual(overall['sort_by'],[[4,'asc']])
         self.assertIn(8,overall['visible_fields'])
         filtered = views.spec(FIELD,fields,'user','tools')
-        self.assertEqual(filtered['filter'],'"Sub-project":"Tools"')
+        self.assertEqual(filtered['filter'],'sub-project:"Tools"')
         self.assertNotIn(8,filtered['visible_fields'])
         self.assertEqual(views.spec(LABELS,fields,'user','tools')['filter'],'label:"subproject:work:tools"')
         self.assertIn(9,views.spec(LABELS,fields,'user')['visible_fields'])

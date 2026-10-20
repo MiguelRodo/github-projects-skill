@@ -260,7 +260,7 @@ validate_dispatcher() {
     leaf_number="$(require_table_value "$leaf_content" "Project number" "$leaf")"
     leaf_repository="$(require_table_value "$leaf_content" "Issue repository" "$leaf")"
     [[ "$leaf_key" == "$project_key" ]] || die "$file route key disagrees with $contract"
-    [[ "$leaf_label" == "membership" || ( "$routing_label" != "-" && "$leaf_label" == "label:$routing_label" ) ]] || die "$file route label disagrees with $contract"
+    [[ ( "$routing_label" == "-" && "$leaf_label" == "membership" ) || ( "$routing_label" != "-" && "$leaf_label" == "label:$routing_label" ) ]] || die "$file route label disagrees with $contract"
     [[ "$leaf_number" == "$project_number" ]] || die "$file route number disagrees with $contract"
     [[ "$leaf_repository" == "$repository" ]] || die "$file issue repository disagrees with $contract"
     ((route_count += 1))
