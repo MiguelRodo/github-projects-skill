@@ -990,6 +990,9 @@ func ApplyStandardProjectSetup(ctx context.Context, client Client, project contr
 	if err != nil {
 		return fail("readback", fmt.Errorf("read back standard Project setup: %w", err))
 	}
+	if err := verifySubprojectSetupPreservation(project, state, finalState); err != nil {
+		return fail("readback", err)
+	}
 	finalPlan, err := planStandardProjectSetupFromState(project, finalState)
 	if err != nil {
 		return fail("readback", fmt.Errorf("read back standard Project setup: %w", err))

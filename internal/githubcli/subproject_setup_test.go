@@ -13,7 +13,7 @@ func TestSubprojectSetupPreservesIDsColoursDescriptionsAndExtras(t *testing.T) {
 	project := userSetupProject()
 	project.Subproject = contract.SubprojectBinding{Storage: "field", Field: "Sub-project", Vocabulary: map[string]string{"tools": "Tools"}}
 	current := []detailedProjectOption{{ID: "tools-id", Name: "Tools", Color: "BLUE", Description: "keep"}, {ID: "extra-id", Name: "Extra", Color: "RED", Description: "custom"}}
-	state := setupState{project: detailedProjectSchema{Fields: map[string]detailedProjectField{"sub-project": {Options: current}}}}
+	state := setupState{project: detailedProjectSchema{Fields: map[string]detailedProjectField{"sub-project": {Name: "Sub-project", Options: current}}}}
 	_, desired, err := subprojectSetupProfile(project, state)
 	if err != nil {
 		t.Fatal(err)
@@ -25,13 +25,79 @@ func TestSubprojectSetupPreservesIDsColoursDescriptionsAndExtras(t *testing.T) {
 	if !reflect.DeepEqual(got[:2], current) || got[2].Name != "Not assigned" {
 		t.Fatalf("existing options changed: %+v", got)
 	}
-	state.project.Fields["sub-project"] = detailedProjectField{Options: got}
+	state.project.Fields["sub-project"] = detailedProjectField{Name: "Sub-project", Options: got}
 	_, desired, err = subprojectSetupProfile(project, state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, changed, err = reconcileProjectOptions(got, desired); err != nil || changed {
 		t.Fatalf("repeat changed=%v err=%v", changed, err)
+	}
+}
+
+func subprojectSchema(t *testing.T, project contract.Project, fieldName string, options []detailedProjectOption) string {
+	t.Helper()
+	return schemaJSON(t, "user", project,
+		singleSelectFixture("status-field", "Status"),
+		dateFixture("due-field", "Due date"), dateFixture("target-field", "Target date"),
+		standardClassFixture(), priorityFixture(standardPriorityNames, originalPriorityIDs),
+		singleSelectFixture("group-field", fieldName, options...),
+	)
+}
+
+func TestApplySubprojectSetupRejectsAlteredOptionReadback(t *testing.T) {
+	before := []detailedProjectOption{{ID: "tools-id", Name: "Tools", Color: "BLUE", Description: "keep"}, {ID: "extra-id", Name: "Extra", Color: "RED", Description: "custom"}}
+	for _, mode := range []string{"preserved", "swapped names", "reordered", "recoloured", "description changed"} {
+		t.Run(mode, func(t *testing.T) {
+			project := userSetupProject()
+			project.Subproject = contract.SubprojectBinding{Storage: "field", Field: "Sub-project", Vocabulary: map[string]string{"tools": "Tools"}}
+			after := append(append([]detailedProjectOption{}, before...), detailedProjectOption{ID: "blank-id", Name: "Not assigned", Color: "GRAY"})
+			switch mode {
+			case "swapped names":
+				after[0].Name, after[1].Name = after[1].Name, after[0].Name
+			case "reordered":
+				after[0], after[1] = after[1], after[0]
+			case "recoloured":
+				after[0].Color = "YELLOW"
+			case "description changed":
+				after[0].Description = "changed"
+			}
+			options := []map[string]any{
+				{"id": "tools-id", "name": "Tools", "color": "BLUE", "description": "keep"},
+				{"id": "extra-id", "name": "Extra", "color": "RED", "description": "custom"},
+				{"name": "Not assigned", "color": "GRAY", "description": ""},
+			}
+			mutation := request{query: `mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  updateProjectV2Field(input: {fieldId: $fieldId, singleSelectOptions: $options}) {
+    projectV2Field { ... on ProjectV2SingleSelectField { id name options { id name color description } } }
+  }
+}`, variables: map[string]any{"fieldId": "group-field", "options": options}}
+			client := &seqClient{t: t, steps: []seqStep{
+				{request: detailedSchemaRequest("user"), out: subprojectSchema(t, project, "Sub-project", before)},
+				{request: mutation, out: `{}`},
+				{request: detailedSchemaRequest("user"), out: subprojectSchema(t, project, "Sub-project", after)},
+			}}
+			result, err := ApplyStandardProjectSetup(context.Background(), client, project, false)
+			client.done()
+			if mode == "preserved" {
+				if err != nil || !result.Verified {
+					t.Fatalf("preserved readback failed: %+v %v", result, err)
+				}
+			} else if err == nil || result.Verified || !strings.Contains(err.Error(), "preserv") {
+				t.Fatalf("corrupt readback accepted: %+v %v", result, err)
+			}
+		})
+	}
+}
+
+func TestApplySubprojectSetupRejectsCaseOnlyFieldNameBeforeWrite(t *testing.T) {
+	project := userSetupProject()
+	project.Subproject = contract.SubprojectBinding{Storage: "field", Field: "Sub-project"}
+	client := &seqClient{t: t, steps: []seqStep{{request: detailedSchemaRequest("user"), out: subprojectSchema(t, project, "sub-project", nil)}}}
+	result, err := ApplyStandardProjectSetup(context.Background(), client, project, false)
+	client.done()
+	if err == nil || result.Verified || !strings.Contains(err.Error(), "exactly match") {
+		t.Fatalf("case-only mismatch accepted: %+v %v", result, err)
 	}
 }
 
