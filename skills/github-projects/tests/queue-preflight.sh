@@ -164,6 +164,28 @@ grep -Fq -- '--label pj:implement-chat' "$tmp/provider.log"
 ! grep -Fq -- '--repo octo/other' "$tmp/provider.log"
 rm -rf "$workspace/broken"
 
+# Two implementation mirrors of the same central Project must not become
+# duplicate discovery authorities, even when a matching request is queued.
+python3 - "$workspace" <<'PY'
+from pathlib import Path
+import sys
+workspace = Path(sys.argv[1])
+central = (workspace / 'issues/.projects/projects/personal.md').read_text()
+for name in ('monitoring', 'updates'):
+    target = workspace / name / '.projects/project.md'
+    target.parent.mkdir(parents=True)
+    text = central.replace('| Mode | project |', '| Mode | single |')
+    text = text.replace('| Privacy | private |',
+                        '| Privacy | private |\n| Implementation repository | octo/' + name + ' |\n| Queue source | mirror |')
+    target.write_text(text)
+PY
+: >"$tmp/provider.log"
+output="$(run_preflight --project personal --subproject monitoring)"
+assert_line "$expected_status" "$output"
+assert_line "$expected_candidate" "$output"
+[ "$(grep -c $'^candidate\t' <<<"$output")" -eq 1 ]
+[ "$(grep -c 'issue list' "$tmp/provider.log")" -eq 1 ]
+
 : >"$tmp/provider.log"
 output="$(run_preflight --project personal --subproject finances)"
 assert_line "$(printf 'status\tempty')" "$output"
