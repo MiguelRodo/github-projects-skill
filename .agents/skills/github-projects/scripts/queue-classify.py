@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from queue_common import flatten_pages, gh_json, run, table_value
+from project_context import binding, single_request, authority_identity, memberships, select_context
 
 MARKER = "PJ implementation authority:"
 VERSION = "github-projects/queue-authority/v1"
@@ -31,6 +32,8 @@ SUPPORTED_ACTIONS = {
     "project.membership.add",
     "dimension.value.set",
     "issue.parent.set",
+    "subproject.value.set",
+    "subproject.value.clear",
 }
 REVIEW_FOCUS = {
     "authority",
@@ -257,16 +260,11 @@ def main() -> int:
         return 0
 
     comments = flatten_pages(pages)
-    marker_comments = [
-        comment
-        for comment in comments
-        if isinstance(comment.get("body"), str)
-        and comment["body"].startswith(MARKER)
-        and isinstance(comment.get("user"), dict)
-        and comment["user"].get("login") == login
-    ]
-    marker_comments.sort(key=lambda c: c.get("created_at") or "")
-    latest = marker_comments[-1] if marker_comments else None
+    try:
+        latest = single_request(comments, login)
+    except ValueError as exc:
+        emit("blocked", "queue.blocked.multiple_active_project_requests", detail=str(exc))
+        return 0
 
     mode = governance(contract)
     issue_author = (live.get("user") or {}).get("login")
@@ -306,6 +304,15 @@ def main() -> int:
         emit("blocked", "queue.blocked.project_mismatch")
         return 0
 
+    if not any(action.get("kind") == "project.membership.add" for action in spec["actions"]):
+        try:
+            select_context({(project_owner.lower(), int(project_number))},
+                           memberships(args.gh, args.repository, args.issue),
+                           (project_owner.lower(), int(project_number)), envelope)
+        except (ValueError, RuntimeError, KeyError) as exc:
+            emit("blocked", "queue.blocked.membership_context", detail=str(exc))
+            return 0
+
     classes = section_first_column(contract, "Class values") or set(DEFAULT_CLASSES)
     priorities = section_first_column(contract, "Priority mapping") or set(DEFAULT_PRIORITIES)
     statuses = section_first_column(contract, "Status mapping") or set(DEFAULT_STATUSES)
@@ -313,6 +320,18 @@ def main() -> int:
         priorities = set()
 
     for action in spec["actions"]:
+        if action.get("kind") in {"subproject.value.set", "subproject.value.clear"}:
+            required = {"kind", "value"} if action["kind"] == "subproject.value.set" else {"kind"}
+            try:
+                store = binding(contract)
+                if not exact_keys(action, required) or store.storage == "none":
+                    raise ValueError("invalid Sub-project action or binding")
+                if "value" in action:
+                    store.resolve(action["value"])
+            except (ValueError, TypeError) as exc:
+                emit("blocked", "queue.blocked.subproject_binding", detail=str(exc))
+                return 0
+            continue
         outcome, reason = classify_action(
             action, args.repository, args.issue, classes, priorities, statuses
         )
@@ -326,6 +345,8 @@ def main() -> int:
         repository=args.repository,
         issue=args.issue,
         shape=spec["shape"],
+        project=project,
+        authority=authority_identity(latest),
         actions=spec["actions"],
         review=spec.get("review"),
     )

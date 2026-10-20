@@ -51,18 +51,14 @@ func TestPlanBacklogViewNoopWhenStandard(t *testing.T) {
 	}
 }
 
-func TestPlanBacklogViewUpdatesBasicConfigurationInPlace(t *testing.T) {
-	view := standardBacklogTestView("v1", 1)
-	view.Layout = "BOARD_LAYOUT"
-	changes, err := planBacklogViewChanges([]projectViewNode{view}, backlogTestSpec())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(changes) != 1 || changes[0].Action != "update_view" || changes[0].ViewID != "v1" {
-		t.Fatalf("changes = %#v, want update_view for v1", changes)
-	}
-	if !strings.Contains(changes[0].Detail, "layout BOARD_LAYOUT->TABLE_LAYOUT") {
-		t.Fatalf("detail = %q, want the layout diff", changes[0].Detail)
+func TestPlanBacklogViewPreservesBoardsAndRoadmaps(t *testing.T) {
+	for _, layout := range []string{"BOARD_LAYOUT", "ROADMAP_LAYOUT"} {
+		view := standardBacklogTestView("v1", 1)
+		view.Layout = layout
+		changes, err := planBacklogViewChanges([]projectViewNode{view}, backlogTestSpec())
+		if err == nil || len(changes) != 0 {
+			t.Fatalf("layout %s: changes=%v error=%v; want preservation boundary", layout, changes, err)
+		}
 	}
 }
 
@@ -107,7 +103,7 @@ func TestBuildBacklogViewSpecUsesStandardOrderAndSkipsUnavailableOptionalFields(
 	for _, field := range spec.Visible {
 		names = append(names, field.Name)
 	}
-	want := []string{"Title", "Status", "People", "Priority", "Class"}
+	want := []string{"Title", "Priority", "Status", "Class"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("visible = %#v, want %#v", names, want)
 	}

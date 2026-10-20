@@ -204,6 +204,16 @@ validate_project_file() {
   validate_priority_mapping "$content" "$file"
   validate_colour_tables "$content" "$file"
   validate_styles "$content" "$file"
+  python3 - "$file" "$(dirname "${BASH_SOURCE[0]}")" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+from project_context import binding
+try:
+    binding(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except ValueError as error:
+    raise SystemExit(f"ERROR: {sys.argv[1]}: {error}")
+PY
 
   if grep -Eq '(gh[pousr]_[A-Za-z0-9]{20,}|GH_TOKEN[[:space:]]*=|GITHUB_TOKEN[[:space:]]*=)' "$file"; then
     die "$file appears to contain a credential"
@@ -237,7 +247,7 @@ validate_dispatcher() {
     [[ "$project_number" =~ ^[1-9][0-9]*$ ]] || die "$file has an invalid route Project number"
     [[ "$contract" == .projects/projects/*.md && "$contract" != *".."* ]] || die "$file route contract must be under .projects/projects/"
     [[ "$keys" != *$'\n'"$project_key"$'\n'* ]] || die "$file has a duplicate Project key"
-    [[ "$labels" != *$'\n'"$routing_label"$'\n'* ]] || die "$file has a duplicate routing label"
+    [[ "$routing_label" == "-" || "$labels" != *$'\n'"$routing_label"$'\n'* ]] || die "$file has a duplicate routing label"
     [[ "$numbers" != *$'\n'"$project_number"$'\n'* ]] || die "$file has a duplicate Project number"
     keys+="$project_key"$'\n'; labels+="$routing_label"$'\n'; numbers+="$project_number"$'\n'
 
@@ -250,7 +260,7 @@ validate_dispatcher() {
     leaf_number="$(require_table_value "$leaf_content" "Project number" "$leaf")"
     leaf_repository="$(require_table_value "$leaf_content" "Issue repository" "$leaf")"
     [[ "$leaf_key" == "$project_key" ]] || die "$file route key disagrees with $contract"
-    [[ "$leaf_label" == "label:$routing_label" ]] || die "$file route label disagrees with $contract"
+    [[ ( "$routing_label" == "-" && "$leaf_label" == "membership" ) || ( "$routing_label" != "-" && "$leaf_label" == "label:$routing_label" ) ]] || die "$file route label disagrees with $contract"
     [[ "$leaf_number" == "$project_number" ]] || die "$file route number disagrees with $contract"
     [[ "$leaf_repository" == "$repository" ]] || die "$file issue repository disagrees with $contract"
     ((route_count += 1))

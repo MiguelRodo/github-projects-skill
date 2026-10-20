@@ -391,6 +391,8 @@ def assert_agent_context(receipt: dict, tmp: Path, reason: str) -> None:
         "repository": "octo/issues",
         "issue": 42,
         "url": "https://github.com/octo/issues/issues/42",
+        "project": {"owner": "octo", "number": 38},
+        "authority": receipt["target"].get("authority"),
     }
     assert context["classification"] == {
         "classification": "needs_agent",

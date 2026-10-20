@@ -28,9 +28,15 @@ elif args[:2] == ['repo', 'view']:
 elif args[:2] == ['api', 'users/octo']:
     print(json.dumps({'type': 'User'}))
 elif args[:2] == ['api', 'user']:
-    print('octo')
+    print('octo' if '--jq' in args else json.dumps({'login':'octo'}))
 elif args[:2] == ['project', 'list']:
     print('[]')
+elif args[:2] == ['project', 'field-list']:
+    fields = []
+    if os.environ.get('FAKE_SUBPROJECT_FIELD'):
+        fields = [{'id':'SUB','name':'Sub-project','type':'ProjectV2SingleSelectField',
+                   'options':[{'id':'TOOLS','name':'Tools'}]}]
+    print(json.dumps({'fields':fields, 'totalCount':len(fields)}))
 elif args[:2] == ['project', 'view']:
     print(json.dumps({'number': int(args[2]), 'title': 'Work'}))
 elif args == ['api', '--paginate', '--slurp', 'repos/octo/issues/labels'] or args == ['api', '--paginate', '--slurp', 'repos/octo/tools/labels']:
@@ -44,8 +50,17 @@ elif args[:2] == ['label', 'create']:
 elif args[:2] == ['issue', 'list']:
     assert args[args.index('--repo')+1] == 'octo/issues'
     assert args[args.index('--state')+1] == 'open'
-    assert 'project:work' in args
-    print('42\\thttps://github.com/octo/issues/issues/42')
+    assert 'project:work' not in args
+    print(json.dumps([{'number':42,'url':'https://github.com/octo/issues/issues/42','labels':[{'name':'pj:implement-chat'}]}]))
+elif args[:1] == ['api'] and 'comments?' in args[-1]:
+    payload = {'apiVersion':'github-projects/queue-authority/v1','kind':'QueueAuthority','spec':{
+      'target':{'repository':'octo/issues','issue':42,'project':{'owner':'octo','number':40}},
+      'shape':'existing_task','actions':[{'kind':'project.membership.add'},{'kind':'subproject.value.set','value':'tools'}]}}
+    print(json.dumps([[{'body':'PJ implementation authority:\\n```json\\n'+json.dumps(payload)+'\\n```',
+      'user':{'login':'octo'},'created_at':'2026-01-01','updated_at':'2026-01-01'}]]))
+elif args[:2] == ['api', 'graphql']:
+    print(json.dumps({'data':{'repository':{'issue':{'id':'I1','projectItems':{
+      'nodes':[],'pageInfo':{'hasNextPage':False}}}}}}))
 else:
     sys.exit('unexpected fake provider call: ' + repr(args))
 '''
@@ -110,7 +125,7 @@ class Onboarding(unittest.TestCase):
         self.success(self.run_init())
         contract = (self.tools / '.projects/project.md').read_text()
         self.assertIn('| Issue repository | octo/tools |', contract)
-        self.assertIn('| Routing | Project membership; no routing label |', contract)
+        self.assertIn('| Routing | membership |', contract)
         self.assertFalse((self.issues / '.projects').exists())
         self.assertEqual(json.loads((self.state / 'labels').read_text()), [])
         self.assertEqual(self.git(self.tools, 'branch', '--show-current'), 'onboarding/work')
@@ -129,23 +144,51 @@ class Onboarding(unittest.TestCase):
         local = (self.tools / '.projects/project.md').read_text()
         dispatcher = (self.issues / '.projects/project.md').read_text()
         child = (self.issues / '.projects/projects/work.md').read_text()
-        self.assertIn('| work | project:work | 40 | .projects/projects/work.md |', dispatcher)
+        self.assertIn('| work | - | 40 | .projects/projects/work.md |', dispatcher)
         for text in (local, child):
             self.assertIn('| Issue repository | octo/issues |', text)
-            self.assertIn('| Routing | label:project:work |', text)
+            self.assertIn('| Routing | membership |', text)
         self.assertIn('| Implementation repository | octo/tools |', child)
-        self.assertEqual(json.loads((self.state / 'labels').read_text()), ['project:work'])
+        self.assertEqual(json.loads((self.state / 'labels').read_text()), [])
         for root in (self.tools, self.issues):
             self.assertIn('Preserve this guidance.', (root / 'AGENTS.md').read_text())
             self.assertEqual(self.git(root, 'branch', '--show-current'), 'onboarding/work')
             self.assertEqual((root / 'unrelated').read_text(), 'untouched\n')
 
+    def test_existing_subproject_field_is_authoritative(self):
+        self.success(self.run_init('--subproject', 'tools', central=True,
+                                   env=dict(self.env, FAKE_SUBPROJECT_FIELD='1')))
+        for path in (self.tools / '.projects/project.md', self.issues / '.projects/projects/work.md'):
+            text = path.read_text()
+            self.assertIn('| Sub-project storage | field |', text)
+            self.assertIn('| Sub-project field type | SINGLE_SELECT |', text)
+            self.assertIn('| tools | Tools |', text)
+        self.assertEqual(json.loads((self.state / 'labels').read_text()), [])
+        for root in (self.tools, self.issues):
+            self.commit(root)
+        before = self.contracts()
+        missing = self.run_init('--subproject', 'tools', central=True)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn('expected Sub-project field missing', missing.stderr)
+        self.assertEqual(before, self.contracts())
+
+    def test_new_field_requires_migration_from_label_storage(self):
+        self.success(self.run_init('--subproject', 'tools', central=True))
+        for root in (self.tools, self.issues):
+            self.commit(root)
+        before = self.contracts()
+        result = self.run_init('--subproject', 'tools', central=True,
+                               env=dict(self.env, FAKE_SUBPROJECT_FIELD='1'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('migrate before onboarding', result.stderr)
+        self.assertEqual(before, self.contracts())
+
     def test_central_subproject_grouping(self):
         self.success(self.run_init('--subproject', 'tools', central=True))
         child = (self.issues / '.projects/projects/work.md').read_text()
-        self.assertIn('| tools | subproject:tools | octo/tools |', child)
-        self.assertIn('| tools | subproject:tools |', (self.tools / '.projects/project.md').read_text())
-        self.assertEqual(set(json.loads((self.state / 'labels').read_text())), {'project:work', 'subproject:tools'})
+        self.assertIn('| tools | subproject:work:tools | octo/tools |', child)
+        self.assertIn('| tools | subproject:work:tools |', (self.tools / '.projects/project.md').read_text())
+        self.assertEqual(set(json.loads((self.state / 'labels').read_text())), {'subproject:work:tools'})
 
     def test_repeated_onboarding_noop(self):
         self.success(self.run_init('--subproject', 'tools', central=True))
@@ -172,7 +215,7 @@ class Onboarding(unittest.TestCase):
     def test_conflicting_dispatcher_no_partial_rewrite(self):
         self.success(self.run_init(central=True))
         path = self.issues / '.projects/project.md'
-        path.write_text(path.read_text().replace('| work | project:work | 40 |', '| work | project:other | 40 |'))
+        path.write_text(path.read_text().replace('| work | - | 40 |', '| work | project:other | 40 |'))
         self.commit(self.issues)
         before = self.contracts()
         result = self.run_init(central=True)
@@ -196,7 +239,7 @@ class Onboarding(unittest.TestCase):
         result = self.run_init('--subproject', 'tools', central=True, yes=False, input='n\n')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(str(self.issues / '.projects/project.md'), result.stdout)
-        self.assertIn('subproject:tools', result.stdout)
+        self.assertIn('subproject:work:tools', result.stdout)
         self.assertEqual(before, self.contracts())
         self.assertEqual(json.loads((self.state / 'labels').read_text()), [])
         self.assertEqual(self.git(self.issues, 'branch', '--show-current'), 'main')
@@ -211,7 +254,7 @@ class Onboarding(unittest.TestCase):
     def test_provider_failure_leaves_both_contracts_unchanged(self):
         before = self.contracts()
         result = self.run_init('--subproject', 'tools', central=True,
-                               env=dict(self.env, FAIL_LABEL='subproject:tools'))
+                               env=dict(self.env, FAIL_LABEL='subproject:work:tools'))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Provider partial failure', result.stderr)
         self.assertEqual(before, self.contracts())
@@ -239,8 +282,8 @@ class Onboarding(unittest.TestCase):
                                 cwd=other, env=self.env, text=True, capture_output=True)
         self.success(result)
         child = (self.issues / '.projects/projects/work.md').read_text()
-        self.assertIn('| tools | subproject:tools | octo/tools |', child)
-        self.assertIn('| other | subproject:other | octo/other |', child)
+        self.assertIn('| tools | subproject:work:tools | octo/tools |', child)
+        self.assertIn('| other | subproject:work:other | octo/other |', child)
         self.assertEqual(child.count('| Project key | work |'), 1)
 
     def test_legacy_membership_mirror_adopts_central_route(self):
@@ -254,7 +297,7 @@ class Onboarding(unittest.TestCase):
         result = subprocess.run(['bash', str(SCRIPTS / 'init-project.sh')], cwd=self.tools,
                                 env=self.env, input='y\n', text=True, capture_output=True)
         self.success(result)
-        self.assertIn('| Routing | label:project:work |', path.read_text())
+        self.assertIn('| Routing | membership |', path.read_text())
         self.assertIn('| Governance | personal |', path.read_text())
         self.assertIn('| Governance | personal |', (self.issues / '.projects/projects/work.md').read_text())
 
@@ -352,7 +395,7 @@ class Onboarding(unittest.TestCase):
         calls = [json.loads(line) for line in (self.state / 'calls').read_text().splitlines()]
         issue_reads = [call for call in calls if call[:2] == ['issue', 'list']]
         self.assertEqual(len(issue_reads), 1)
-        self.assertIn('subproject:tools', issue_reads[0])
+        self.assertNotIn('subproject:work:tools', issue_reads[0])
 
     def test_broad_queue_keeps_central_implementation_vocabulary(self):
         self.success(self.run_init(central=True))

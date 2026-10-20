@@ -101,6 +101,8 @@ def build_agent_context(
         "target": {
             "repository": repository,
             "issue": issue,
+            "project": {"owner": table_value(contract, "Project owner"), "number": int(table_value(contract, "Project number"))},
+            "authority": decision.get("authority"),
             "url": live.get("html_url")
             or f"https://github.com/{repository}/issues/{issue}",
         },

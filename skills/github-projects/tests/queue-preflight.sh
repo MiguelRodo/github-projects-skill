@@ -99,29 +99,30 @@ cat >"$workspace/other/.projects/project.md" <<'EOF'
 EOF
 
 cat >"$provider" <<'EOF'
-#!/usr/bin/env bash
-set -eu
-printf '%s\n' "$*" >>"$PROVIDER_LOG"
-if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
-  exit 0
-fi
-if [ "${1:-}" != issue ] || [ "${2:-}" != list ]; then
-  echo "unexpected provider call: $*" >&2
-  exit 90
-fi
-args=" $* "
-if [[ "$args" == *" --repo octo/issues "* &&
-      "$args" == *" --state open "* &&
-      "$args" == *" --label pj:implement-chat "* &&
-      "$args" == *" --label project:personal "* &&
-      "$args" == *" --label subproject:monitoring "* ]]; then
-  printf '42\thttps://github.com/octo/issues/issues/42\n'
-elif [[ "$args" == *" --repo octo/issues "* &&
-        "$args" == *" --label subproject:finances "* ]]; then
-  :
-elif [[ "$args" == *" --repo octo/other "* ]]; then
-  printf '9\thttps://github.com/octo/other/issues/issues/9\n'
-fi
+#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ['PROVIDER_LOG'], 'a') as log:
+    log.write(' '.join(args) + '\n')
+if args[:2] == ['auth', 'status']:
+    pass
+elif args == ['api', 'user']:
+    print(json.dumps({'login': 'octo'}))
+elif args[:2] == ['issue', 'list']:
+    repo = args[args.index('--repo')+1]
+    assert 'project:personal' not in args and 'subproject:monitoring' not in args
+    print(json.dumps([{'number': 42, 'url': f'https://github.com/{repo}/issues/42', 'labels': [{'name': 'pj:implement-chat'}]}]))
+elif args[:1] == ['api'] and 'comments?' in args[-1]:
+    payload = {'apiVersion':'github-projects/queue-authority/v1','kind':'QueueAuthority','spec':{
+      'target': {'repository':'octo/issues','issue':42,'project':{'owner':'octo','number':38}},
+      'shape':'existing_task','actions':[{'kind':'project.membership.add'},{'kind':'subproject.value.set','value':'monitoring'}]}}
+    print(json.dumps([[{'body':'PJ implementation authority:\n```json\n'+json.dumps(payload)+'\n```',
+      'user':{'login':'octo'},'created_at':'2026-01-01','updated_at':'2026-01-01'}]]))
+elif args[:2] == ['api', 'graphql']:
+    print(json.dumps({'data':{'repository':{'issue':{'id':'I1','projectItems':{
+      'nodes': [], 'pageInfo':{'hasNextPage':False}}}}}}))
+else:
+    sys.exit('unexpected provider call: '+repr(args))
 EOF
 chmod +x "$provider"
 
@@ -158,15 +159,15 @@ assert_line "$expected_status" "$output"
 assert_line "$expected_candidate" "$output"
 grep -Fq -- '--state open' "$tmp/provider.log"
 grep -Fq -- '--label pj:implement-chat' "$tmp/provider.log"
-grep -Fq -- '--label project:personal' "$tmp/provider.log"
-grep -Fq -- '--label subproject:monitoring' "$tmp/provider.log"
+! grep -Fq -- '--label project:personal' "$tmp/provider.log"
+! grep -Fq -- '--label subproject:monitoring' "$tmp/provider.log"
 ! grep -Fq -- '--repo octo/other' "$tmp/provider.log"
 rm -rf "$workspace/broken"
 
 : >"$tmp/provider.log"
 output="$(run_preflight --project personal --subproject finances)"
 assert_line "$(printf 'status\tempty')" "$output"
-grep -Fq -- '--label subproject:finances' "$tmp/provider.log"
+! grep -Fq -- '--label subproject:finances' "$tmp/provider.log"
 
 : >"$tmp/provider.log"
 output="$(run_preflight --project personal --subproject missing)"

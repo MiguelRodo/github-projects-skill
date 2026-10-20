@@ -163,8 +163,6 @@ add_scope() {
     sub_row="$(subproject_label "$contract" "$subproject_selector")"
     [ -n "$sub_row" ] || return 0
     IFS=$'\t' read -r sub_key sub_label <<<"$sub_row"
-    same_ci "$sub_label" "subproject:$sub_key" ||
-      die "$contract has invalid sub-project label '$sub_label' for key '$sub_key'"
   fi
 
   if [ -z "$route_label" ]; then
@@ -282,39 +280,6 @@ fi
 
 sort -u "$scopes" -o "$scopes"
 
-while IFS=$'\t' read -r repository queue_label route_label sub_label project_identity sub_key root contract; do
-  args=(issue list --repo "$repository" --state open --label "$queue_label" --limit 1000 --json number,url)
-  [ "$route_label" = "-" ] || args+=(--label "$route_label")
-  [ "$sub_label" = "-" ] || args+=(--label "$sub_label")
-
-  if ! found="$("$gh_bin" "${args[@]}" --jq '.[] | [.number, .url] | @tsv' 2>&1)"; then
-    die "GitHub queue read failed for $repository: $found"
-  fi
-
-  [ -n "$found" ] || continue
-  count="$(printf '%s\n' "$found" | sed '/^$/d' | wc -l)"
-  [ "$count" -lt 1000 ] ||
-    die "queue scope $repository/$project_identity returned at least 1000 issues; refine the selectors"
-
-  while IFS=$'\t' read -r number url; do
-    [ -n "$number" ] || continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$repository" "$number" "$url" "$project_identity" "$sub_key" "$root" "$contract" >>"$candidates"
-  done <<<"$found"
-done <"$scopes"
-
-if [ ! -s "$candidates" ]; then
-  printf 'status\tempty\n'
-  exit 0
-fi
-
-awk -F'\t' '!seen[$3]++' "$candidates" >"$tmp/unique"
-candidate_count="$(wc -l <"$tmp/unique")"
-[ "$candidate_count" -le 200 ] ||
-  die "queue preflight found $candidate_count candidates; refine the selectors"
-
-printf 'status\tready\n'
-while IFS=$'\t' read -r repository number url project_identity sub_key root contract; do
-  printf 'candidate\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$repository" "$number" "$url" "$project_identity" "$sub_key" "$root" "$contract"
-done <"$tmp/unique"
+args=(--gh "$gh_bin" --scopes "$scopes")
+[ -z "$project_selector" ] || args+=(--explicit-project)
+python3 "$script_dir/queue-discover.py" "${args[@]}"

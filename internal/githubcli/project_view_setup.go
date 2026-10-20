@@ -18,18 +18,20 @@ type StandardBacklogViewChange struct {
 }
 
 type StandardBacklogViewPlan struct {
-	Project       ProjectIdentity             `json:"project"`
-	OwnerType     string                      `json:"ownerType"`
-	VisibleFields []string                    `json:"visibleFields"`
-	Changes       []StandardBacklogViewChange `json:"changes"`
+	ManualVerification []string                    `json:"manualVerification"`
+	Project            ProjectIdentity             `json:"project"`
+	OwnerType          string                      `json:"ownerType"`
+	VisibleFields      []string                    `json:"visibleFields"`
+	Changes            []StandardBacklogViewChange `json:"changes"`
 }
 
 type StandardBacklogViewResult struct {
-	Project       ProjectIdentity             `json:"project"`
-	OwnerType     string                      `json:"ownerType"`
-	VisibleFields []string                    `json:"visibleFields"`
-	Applied       []StandardBacklogViewChange `json:"applied"`
-	Verified      bool                        `json:"verified"`
+	ManualVerification []string                    `json:"manualVerification"`
+	Project            ProjectIdentity             `json:"project"`
+	OwnerType          string                      `json:"ownerType"`
+	VisibleFields      []string                    `json:"visibleFields"`
+	Applied            []StandardBacklogViewChange `json:"applied"`
+	Verified           bool                        `json:"verified"`
 }
 
 type restProjectField struct {
@@ -261,16 +263,19 @@ func buildBacklogViewSpec(project contract.Project, ownerType string, fields []r
 	}
 	wanted := []wantedField{
 		{dataType: "title", required: true},
-		{name: "Status", required: true},
 		{name: "Due date"},
 		{name: "Target date"},
-		{dataType: "assignees"},
-		{dataType: "linked_pull_requests"},
-		{dataType: "sub_issues_progress"},
 		{name: "Priority", required: true},
+		{name: "Status", required: true},
 	}
 	if ownerType != "organization" {
 		wanted = append(wanted, wantedField{name: "Class", required: true})
+	}
+	wanted = append(wanted, wantedField{dataType: "sub_issues_progress"})
+	if project.Subproject.Storage == "field" {
+		wanted = append(wanted, wantedField{name: project.Subproject.Field, required: true})
+	} else if project.Subproject.Storage == "labels" {
+		wanted = append(wanted, wantedField{dataType: "labels", required: true})
 	}
 	// Organisation Projects classify with native Issue Type, but GitHub's public
 	// API cannot make that field visible in a Project view: the REST create
@@ -317,6 +322,23 @@ func inspectStandardBacklogView(ctx context.Context, client Client, project cont
 	spec, err := buildBacklogViewSpec(project, ownerType, fields)
 	if err != nil {
 		return backlogViewState{}, err
+	}
+	for _, view := range findBacklogViews(views) {
+		for _, visible := range view.Configuration.VisibleFields.Nodes {
+			found := false
+			for _, wanted := range spec.Visible {
+				if wanted.NodeID == visible.ID {
+					found = true
+				}
+			}
+			if !found {
+				for _, field := range fields {
+					if field.NodeID == visible.ID {
+						spec.Visible = append(spec.Visible, backlogField{Name: field.Name, RESTID: field.ID, NodeID: field.NodeID})
+					}
+				}
+			}
+		}
 	}
 	return backlogViewState{ownerType: ownerType, views: views, spec: spec}, nil
 }
@@ -469,12 +491,15 @@ func planBacklogViewChanges(views []projectViewNode, spec backlogViewSpec) ([]St
 		}
 		// Exactly two Backlogs where one is already standard is the state an
 		// interrupted replacement leaves behind; finishing it is unambiguous.
-		if len(backlogs) == 2 && len(matching) == 1 {
+		if len(backlogs) == 2 && len(matching) == 1 && strings.EqualFold(other[0].Layout, "TABLE_LAYOUT") {
 			return []StandardBacklogViewChange{{Action: "delete_view", ViewID: other[0].ID, Detail: fmt.Sprintf("delete non-standard duplicate %s; keep standard %s", viewLabel(other[0]), viewLabel(matching[0]))}}, nil
 		}
 		return nil, fmt.Errorf("Project has %d Backlog views (%s); refusing ambiguous reconciliation: rename or delete all but one Backlog view in the GitHub Project, then rerun", len(backlogs), strings.Join(labels, ", "))
 	}
 	view := backlogs[0]
+	if !strings.EqualFold(view.Layout, "TABLE_LAYOUT") {
+		return nil, fmt.Errorf("existing Backlog is %s; preserve it and create a separate overall table view, or configure it manually", view.Layout)
+	}
 	if backlogViewMatches(view, spec) {
 		return []StandardBacklogViewChange{}, nil
 	}
@@ -491,6 +516,14 @@ func planBacklogViewChanges(views []projectViewNode, spec backlogViewSpec) ([]St
 	return []StandardBacklogViewChange{{Action: "replace_view", ViewID: view.ID, Detail: fmt.Sprintf("%s; GitHub API cannot update group/sort configuration in place, so create a standard replacement and delete old %s after verifying the replacement", strings.Join(parts, "; "), viewLabel(view))}}, nil
 }
 
+func viewManualVerification(ownerType string) []string {
+	checks := []string{"Verify visible column order in the GitHub Project browser; the API reports an unordered set."}
+	if ownerType == "organization" {
+		checks = append(checks, "Show and verify native Type in the browser; the public API may omit or reject this column.")
+	}
+	return checks
+}
+
 func planStandardBacklogViewFromState(project contract.Project, state backlogViewState) (StandardBacklogViewPlan, error) {
 	changes, err := planBacklogViewChanges(state.views, state.spec)
 	if err != nil {
@@ -503,7 +536,7 @@ func planStandardBacklogViewFromState(project contract.Project, state backlogVie
 	for _, field := range state.spec.Visible {
 		visible = append(visible, field.Name)
 	}
-	return StandardBacklogViewPlan{Project: ProjectIdentity{Owner: project.Owner, Number: project.Number, Title: project.Title}, OwnerType: state.ownerType, VisibleFields: visible, Changes: changes}, nil
+	return StandardBacklogViewPlan{ManualVerification: viewManualVerification(state.ownerType), Project: ProjectIdentity{Owner: project.Owner, Number: project.Number, Title: project.Title}, OwnerType: state.ownerType, VisibleFields: visible, Changes: changes}, nil
 }
 
 func PlanStandardBacklogView(ctx context.Context, client Client, project contract.Project) (StandardBacklogViewPlan, error) {
@@ -717,6 +750,7 @@ func ApplyStandardBacklogView(ctx context.Context, client Client, project contra
 	if err := verifyUnrelatedViews(beforeUnrelated, verified.views); err != nil {
 		return fail("readback", err)
 	}
+	result.ManualVerification = viewManualVerification(state.ownerType)
 	result.Verified = true
 	return result, nil
 }

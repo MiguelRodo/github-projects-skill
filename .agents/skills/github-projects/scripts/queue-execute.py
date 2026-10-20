@@ -14,6 +14,7 @@ from typing import Any
 from queue_agent import build_agent_context
 from queue_common import flatten_pages, gh_json, json_command, run, table_value
 from queue_review import build_review_context, validate_review_result
+from subproject import change as change_subproject
 
 
 def field_locations(text: str) -> dict[str, tuple[str, str]]:
@@ -71,6 +72,9 @@ def receipt(
         "remaining": remaining if remaining is not None else ([] if status == "applied_verified" else planned),
         "review": classification.get("review"),
     }
+    for key in ("project", "authority"):
+        if classification.get(key) is not None:
+            value["target"][key] = classification[key]
     if completion is not None:
         value["completion"] = completion
     if preservation is not None:
@@ -465,6 +469,7 @@ def main() -> int:
     memberships = [a for a in actions if a["kind"] == "project.membership.add"]
     dimensions = [a for a in actions if a["kind"] == "dimension.value.set"]
     parents = [a for a in actions if a["kind"] == "issue.parent.set"]
+    subprojects = [a for a in actions if a["kind"].startswith("subproject.value.")]
     pending = list(actions)
     operations: list[dict[str, Any]] = []
 
@@ -492,7 +497,8 @@ def main() -> int:
 
     dimension_names = [action["dimension"] for action in dimensions]
     if (
-        len(memberships) > 1
+        len(subprojects) > 1
+        or len(memberships) > 1
         or len(parents) > 1
         or len(dimension_names) != len(set(dimension_names))
     ):
@@ -579,6 +585,19 @@ def main() -> int:
         for action in dimensions:
             pending.remove(action)
 
+    for action in subprojects:
+        try:
+            result = change_subproject(args.gh, contract, args.repository, args.issue,
+                                       action.get("value"), apply=True)
+        except (RuntimeError, ValueError, KeyError, OSError) as exc:
+            operations.append(op(action["kind"], "partial_failure", error=str(exc)))
+            return finish("partial_failure", "queue.execute.subproject_failed")
+        operations.append(op(action["kind"], "applied_verified", evidence=result))
+        pending.remove(action)
+        # Only the explicit binding's labels are allowed to change.
+        baseline_labels = set(result.get("labelsAfter", baseline_labels))
+        baseline_snapshot["labels"] = sorted(baseline_labels)
+
     for action in parents:
         parent_number = action["parent"]["issue"]
         result, error = set_parent(args.gh, args.repository, args.issue, parent_number)
@@ -662,7 +681,15 @@ def main() -> int:
                 value["error"] = review_result_error
             return emit(value)
 
-    summary = f"PJ deterministic administration: verified {len(operations)} operation group(s)."
+    fresh, error = command_json([
+        sys.executable, str(classifier_path), "--contract", args.contract,
+        "--repository", args.repository, "--issue", str(args.issue), "--gh", args.gh,
+    ])
+    if error or fresh.get("authority") != classified.get("authority") or fresh.get("classification") != "deterministic":
+        return finish("partial_failure", "queue.execute.authority_changed")
+
+    summary = (f"PJ deterministic administration: verified {len(operations)} operation group(s). "
+               f"Project {classified.get('project')}; authority {classified.get('authority')}.")
     comment, error = ensure_comment(args.gh, args.repository, args.issue, summary)
     if error:
         return finish(
@@ -681,6 +708,13 @@ def main() -> int:
         if guard_reason == "queue.execute.preservation_failed":
             extra["preservation"] = {"issueState": "mismatch"}
         return finish("partial_failure", guard_reason, **extra)
+
+    fresh, error = command_json([
+        sys.executable, str(classifier_path), "--contract", args.contract,
+        "--repository", args.repository, "--issue", str(args.issue), "--gh", args.gh,
+    ])
+    if error or fresh.get("authority") != classified.get("authority") or fresh.get("classification") != "deterministic":
+        return finish("partial_failure", "queue.execute.authority_changed")
 
     completion_command = [
         args.projects,

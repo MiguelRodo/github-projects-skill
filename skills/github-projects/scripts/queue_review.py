@@ -104,6 +104,8 @@ def validate_review_result(
         not isinstance(target, dict)
         or target.get("repository") != classification.get("repository")
         or target.get("issue") != classification.get("issue")
+        or (classification.get("project") is not None and target.get("project") != classification.get("project"))
+        or (classification.get("authority") is not None and target.get("authority") != classification.get("authority"))
     ):
         raise ValueError("review result target does not match the current item")
 

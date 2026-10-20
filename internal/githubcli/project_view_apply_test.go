@@ -180,7 +180,8 @@ func TestPlanBacklogViewRefusesTwoNonStandardBacklogsWithRemedy(t *testing.T) {
 
 func TestApplyStandardBacklogViewReportsReadbackFailureWithAppliedChanges(t *testing.T) {
 	view := standardBacklogTestView("v1", 1)
-	view.Layout = "BOARD_LAYOUT"
+	filter := "status:Todo"
+	view.Filter = &filter
 	steps := backlogInspectSteps(t, view)
 	steps = append(steps, seqStep{request: updateViewRequest(), out: `{}`})
 	steps = append(steps, backlogInspectSteps(t, view)...)

@@ -1,6 +1,8 @@
 # v1 labels, project routing and label-based sub-projects
 
-Status: **normative pre-v1 specification**
+Current runtime behaviour is defined in [membership and storage migration](../../skills/github-projects/references/membership-storage-migration.md). Native membership is authoritative; Sub-project storage may be a configured single-select field. Label-only routing and required-label assumptions below describe historical compatibility, not current runtime authority.
+
+Status: archived legacy pre-v1 wire-format specification
 
 Issue: #47
 

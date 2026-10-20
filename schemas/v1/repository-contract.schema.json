@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:projectctl:schema:repository-contract:v1",
-  "title": "projectctl v1 repository contract",
+  "title": "projectctl v1 repository contract (legacy wire format)",
+  "$comment": "Current runtime uses Markdown .projects contracts, native membership routing and subproject-storage.schema.json. Required-label routing below is retained for historical compatibility only.",
   "description": "The collaborator-safe shared contract for one participating repository, one issue store and one or more GitHub Projects.",
   "type": "object",
   "required": [

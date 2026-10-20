@@ -60,6 +60,7 @@ jobs:
         run: go build ./cmd/projects
 
       - name: Test github-projects skill
+        if: ${{ !cancelled() }}
         shell: bash
         run: bash skills/github-projects/tests/run.sh
 

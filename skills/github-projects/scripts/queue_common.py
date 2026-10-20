@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from typing import Any
 
@@ -23,7 +24,16 @@ def gh_json(gh: str, *args: str) -> Any:
 
 
 def table_value(text: str, wanted: str) -> str:
+    fence = None
     for line in text.splitlines():
+        marker = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
+        if fence:
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+                fence = None
+            continue
+        if marker:
+            fence = marker[1]
+            continue
         if not line.startswith("|"):
             continue
         cells = [cell.strip() for cell in line.split("|")[1:-1]]

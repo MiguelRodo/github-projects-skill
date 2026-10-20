@@ -8,6 +8,8 @@ validator="$skill_dir/scripts/validate-contract.sh"
 setup="$skill_dir/scripts/setup.sh"
 initializer="$skill_dir/scripts/init-project.sh"
 
+python3 "$test_dir/test-project-context.py"
+
 bash -n "$validator"
 bash -n "$setup"
 bash -n "$initializer"
@@ -16,6 +18,7 @@ python3 "$test_dir/test-agent-cli-choice.py"
 bash "$validator" "$test_dir/fixtures/single"
 bash "$validator" "$test_dir/fixtures/single-user"
 bash "$validator" "$test_dir/fixtures/dispatcher"
+bash "$validator" "$test_dir/fixtures/membership-dispatcher"
 bash "$validator" "$test_dir/fixtures/empty-dispatcher"
 bash "$validator" "$test_dir/fixtures/priority-values"
 bash "$validator" "$test_dir/fixtures/fenced-example"
@@ -418,7 +421,7 @@ grep -Fq 'the standard live Project profile was not applied' \
 
 # A PATH with everything onboarding needs except a projects CLI.
 mkdir -p "$test_tmp_dir/bin-no-projects"
-for tool in awk bash cat cp date dirname find git grep head mkdir mktemp mv rm sed sort tr uniq; do
+for tool in python3 awk bash cat cp date dirname find git grep head mkdir mktemp mv rm sed sort tr uniq; do
   ln -s "$(command -v "$tool")" "$test_tmp_dir/bin-no-projects/$tool"
 done
 ln -s "$test_tmp_dir/bin/gh" "$test_tmp_dir/bin-no-projects/gh"
@@ -451,7 +454,7 @@ grep -Fq '| Mode | dispatcher |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
 grep -Fq '| Governance | personal |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
-grep -Fq '| example-planning | project:example-planning | 12 | .projects/projects/example-planning.md |' \
+grep -Fq '| example-planning | - | 12 | .projects/projects/example-planning.md |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
 grep -Fq '| Mode | project |' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
@@ -459,7 +462,7 @@ grep -Fq '| Project key | example-planning |' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
 grep -Fq '| Owner type | organization |' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
-grep -Fq '| Routing | label:project:example-planning |' \
+grep -Fq '| Routing | membership |' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"
 if grep -Eq 'Issue write-up style|Issue prose style|Priority mapping status|## Class / Issue Type' \
   "$test_tmp_dir/init-multiple/.projects/projects/example-planning.md"; then
@@ -528,9 +531,9 @@ grep -Fq 'Project key example-planning is already configured' \
     >"$test_tmp_dir/init-multiple-add.log" 2>&1
 )
 bash "$validator" "$test_tmp_dir/init-multiple"
-grep -Fq '| example-planning | project:example-planning | 12 | .projects/projects/example-planning.md |' \
+grep -Fq '| example-planning | - | 12 | .projects/projects/example-planning.md |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
-grep -Fq '| second-planning | project:second-planning | 13 | .projects/projects/second-planning.md |' \
+grep -Fq '| second-planning | - | 13 | .projects/projects/second-planning.md |' \
   "$test_tmp_dir/init-multiple/.projects/project.md"
 grep -Fq '| Project title | Second planning |' \
   "$test_tmp_dir/init-multiple/.projects/projects/second-planning.md"

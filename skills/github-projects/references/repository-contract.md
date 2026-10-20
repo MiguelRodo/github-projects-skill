@@ -1,3 +1,5 @@
+> Current routing/storage: [membership and storage migration](membership-storage-migration.md) supersedes legacy label-only selection below. Queue completion permits one active Project request per issue; Sub-project set/clear actions are supported.
+
 # Repository contract
 
 Repository-specific GitHub Project configuration lives under `.projects/`. A contract records facts that differ between repositories or Projects. Common behaviour, default vocabularies and presentation defaults belong in the shared `github-projects` skill.

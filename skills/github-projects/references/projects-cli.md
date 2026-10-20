@@ -1,3 +1,5 @@
+> Current routing/storage: [membership and storage migration](membership-storage-migration.md) supersedes legacy label-only selection below. Queue completion permits one active Project request per issue; Sub-project set/clear actions are supported.
+
 # Execute supported operations with `projects`
 
 Use this reference when the shell has `projects` installed. The installed

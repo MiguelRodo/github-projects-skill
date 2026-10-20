@@ -78,12 +78,13 @@ def append_row(text, section, row):
     return ''.join(lines)
 
 
-def subproject(text, key, implementation=''):
+def subproject(text, key, implementation='', provider=''):
     if not key:
         return text
+    provider = provider or f'subproject:{key}'
     existing = [row for row in rows(text, 'Sub-project vocabulary') if row[0] == key]
     if existing:
-        if len(existing) != 1 or existing[0][1] != f'subproject:{key}':
+        if len(existing) != 1 or existing[0][1] != provider:
             raise RuntimeError(f'conflicting sub-project {key}')
         if implementation:
             header = next(rows(text, 'Sub-project vocabulary'))
@@ -97,7 +98,7 @@ def subproject(text, key, implementation=''):
         text += '\n## Sub-project vocabulary\n\n| Key | Label | Implementation repository |\n| --- | --- | --- |\n'
     header = next(rows(text, 'Sub-project vocabulary'))
     cells = [''] * len(header)
-    cells[0:2] = [key, f'subproject:{key}']
+    cells[0:2] = [key, provider]
     if implementation:
         if 'Implementation repository' not in header:
             # Keep existing Purpose cells while adding the implementation binding.
@@ -267,7 +268,7 @@ def main():
         routes = [row for row in rows(dispatcher, 'Routes') if row[0] not in ('Project key', '---')]
         found = [row for row in routes if row[0] == args.project]
         if found:
-            if len(found) != 1 or found[0][1] != f'project:{args.project}':
+            if len(found) != 1 or found[0][1] not in ('-', f'project:{args.project}'):
                 raise RuntimeError('conflicting dispatcher route')
             child_path = store_root / found[0][3]
             leaf = read(child_path)
@@ -299,7 +300,11 @@ def main():
     title = project['title']
     if not title or any(char in title for char in '|\n\r'):
         raise RuntimeError('unsafe Project title')
-    routing = f'label:project:{args.project}' if central else 'Project membership; no routing label'
+    routing = value(existing, 'Routing') or 'membership'
+    # Existing label routes stay fixed until the explicit migration workflow.
+    route_label = found[0][1] if found else '-'
+    if routing.startswith('label:') and not found:
+        route_label = routing.removeprefix('label:')
 
     def reconcile(text, mode, privacy):
         if not text:
@@ -309,18 +314,7 @@ def main():
             if value(text, key) != wanted:
                 raise RuntimeError(f'conflicting {key} in existing contract')
         if value(text, 'Routing') != routing:
-            if value(text, 'Routing').startswith('label:'):
-                raise RuntimeError('conflicting Routing in existing contract')
-            if central:
-                # Adopt a legacy membership-only mirror without changing its other settings.
-                old = value(text, 'Routing')
-                if old not in ('linked repository', 'Project membership only', 'Project membership; no routing label'):
-                    raise RuntimeError('conflicting Routing in existing contract')
-                lines = text.splitlines(keepends=True)
-                for index, line in visible_lines(text):
-                    if line.startswith('|') and line.split('|')[1].strip() == 'Routing':
-                        lines[index] = f'| Routing | {routing} |\n'
-                text = ''.join(lines)
+            raise RuntimeError('conflicting Routing in existing contract; use migration tooling')
         text = metadata(text, 'Project key', args.project)
         if value(text, 'Owner type'):
             text = metadata(text, 'Owner type', owner_type)
@@ -330,14 +324,59 @@ def main():
             text = metadata(text, 'Governance', args.governance)
         return text
 
+    selected_storage, selected_provider = '', ''
+    if args.subproject:
+        fields = json.loads(command(gh, 'project', 'field-list', number, '--owner', owner, '--format', 'json', '--limit', '100'))
+        if fields.get('totalCount', 0) > len(fields.get('fields', [])):
+            raise RuntimeError('incomplete Project field definitions')
+        from project_context import binding
+        previous = binding(existing)
+        field_name = previous.field if previous.storage == 'field' else 'Sub-project'
+        matches = [field for field in fields.get('fields', []) if field['name'] == field_name]
+        if len(matches) > 1:
+            raise RuntimeError('ambiguous Sub-project field')
+        from project_context import binding
+        previous = binding(existing)
+        if matches:
+            if previous.storage == 'labels':
+                raise RuntimeError('Sub-project field exists beside label storage; migrate before onboarding')
+            field = matches[0]
+            if field.get('type') not in ('ProjectV2SingleSelectField', 'SINGLE_SELECT'):
+                raise RuntimeError('Sub-project must be a single-select field')
+            options = [v['name'] for v in field.get('options', []) if v['name'].lower() == previous.vocabulary.get(args.subproject, args.subproject).lower()]
+            if len(options) != 1:
+                raise RuntimeError('requested Sub-project option must exist before onboarding')
+            selected_storage, selected_provider = 'field', options[0]
+        elif previous.storage == 'field':
+            raise RuntimeError('expected Sub-project field missing; no label fallback')
+        else:
+            selected_storage = 'labels'
+            selected_provider = previous.vocabulary.get(args.subproject) or f'subproject:{args.project}:{args.subproject}'
+
+    def bind_subproject(text):
+        if not args.subproject:
+            return text
+        if not value(text, 'Sub-project storage'):
+            text = metadata(text, 'Sub-project storage', selected_storage)
+            if selected_storage == 'field':
+                text = metadata(text, 'Sub-project field', field_name)
+                text = metadata(text, 'Sub-project field type', 'SINGLE_SELECT')
+            else:
+                from project_context import binding
+                legacy = any(not row[1].startswith(f'subproject:{args.project}:') for row in rows(text, 'Sub-project vocabulary') if row[0] not in ('Key', '---'))
+                text = metadata(text, 'Sub-project label scope', 'shared' if legacy else 'project')
+        return text
+
     local = reconcile(local, 'single', current['visibility'].lower() + ' repository')
     local = metadata(local, 'Implementation repository', identity)
-    local = subproject(local, args.subproject)
+    local = bind_subproject(local)
+    local = subproject(local, args.subproject, provider=selected_provider)
     if central:
         local = metadata(local, 'Queue source', 'mirror')
         leaf = reconcile(leaf, 'project', store_record['visibility'].lower() + ' repository')
         if args.subproject:
-            leaf = subproject(leaf, args.subproject, identity)
+            leaf = bind_subproject(leaf)
+            leaf = subproject(leaf, args.subproject, identity, selected_provider)
         else:
             leaf = metadata(leaf, 'Implementation repository', identity)
         if not dispatcher:
@@ -359,7 +398,7 @@ def main():
         if not found:
             if any(row[1] == f'project:{args.project}' or row[2] == number for row in routes):
                 raise RuntimeError('conflicting dispatcher label or Project number')
-            dispatcher = append_row(dispatcher, 'Routes', f'| {args.project} | project:{args.project} | {number} | {child_path.relative_to(store_root)} |')
+            dispatcher = append_row(dispatcher, 'Routes', f'| {args.project} | {route_label} | {number} | {child_path.relative_to(store_root)} |')
         planned[dispatcher_path] = dispatcher.encode()
         planned[child_path] = leaf.encode()
     planned[main_path] = local.encode()
@@ -381,14 +420,14 @@ def main():
                     destination.write_bytes(content)
             command('bash', str(HERE / 'validate-contract.sh'), str(stage))
     changes = {path: content for path, content in planned.items() if originals.get(path) != content}
-    labels = [f'project:{args.project}'] if central else []
+    labels = []
     for text in (local, leaf if central else ''):
         for row in rows(text, 'Sub-project vocabulary'):
             if row[0] in ('Key', '---'):
                 continue
-            if not re.fullmatch('[a-z0-9][a-z0-9-]*', row[0]) or row[1] != f'subproject:{row[0]}':
-                raise RuntimeError(f'conflicting sub-project vocabulary: {row[0]}')
-            labels.append(row[1])
+            from project_context import binding
+            if binding(text).storage == 'labels':
+                labels.append(row[1])
 
     def read_labels():
         pages = json.loads(command(gh, 'api', '--paginate', '--slurp', f'repos/{store}/labels'))
@@ -401,7 +440,7 @@ def main():
     print(f'Project {args.project} ({owner}/#{number})' + (f', sub-project {args.subproject}' if args.subproject else ''))
     print(f'  Issue queue: {store}; implementation: {identity}')
     if central:
-        print(f'  Central dispatcher route: {args.project} -> project:{args.project}; mirrored in the implementation contract')
+        print(f'  Central dispatcher route: {args.project} -> Project {owner}/{number}; mirrored in the implementation contract')
     for path in changes:
         print(f'  Update {path}')
     for label in sorted(missing):
@@ -480,7 +519,7 @@ def main():
         if created_labels:
             print('Provider partial failure: labels may remain: ' + ', '.join(created_labels) + '. Inspect before retrying.', file=sys.stderr)
         raise
-    print('Topology and routing labels verified. Review, commit and open a PR in each changed repository.')
+    print('Topology and storage binding verified. Review, commit and open a PR in each changed repository.')
     print('Existing issues and Project membership were not migrated. Standard fields/Backlog setup remains available through projects.')
 
 

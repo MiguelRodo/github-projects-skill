@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:github-projects:subproject-storage:v1",
+  "title": "Per-Project Sub-project storage binding",
+  "description": "The equivalent JSON shape of a resolved Markdown Project's Sub-project binding. Provider IDs are discovered fresh, not contract authority.",
+  "type": "object",
+  "required": ["storage"],
+  "properties": {
+    "storage": {"enum": ["field", "labels", "none"]},
+    "field": {"type": "string", "minLength": 1},
+    "fieldType": {"const": "SINGLE_SELECT"},
+    "labelScope": {"enum": ["project", "shared"]},
+    "vocabulary": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z0-9][a-z0-9-]*$"},
+      "additionalProperties": {"type": "string", "minLength": 1}
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {"if": {"properties": {"storage": {"const": "field"}}}, "then": {"required": ["field", "fieldType"], "not": {"required": ["labelScope"]}}},
+    {"if": {"properties": {"storage": {"const": "labels"}}}, "then": {"required": ["labelScope"], "not": {"anyOf": [{"required": ["field"]}, {"required": ["fieldType"]}]}}},
+    {"if": {"properties": {"storage": {"const": "none"}}}, "then": {"properties": {"vocabulary": {"maxProperties": 0}}}}
+  ]
+}
