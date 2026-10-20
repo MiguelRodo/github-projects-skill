@@ -583,6 +583,15 @@ func planStandardProjectSetupFromState(project contract.Project, state setupStat
 	if err := planProjectField(&plan.Changes, state, "Target date", "DATE", nil); err != nil {
 		return StandardProjectSetupPlan{}, err
 	}
+	name, options, err := subprojectSetupProfile(project, state)
+	if err != nil {
+		return StandardProjectSetupPlan{}, err
+	}
+	if name != "" {
+		if err := planProjectField(&plan.Changes, state, name, "SINGLE_SELECT", options); err != nil {
+			return StandardProjectSetupPlan{}, err
+		}
+	}
 	if state.ownerType == "user" {
 		if err := planProjectField(&plan.Changes, state, "Class", "SINGLE_SELECT", standardClassOptions); err != nil {
 			return StandardProjectSetupPlan{}, err
@@ -790,7 +799,21 @@ func attachOrganizationIssueField(ctx context.Context, client Client, project co
 	return nil
 }
 
-func applyProjectFieldChange(ctx context.Context, client Client, state setupState, change StandardProjectSetupChange) ([]string, error) {
+func applyProjectFieldChange(ctx context.Context, client Client, project contract.Project, state setupState, change StandardProjectSetupChange) ([]string, error) {
+	name, options, err := subprojectSetupProfile(project, state)
+	if err != nil {
+		return nil, err
+	}
+	if name != "" && change.Name == name {
+		switch change.Action {
+		case "create_field":
+			return nil, createProjectField(ctx, client, state.project.ID, name, "SINGLE_SELECT", options)
+		case "reconcile_options":
+			return updateProjectSingleSelect(ctx, client, state.project.Fields[strings.ToLower(name)], options)
+		default:
+			return nil, fmt.Errorf("unsupported Sub-project setup action %q", change.Action)
+		}
+	}
 	switch change.Action {
 	case "create_field":
 		var options []standardOption
@@ -922,7 +945,7 @@ func ApplyStandardProjectSetup(ctx context.Context, client Client, project contr
 		if change.Scope != "project" || change.Action == "attach_issue_field" {
 			continue
 		}
-		kept, err := applyProjectFieldChange(ctx, client, state, change)
+		kept, err := applyProjectFieldChange(ctx, client, project, state, change)
 		if err != nil {
 			return fail(setupChangeLabel(change), err)
 		}
@@ -966,6 +989,9 @@ func ApplyStandardProjectSetup(ctx context.Context, client Client, project contr
 	finalState, err := inspectStandardProjectSetup(ctx, client, readProject)
 	if err != nil {
 		return fail("readback", fmt.Errorf("read back standard Project setup: %w", err))
+	}
+	if err := verifySubprojectSetupPreservation(project, state, finalState); err != nil {
+		return fail("readback", err)
 	}
 	finalPlan, err := planStandardProjectSetupFromState(project, finalState)
 	if err != nil {
