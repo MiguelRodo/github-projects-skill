@@ -62,8 +62,6 @@ def receipt(
         "target": {
             "repository": classification.get("repository"),
             "issue": classification.get("issue"),
-            "project": classification.get("project"),
-            "authority": classification.get("authority"),
         },
         "classification": {
             "classification": classification.get("classification"),
@@ -74,6 +72,9 @@ def receipt(
         "remaining": remaining if remaining is not None else ([] if status == "applied_verified" else planned),
         "review": classification.get("review"),
     }
+    for key in ("project", "authority"):
+        if classification.get(key) is not None:
+            value["target"][key] = classification[key]
     if completion is not None:
         value["completion"] = completion
     if preservation is not None:

@@ -14,13 +14,16 @@ MARKER = 'PJ implementation authority:'
 
 def rows(text: str, heading: str) -> list[list[str]]:
     active = False
-    fence = False
+    fence = None
     result = []
     for line in text.splitlines():
-        if line.lstrip().startswith(('```', '~~~')):
-            fence = not fence
-            continue
+        marker = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
         if fence:
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+                fence = None
+            continue
+        if marker:
+            fence = marker[1]
             continue
         if line.startswith('## '):
             active = line.strip() == '## ' + heading
@@ -62,6 +65,10 @@ def binding(text: str) -> Binding:
         raise ValueError('Sub-project storage must be field, labels or none')
     field = table_value(text, 'Sub-project field') or 'Sub-project'
     scope = table_value(text, 'Sub-project label scope')
+    if storage != 'field' and (table_value(text, 'Sub-project field') or table_value(text, 'Sub-project field type')):
+        raise ValueError('only field storage may configure a Sub-project field')
+    if storage == 'field' and scope:
+        raise ValueError('field storage may not configure label scope')
     if storage == 'field':
         if table_value(text, 'Sub-project field type') != 'SINGLE_SELECT':
             raise ValueError('field storage requires Sub-project field type SINGLE_SELECT')

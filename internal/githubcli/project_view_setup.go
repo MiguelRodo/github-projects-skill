@@ -18,18 +18,20 @@ type StandardBacklogViewChange struct {
 }
 
 type StandardBacklogViewPlan struct {
-	Project       ProjectIdentity             `json:"project"`
-	OwnerType     string                      `json:"ownerType"`
-	VisibleFields []string                    `json:"visibleFields"`
-	Changes       []StandardBacklogViewChange `json:"changes"`
+	ManualVerification []string                    `json:"manualVerification"`
+	Project            ProjectIdentity             `json:"project"`
+	OwnerType          string                      `json:"ownerType"`
+	VisibleFields      []string                    `json:"visibleFields"`
+	Changes            []StandardBacklogViewChange `json:"changes"`
 }
 
 type StandardBacklogViewResult struct {
-	Project       ProjectIdentity             `json:"project"`
-	OwnerType     string                      `json:"ownerType"`
-	VisibleFields []string                    `json:"visibleFields"`
-	Applied       []StandardBacklogViewChange `json:"applied"`
-	Verified      bool                        `json:"verified"`
+	ManualVerification []string                    `json:"manualVerification"`
+	Project            ProjectIdentity             `json:"project"`
+	OwnerType          string                      `json:"ownerType"`
+	VisibleFields      []string                    `json:"visibleFields"`
+	Applied            []StandardBacklogViewChange `json:"applied"`
+	Verified           bool                        `json:"verified"`
 }
 
 type restProjectField struct {
@@ -514,6 +516,14 @@ func planBacklogViewChanges(views []projectViewNode, spec backlogViewSpec) ([]St
 	return []StandardBacklogViewChange{{Action: "replace_view", ViewID: view.ID, Detail: fmt.Sprintf("%s; GitHub API cannot update group/sort configuration in place, so create a standard replacement and delete old %s after verifying the replacement", strings.Join(parts, "; "), viewLabel(view))}}, nil
 }
 
+func viewManualVerification(ownerType string) []string {
+	checks := []string{"Verify visible column order in the GitHub Project browser; the API reports an unordered set."}
+	if ownerType == "organization" {
+		checks = append(checks, "Show and verify native Type in the browser; the public API may omit or reject this column.")
+	}
+	return checks
+}
+
 func planStandardBacklogViewFromState(project contract.Project, state backlogViewState) (StandardBacklogViewPlan, error) {
 	changes, err := planBacklogViewChanges(state.views, state.spec)
 	if err != nil {
@@ -526,7 +536,7 @@ func planStandardBacklogViewFromState(project contract.Project, state backlogVie
 	for _, field := range state.spec.Visible {
 		visible = append(visible, field.Name)
 	}
-	return StandardBacklogViewPlan{Project: ProjectIdentity{Owner: project.Owner, Number: project.Number, Title: project.Title}, OwnerType: state.ownerType, VisibleFields: visible, Changes: changes}, nil
+	return StandardBacklogViewPlan{ManualVerification: viewManualVerification(state.ownerType), Project: ProjectIdentity{Owner: project.Owner, Number: project.Number, Title: project.Title}, OwnerType: state.ownerType, VisibleFields: visible, Changes: changes}, nil
 }
 
 func PlanStandardBacklogView(ctx context.Context, client Client, project contract.Project) (StandardBacklogViewPlan, error) {
@@ -740,6 +750,7 @@ func ApplyStandardBacklogView(ctx context.Context, client Client, project contra
 	if err := verifyUnrelatedViews(beforeUnrelated, verified.views); err != nil {
 		return fail("readback", err)
 	}
+	result.ManualVerification = viewManualVerification(state.ownerType)
 	result.Verified = true
 	return result, nil
 }

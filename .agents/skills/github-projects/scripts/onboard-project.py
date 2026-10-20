@@ -329,7 +329,10 @@ def main():
         fields = json.loads(command(gh, 'project', 'field-list', number, '--owner', owner, '--format', 'json', '--limit', '100'))
         if fields.get('totalCount', 0) > len(fields.get('fields', [])):
             raise RuntimeError('incomplete Project field definitions')
-        matches = [field for field in fields.get('fields', []) if field['name'] == 'Sub-project']
+        from project_context import binding
+        previous = binding(existing)
+        field_name = previous.field if previous.storage == 'field' else 'Sub-project'
+        matches = [field for field in fields.get('fields', []) if field['name'] == field_name]
         if len(matches) > 1:
             raise RuntimeError('ambiguous Sub-project field')
         from project_context import binding
@@ -340,7 +343,7 @@ def main():
             field = matches[0]
             if field.get('type') not in ('ProjectV2SingleSelectField', 'SINGLE_SELECT'):
                 raise RuntimeError('Sub-project must be a single-select field')
-            options = [v['name'] for v in field.get('options', []) if v['name'].lower() == args.subproject.lower()]
+            options = [v['name'] for v in field.get('options', []) if v['name'].lower() == previous.vocabulary.get(args.subproject, args.subproject).lower()]
             if len(options) != 1:
                 raise RuntimeError('requested Sub-project option must exist before onboarding')
             selected_storage, selected_provider = 'field', options[0]
@@ -356,7 +359,7 @@ def main():
         if not value(text, 'Sub-project storage'):
             text = metadata(text, 'Sub-project storage', selected_storage)
             if selected_storage == 'field':
-                text = metadata(text, 'Sub-project field', 'Sub-project')
+                text = metadata(text, 'Sub-project field', field_name)
                 text = metadata(text, 'Sub-project field type', 'SINGLE_SELECT')
             else:
                 from project_context import binding

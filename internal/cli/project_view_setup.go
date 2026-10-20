@@ -82,6 +82,9 @@ func runProjectSetupBacklogView(ctx context.Context, args []string, stdout, stde
 				fmt.Fprintln(stdout)
 			}
 		}
+		for _, check := range plan.ManualVerification {
+			fmt.Fprintln(stdout, "Browser verification:", check)
+		}
 		fmt.Fprintln(stdout, "\nPlan only. Supply --apply to perform and independently verify the setup.")
 		return 0
 	}
@@ -99,6 +102,9 @@ func runProjectSetupBacklogView(ctx context.Context, args []string, stdout, stde
 	}
 	fmt.Fprintf(stdout, "Verified standard Backlog view for %s/%d (%s).\n", project.Owner, project.Number, project.Title)
 	fmt.Fprintf(stdout, "Visible fields: %s\n", strings.Join(result.VisibleFields, " | "))
+	for _, check := range result.ManualVerification {
+		fmt.Fprintln(stdout, "Browser verification:", check)
+	}
 	if len(result.Applied) == 0 {
 		fmt.Fprintln(stdout, "No changes were required.")
 		return 0

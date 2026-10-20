@@ -134,3 +134,5 @@ Type may be omitted/rejected by the public view API. The command reports an
 explicit browser verification boundary for order and native Type. Confirm both
 in GitHub, preserve useful existing extra columns, and do not use undocumented
 endpoints or create credentials/permissions to bypass API limitations.
+
+Supported provider references: [REST Project views](https://docs.github.com/en/rest/projects/views), [GraphQL Issues](https://docs.github.com/en/graphql/reference/issues), [GraphQL Projects](https://docs.github.com/en/graphql/reference/projects), and [Project filtering](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/filtering-projects).

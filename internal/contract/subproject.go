@@ -41,6 +41,16 @@ func validateSubproject(doc *document, projectKey string) (SubprojectBinding, er
 			b.Storage = "none"
 		}
 	}
+	typ, err := optionalMetadata(doc, "Sub-project field type")
+	if err != nil {
+		return b, err
+	}
+	if b.Storage != "field" && (b.Field != "" || typ != "") {
+		return b, fmt.Errorf("%s: only field storage may configure a Sub-project field", doc.path)
+	}
+	if b.Storage == "field" && b.LabelScope != "" {
+		return b, fmt.Errorf("%s: field storage may not configure label scope", doc.path)
+	}
 	switch b.Storage {
 	case "field":
 		if b.Field == "" {
