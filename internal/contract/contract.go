@@ -789,7 +789,7 @@ func validateDispatcher(root string, doc *document) (*Configuration, error) {
 	numbers := map[int]bool{}
 	for _, row := range rows {
 		if len(row) < 4 {
-			continue
+			return nil, fmt.Errorf("%s has an incomplete route", doc.path)
 		}
 		key, label, numberText, childRelative := row[0], row[1], row[2], row[3]
 		if key == "" || label == "" || childRelative == "" {

@@ -125,6 +125,24 @@ func TestResolveDispatcherRejectsMissingOrDisagreeingSelectors(t *testing.T) {
 	}
 }
 
+func TestMembershipDispatcherSelectors(t *testing.T) {
+	configuration, err := Load(fixtureRoot(t, "membership-dispatcher"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, selector := range []Selector{{Key: "beta"}, {Number: 5}, {Key: "beta", Number: 5}} {
+		project, err := configuration.Resolve(selector)
+		if err != nil || project.Key != "beta" || project.Routing != "membership" {
+			t.Fatalf("Resolve(%+v) = %+v, error = %v", selector, project, err)
+		}
+	}
+	for _, selector := range []Selector{{}, {Key: "alpha", Number: 5}, {RoutingLabel: "project:beta"}, {RoutingLabel: "-"}} {
+		if _, err := configuration.Resolve(selector); err == nil {
+			t.Fatalf("Resolve(%+v) accepted ambiguous or stale label routing", selector)
+		}
+	}
+}
+
 func TestSingleSelectorMustAgree(t *testing.T) {
 	t.Parallel()
 	configuration, err := Load(fixtureRoot(t, "single"))
