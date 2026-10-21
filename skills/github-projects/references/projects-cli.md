@@ -9,6 +9,17 @@ operation and flags you need. `projects --version` shows the installed build.
 An older binary may support reads but lack mutations. Use the direct provider
 fallback only for the missing operation; continue using its supported commands.
 
+Resolve and retain the absolute executable used for validation. Pass that path
+to shell commands and Python `subprocess` argument lists instead of resolving
+`projects` again in another environment. A login shell can select a user-local
+build while a non-login helper selects an older system build. Compare the path
+and `version` in the actual execution context when validation results disagree.
+An older label-only validator can reject a valid membership dispatcher with
+`route label disagrees`; do not edit contracts or add routing labels to satisfy
+it. Stop on the mismatch and establish which existing executable was validated
+before proceeding. This does not authorise an upgrade, a provider fallback, or
+a retry of an uncertain write.
+
 Without `--root`, the CLI uses the nearest `.projects/project.md` from the
 current directory upwards, stopping at the enclosing Git repository. Pass
 `--root REPOSITORY_ROOT` when the resolved repository is elsewhere.
