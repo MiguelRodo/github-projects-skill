@@ -725,6 +725,7 @@ fi
 bash "$test_dir/queue-preflight.sh"
 bash "$test_dir/queue-classify.sh"
 python3 "$test_dir/test-queue-execute.py"
+python3 "$test_dir/test-admin-body.py"
 python3 "$test_dir/test-queue-review.py"
 python3 "$test_dir/test-onboarding.py"
 
