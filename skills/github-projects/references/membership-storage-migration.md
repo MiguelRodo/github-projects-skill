@@ -122,7 +122,7 @@ rewrite live view filters implicitly.
 
 ## New view defaults and supported boundary
 
-Use `project-views.py --contract CONTRACT --project-number NUMBER --name All`
+Use `project-views.py --contract CONTRACT --project-number NUMBER --name all`
 for an overall table, or add `--name Tools --subproject tools` for a filtered
 table. Review the plan, then add `--apply`. It uses documented `gh api` REST
 Project view creation and GraphQL readback. It never replaces existing views.
@@ -144,3 +144,33 @@ in GitHub, preserve useful existing extra columns, and do not use undocumented
 endpoints or create credentials/permissions to bypass API limitations.
 
 Supported provider references: [REST Project views](https://docs.github.com/en/rest/projects/views), [GraphQL Issues](https://docs.github.com/en/graphql/reference/issues), [GraphQL Projects](https://docs.github.com/en/graphql/reference/projects), and [Project filtering](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/filtering-projects).
+
+## Default overview name and browser layout
+
+New default overviews are named lowercase `all`. The legacy CLI command
+`setup-backlog-view` remains compatible and manages existing `all` and `Backlog`
+tables independently. Existing Backlog names and exact filters are preserved;
+no new Backlog is created. If its grouping or sort requires replacement, stop
+for browser configuration instead of deleting or recreating it. Existing boards
+and roadmaps remain untouched.
+
+Recommended order and widths in pixels, where fields exist:
+
+| Column | Width |
+| --- | --- |
+| Title | 517 |
+| Due date | 131 |
+| Target date | 157 |
+| Priority | 130 |
+| Class, or native Type when Class is absent | 116 |
+| Sub-issues progress | 174 |
+| Status | 128 |
+| Assignees | 135 |
+| Linked pull requests | 154 |
+
+Show Sub-project additionally on overall tables, hide it on filtered subproject
+views, and preserve useful existing extras and their widths. Do not invent a
+width for Sub-project or create missing fields. The API payload requests the
+ordered visible fields, but order, widths and native Type require explicit
+supported browser verification. `Verified` reports API-verifiable settings only;
+it never claims browser layout or widths were applied unattended.

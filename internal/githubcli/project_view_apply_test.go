@@ -103,7 +103,7 @@ func TestApplyStandardBacklogViewDeletesUnverifiedReplacement(t *testing.T) {
 		t.Fatal("expected verification failure")
 	}
 	runner.done()
-	for _, want := range []string{"deleted again", "original Backlog #1 (v1) was preserved", "applied: nothing; failed at replace_view v1"} {
+	for _, want := range []string{"deleted again", "original all #1 (v1) was preserved", "applied: nothing; failed at replace_view v1"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %v, want %q", err, want)
 		}
@@ -123,7 +123,7 @@ func TestApplyStandardBacklogViewNamesBothViewsWhenCleanupFails(t *testing.T) {
 		t.Fatal("expected failure")
 	}
 	runner.done()
-	for _, want := range []string{"two Backlog views", "original Backlog #1 (v1)", "replacement Backlog (v2)", `deleteProjectV2View(input: {viewId: "v2"})`} {
+	for _, want := range []string{"two Backlog views", "original all #1 (v1)", "replacement Backlog (v2)", `deleteProjectV2View(input: {viewId: "v2"})`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %v, want %q", err, want)
 		}
@@ -165,7 +165,7 @@ func TestPlanBacklogViewDeletesNonStandardDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(changes) != 1 || changes[0].Action != "delete_view" || changes[0].ViewID != "v1" || !strings.Contains(changes[0].Detail, "keep standard Backlog #2 (v2)") {
+	if len(changes) != 1 || changes[0].Action != "delete_view" || changes[0].ViewID != "v1" || !strings.Contains(changes[0].Detail, "keep standard all #2 (v2)") {
 		t.Fatalf("changes = %#v", changes)
 	}
 }
@@ -173,15 +173,14 @@ func TestPlanBacklogViewDeletesNonStandardDuplicate(t *testing.T) {
 func TestPlanBacklogViewRefusesTwoNonStandardBacklogsWithRemedy(t *testing.T) {
 	views := []projectViewNode{descendingBacklogView("v1", 1), descendingBacklogView("v2", 2)}
 	_, err := planBacklogViewChanges(views, backlogTestSpec())
-	if err == nil || !strings.Contains(err.Error(), "Backlog #1 (v1), Backlog #2 (v2)") || !strings.Contains(err.Error(), "rename or delete all but one") {
+	if err == nil || !strings.Contains(err.Error(), "all #1 (v1), all #2 (v2)") || !strings.Contains(err.Error(), "rename or delete all but one") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestApplyStandardBacklogViewReportsReadbackFailureWithAppliedChanges(t *testing.T) {
 	view := standardBacklogTestView("v1", 1)
-	filter := "status:Todo"
-	view.Filter = &filter
+	view.Configuration.VisibleFields.Nodes = view.Configuration.VisibleFields.Nodes[:3]
 	steps := backlogInspectSteps(t, view)
 	steps = append(steps, seqStep{request: updateViewRequest(), out: `{}`})
 	steps = append(steps, backlogInspectSteps(t, view)...)

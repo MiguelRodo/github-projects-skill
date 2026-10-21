@@ -19,7 +19,7 @@ def spec(text, fields, owner_type, key=None):
     if len(by_name) != len(fields):
         raise ValueError('ambiguous Project field names')
     visible = []
-    for name in ['Title', 'Due date', 'Target date', 'Priority', 'Status'] + (['Class'] if owner_type == 'user' else []) + ['Sub-issues progress']:
+    for name in ['Title', 'Due date', 'Target date', 'Priority'] + (['Class'] if owner_type == 'user' or 'Class' in by_name else []) + ['Sub-issues progress', 'Status', 'Assignees', 'Linked pull requests']:
         if name in by_name:
             visible.append(by_name[name]['id'])
         elif name in ['Title', 'Priority', 'Status', 'Class']:
@@ -84,11 +84,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--contract', required=True)
     parser.add_argument('--project-number', type=int, required=True)
-    parser.add_argument('--name', default='All')
+    parser.add_argument('--name', help='defaults to the Sub-project key for filtered views, otherwise all')
     parser.add_argument('--subproject')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--gh', default=os.environ.get('PROJECTS_GH_BIN', 'gh'))
     args = parser.parse_args()
+    if args.name is None:
+        args.name = args.subproject or 'all'
     text = Path(args.contract).read_text()
     owner, number = project_identity(text)
     if number != args.project_number:
@@ -110,7 +112,10 @@ def main():
     body = dict(spec(text, fields, owner_type, args.subproject), name=args.name)
     views = read_views(args.gh, owner, number, owner_type)
     existing = [v for v in views if v['name'] == args.name]
-    manual = ['Verify column order in the GitHub Project browser; the API returns visible fields as an unordered set.']
+    manual = [
+        'Verify browser order: Title, Due date, Target date, Priority, Class (or native Type), Sub-issues progress, Status, Assignees, Linked pull requests; overall views also show Sub-project, filtered subproject views hide it.',
+        'Set/verify browser widths in pixels: Title 517; Due date 131; Target date 157; Priority 130; Class/Type 116; Sub-issues progress 174; Status 128; Assignees 135; Linked pull requests 154. The supported API does not set or verify widths or column order.',
+    ]
     if args.subproject:
         manual.append('Verify visible items match the exact Sub-project classification in the browser.')
     if owner_type == 'organization':

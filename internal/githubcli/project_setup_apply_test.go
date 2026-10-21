@@ -556,7 +556,7 @@ func organizationPriorityRequest() request {
 	return request{method: "PATCH", path: "/orgs/octo-org/issue-fields/7", body: map[string]any{"name": "Priority", "description": "", "options": options}}
 }
 func createViewRequest() request {
-	return request{method: "POST", path: "/users/octo-user/projectsV2/40/views", body: map[string]any{"name": "Backlog", "layout": "table", "filter": "", "visible_fields": []int{1, 3, 2, 4}, "sort_by": []any{[]any{3, "asc"}}, "group_by": []int{2}}}
+	return request{method: "POST", path: "/users/octo-user/projectsV2/40/views", body: map[string]any{"name": "all", "layout": "table", "filter": "", "visible_fields": []int{1, 3, 4, 2}, "sort_by": []any{[]any{3, "asc"}}, "group_by": []int{2}}}
 }
 func deleteViewRequest(id string) request {
 	return request{query: `mutation($viewId: ID!) {
@@ -566,5 +566,5 @@ func deleteViewRequest(id string) request {
 func updateViewRequest() request {
 	return request{query: `mutation($input: UpdateProjectV2ViewInput!) {
   updateProjectV2View(input: $input) { projectV2View { id name layout filter } }
-}`, variables: map[string]any{"input": map[string]any{"viewId": "v1", "name": "Backlog", "layout": "TABLE_LAYOUT", "filter": "", "configuration": map[string]any{"visibleFieldIds": []string{"title", "priority", "status", "class"}}}}}
+}`, variables: map[string]any{"input": map[string]any{"viewId": "v1", "name": "all", "layout": "TABLE_LAYOUT", "filter": "", "configuration": map[string]any{"visibleFieldIds": []string{"title", "priority", "class", "status"}}}}}
 }

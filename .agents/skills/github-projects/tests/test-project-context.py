@@ -374,6 +374,9 @@ class Context(unittest.TestCase):
         self.assertNotIn(8,filtered['visible_fields'])
         self.assertEqual(views.spec(LABELS,fields,'user','tools')['filter'],'label:"subproject:work:tools"')
         self.assertIn(9,views.spec(LABELS,fields,'user')['visible_fields'])
+        fields += [{'id':10,'name':'Assignees','data_type':'assignees'},
+                   {'id':11,'name':'Linked pull requests','data_type':'linked_pull_requests'}]
+        self.assertEqual(views.spec(FIELD,fields,'user')['visible_fields'],[1,2,3,4,6,7,5,10,11,8])
 
 
 class ProjectViewsCLI(unittest.TestCase):
@@ -423,7 +426,7 @@ class ProjectViewsCLI(unittest.TestCase):
         columns = list(range(1,8))
         if not self.filtered and self.storage != 'none':
             columns.append(8 if self.storage == 'field' else 9)
-        return {'id':'VIEW','name':'All','layout':'TABLE_LAYOUT','filter':filter_text,
+        return {'id':'VIEW','name':'tools' if self.filtered else 'all','layout':'TABLE_LAYOUT','filter':filter_text,
                 'configuration':{'visibleFields':{'nodes':[{'id':f'N{i}'} for i in columns]}},
                 'groupByFields':{'nodes':[{'id':'N5'}]},
                 'sortByFields':{'nodes':[{'field':{'id':'N4'},'direction':'ASC'}]}}
@@ -467,6 +470,7 @@ class ProjectViewsCLI(unittest.TestCase):
                 self.assertTrue(result['verified'])
                 self.assertEqual(self.invoke(apply=True)['action'],'no_change')
                 self.assertEqual(len(self.posts),1)
+                self.assertEqual(self.posts[0]['name'],'all')
                 self.assertEqual(self.live[0]['layout'],'ROADMAP_LAYOUT')
 
     def test_filtered_apply_and_existing_noop(self):
@@ -475,6 +479,7 @@ class ProjectViewsCLI(unittest.TestCase):
                 self.configure(storage,filtered=True)
                 self.assertTrue(self.invoke(apply=True)['verified'])
                 self.assertEqual(self.posts[0]['filter'],wanted)
+                self.assertEqual(self.posts[0]['name'],'tools')
                 self.assertNotIn(8,self.posts[0]['visible_fields'])
                 self.assertNotIn(9,self.posts[0]['visible_fields'])
                 self.assertEqual(self.invoke(apply=True)['action'],'no_change')
